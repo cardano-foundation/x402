@@ -12,7 +12,7 @@ Before you begin, ensure you have:
 * A service that requires payment via x402
 
 **Note**\
-There are pre-configured [examples available in the x402 repo](https://github.com/coinbase/x402/tree/main/examples), including examples for [fetch](https://github.com/coinbase/x402/tree/main/examples/typescript/clients/fetch), [Axios](https://github.com/coinbase/x402/tree/main/examples/typescript/clients/axios), [Go](https://github.com/coinbase/x402/tree/main/examples/go/clients), and [MCP](https://github.com/coinbase/x402/tree/main/examples/typescript/clients/mcp).
+There are pre-configured [examples available in the x402 repo](https://github.com/x402-foundation/x402/tree/main/examples), including examples for [fetch](https://github.com/x402-foundation/x402/tree/main/examples/typescript/clients/fetch), [Axios](https://github.com/x402-foundation/x402/tree/main/examples/typescript/clients/axios), [Go](https://github.com/x402-foundation/x402/tree/main/examples/go/clients), and [MCP](https://github.com/x402-foundation/x402/tree/main/examples/typescript/clients/mcp).
 
 ### 1. Install Dependencies
 
@@ -32,13 +32,16 @@ There are pre-configured [examples available in the x402 repo](https://github.co
 
     # For Aptos support, also add:
     npm install @x402/aptos
+
+    # For Stellar support, also add:
+    npm install @x402/stellar
     ```
   </Tab>
   <Tab title="Go">
     Add the x402 Go module to your project:
 
     ```bash
-    go get github.com/coinbase/x402/go
+    go get github.com/x402-foundation/x402/go
     ```
   </Tab>
   <Tab title="Python">
@@ -79,7 +82,7 @@ There are pre-configured [examples available in the x402 repo](https://github.co
   <Tab title="Go">
     ```go
     import (
-        evmsigners "github.com/coinbase/x402/go/signers/evm"
+        evmsigners "github.com/x402-foundation/x402/go/signers/evm"
     )
 
     // Load private key from environment
@@ -135,11 +138,25 @@ const privateKey = new Ed25519PrivateKey(process.env.APTOS_PRIVATE_KEY!);
 const aptosSigner = Account.fromPrivateKey({ privateKey });
 ```
 
+#### Stellar
+
+Use the Stellar SDK to instantiate a signer:
+
+```typescript
+import { createEd25519Signer } from "@x402/stellar";
+
+// Create signer from private key (S... format)
+const stellarSigner = createEd25519Signer(
+  process.env.STELLAR_PRIVATE_KEY!,
+  "stellar:testnet"
+);
+```
+
 ### 3. Make Paid Requests Automatically
 
 <Tabs>
   <Tab title="Fetch">
-    **@x402/fetch** extends the native `fetch` API to handle 402 responses and payment headers for you. [Full example here](https://github.com/coinbase/x402/tree/main/examples/typescript/clients/fetch)
+    **@x402/fetch** extends the native `fetch` API to handle 402 responses and payment headers for you. [Full example here](https://github.com/x402-foundation/x402/tree/main/examples/typescript/clients/fetch)
 
     ```typescript
     import { wrapFetchWithPayment } from "@x402/fetch";
@@ -176,7 +193,7 @@ const aptosSigner = Account.fromPrivateKey({ privateKey });
     ```
   </Tab>
   <Tab title="Axios">
-    **@x402/axios** adds a payment interceptor to Axios, so your requests are retried with payment headers automatically. [Full example here](https://github.com/coinbase/x402/tree/main/examples/typescript/clients/axios)
+    **@x402/axios** adds a payment interceptor to Axios, so your requests are retried with payment headers automatically. [Full example here](https://github.com/x402-foundation/x402/tree/main/examples/typescript/clients/axios)
 
     ```typescript
     import { x402Client, wrapAxiosWithPayment, x402HTTPClient } from "@x402/axios";
@@ -210,7 +227,7 @@ const aptosSigner = Account.fromPrivateKey({ privateKey });
     ```
   </Tab>
   <Tab title="Go">
-    [Full example here](https://github.com/coinbase/x402/tree/main/examples/go/clients/http)
+    [Full example here](https://github.com/x402-foundation/x402/tree/main/examples/go/clients/http)
 
     ```go
     package main
@@ -223,10 +240,10 @@ const aptosSigner = Account.fromPrivateKey({ privateKey });
         "os"
         "time"
 
-        x402 "github.com/coinbase/x402/go"
-        x402http "github.com/coinbase/x402/go/http"
-        evm "github.com/coinbase/x402/go/mechanisms/evm/exact/client"
-        evmsigners "github.com/coinbase/x402/go/signers/evm"
+        x402 "github.com/x402-foundation/x402/go"
+        x402http "github.com/x402-foundation/x402/go/http"
+        evm "github.com/x402-foundation/x402/go/mechanisms/evm/exact/client"
+        evmsigners "github.com/x402-foundation/x402/go/signers/evm"
     )
 
     func main() {
@@ -273,7 +290,7 @@ const aptosSigner = Account.fromPrivateKey({ privateKey });
   <Tab title="Python (httpx)">
     **httpx** provides async HTTP client support with automatic 402 payment handling.
 
-    [Full HTTPX example](https://github.com/coinbase/x402/tree/main/examples/python/clients/httpx) | [Full Requests example](https://github.com/coinbase/x402/tree/main/examples/python/clients/requests)
+    [Full HTTPX example](https://github.com/x402-foundation/x402/tree/main/examples/python/clients/httpx) | [Full Requests example](https://github.com/x402-foundation/x402/tree/main/examples/python/clients/requests)
 
     ```python
     import asyncio
@@ -313,7 +330,7 @@ const aptosSigner = Account.fromPrivateKey({ privateKey });
   <Tab title="Python (requests)">
     **requests** provides sync HTTP client support with automatic 402 payment handling.
 
-    [Full Requests example](https://github.com/coinbase/x402/tree/main/examples/python/clients/requests)
+    [Full Requests example](https://github.com/x402-foundation/x402/tree/main/examples/python/clients/requests)
 
     ```python
     import os
@@ -387,17 +404,26 @@ You can register multiple payment schemes to handle different networks:
     const aptosPrivateKey = new Ed25519PrivateKey(process.env.APTOS_PRIVATE_KEY!);
     const aptosSigner = Account.fromPrivateKey({ privateKey: aptosPrivateKey });
     client.register("aptos:*", new ExactAptosScheme(aptosSigner));
+
+    // For Stellar support, also add:
+    import { ExactStellarScheme, createEd25519Signer } from "@x402/stellar";
+
+    const stellarSigner = createEd25519Signer(
+      process.env.STELLAR_PRIVATE_KEY!,
+      "stellar:testnet"
+    );
+    client.register("stellar:*", new ExactStellarScheme(stellarSigner));
     ```
   </Tab>
   <Tab title="Go">
     ```go
     import (
-        x402 "github.com/coinbase/x402/go"
-        x402http "github.com/coinbase/x402/go/http"
-        evm "github.com/coinbase/x402/go/mechanisms/evm/exact/client"
-        svm "github.com/coinbase/x402/go/mechanisms/svm/exact/client"
-        evmsigners "github.com/coinbase/x402/go/signers/evm"
-        svmsigners "github.com/coinbase/x402/go/signers/svm"
+        x402 "github.com/x402-foundation/x402/go"
+        x402http "github.com/x402-foundation/x402/go/http"
+        evm "github.com/x402-foundation/x402/go/mechanisms/evm/exact/client"
+        svm "github.com/x402-foundation/x402/go/mechanisms/svm/exact/client"
+        evmsigners "github.com/x402-foundation/x402/go/signers/evm"
+        svmsigners "github.com/x402-foundation/x402/go/signers/svm"
     )
 
     // Create signers
@@ -523,6 +549,6 @@ try {
 * [@x402/fetch on npm](https://www.npmjs.com/package/@x402/fetch)
 * [@x402/axios on npm](https://www.npmjs.com/package/@x402/axios)
 * [@x402/evm on npm](https://www.npmjs.com/package/@x402/evm)
-* [x402 Go module](https://github.com/coinbase/x402/tree/main/go)
+* [x402 Go module](https://github.com/x402-foundation/x402/tree/main/go)
 
 For questions or support, join our [Discord](https://discord.gg/cdp).

@@ -32,13 +32,13 @@ import (
 	"testing"
 	"time"
 
-	x402 "github.com/coinbase/x402/go"
-	"github.com/coinbase/x402/go/mcp"
-	evmclient "github.com/coinbase/x402/go/mechanisms/evm/exact/client"
-	evmfacilitator "github.com/coinbase/x402/go/mechanisms/evm/exact/facilitator"
-	evmserver "github.com/coinbase/x402/go/mechanisms/evm/exact/server"
-	evmsigners "github.com/coinbase/x402/go/signers/evm"
 	mcpsdk "github.com/modelcontextprotocol/go-sdk/mcp"
+	x402 "github.com/x402-foundation/x402/go"
+	"github.com/x402-foundation/x402/go/mcp"
+	evmclient "github.com/x402-foundation/x402/go/mechanisms/evm/exact/client"
+	evmfacilitator "github.com/x402-foundation/x402/go/mechanisms/evm/exact/facilitator"
+	evmserver "github.com/x402-foundation/x402/go/mechanisms/evm/exact/server"
+	evmsigners "github.com/x402-foundation/x402/go/signers/evm"
 )
 
 const (
@@ -74,7 +74,7 @@ func TestMCPEVMIntegration(t *testing.T) {
 		}
 
 		paymentClient := x402.Newx402Client()
-		evmClientScheme := evmclient.NewExactEvmScheme(clientSigner)
+		evmClientScheme := evmclient.NewExactEvmScheme(clientSigner, nil)
 		paymentClient.Register(TEST_NETWORK, evmClientScheme)
 
 		// Get client address

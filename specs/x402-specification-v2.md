@@ -31,7 +31,7 @@ x402 is made up of three core components:
 
 x402 is an open payment standard that enables clients to pay for external resources. The protocol defines standardized message formats and payment flows that can be implemented over various transport layers, providing a standardized mechanism for payments across different payment schemes, networks and transport layers.
 
-This specification is based on the x402 protocol implementation and documentation available in the [Coinbase x402 repository](https://github.com/coinbase/x402). It aims to provide a comprehensive and implementation-agnostic specification for the x402 protocol.
+This specification is based on the x402 protocol implementation and documentation available in the [Coinbase x402 repository](https://github.com/x402-foundation/x402). It aims to provide a comprehensive and implementation-agnostic specification for the x402 protocol.
 
 **2. Core Payment Flow**
 
@@ -238,7 +238,8 @@ The `SettleResponse` schema contains the following fields:
 | `payer`       | `string`  | Optional | Address of the payer's wallet                                         |
 | `transaction` | `string`  | Required | Blockchain transaction hash (empty string if settlement failed)       |
 | `network`     | `string`  | Required | Blockchain network identifier in CAIP-2 format                        |
-| `extensions`  | `object`  | Optional | Protocol extensions data          |
+| `amount`      | `string`  | Optional | The actual amount settled in atomic units (omitted if not applicable) |
+| `extensions`  | `object`  | Optional | Protocol extensions data                                              |
 
 **5.4 VerifyResponse Schema**
 
@@ -407,7 +408,9 @@ Example with actual data:
 
 Executes a verified payment by broadcasting the transaction to the blockchain.
 
-**Request:** Same as `/verify` endpoint
+**Request:** Same structure as `/verify` endpoint (contains `paymentPayload` and `paymentRequirements`).
+
+> **Note**: While the request structure is identical, some payment schemes may assign different semantics to fields at settlement time versus verification time. For example, in the `upto` scheme, the `amount` field in `paymentRequirements` represents the maximum authorized amount at verification time, but the actual amount to settle at settlement time. See individual scheme specifications for details.
 
 **Successful Response:**
 

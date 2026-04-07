@@ -1,11 +1,11 @@
 [project]
 name = "x402"
-version = "2.2.0"
+version = "2.6.0"
 description = "x402 Payment Protocol SDK for Python"
 readme = "README.md"
 license = { text = "MIT" }
 requires-python = ">=3.10"
-authors = [{ name = "Coinbase" }]
+authors = [{ name = "x402 Foundation" }]
 keywords = ["x402", "payment", "protocol", "http", "402"]
 classifiers = [
     "Development Status :: 3 - Alpha",
@@ -39,7 +39,7 @@ evm = [
     "eth-abi>=5.0.0",
     "eth-keys>=0.5.0",
     "eth-utils>=4.0.0",
-    "eth-account>=0.12.0",
+    "eth-account>=0.13.0",
     "web3>=7.0.0",
 ]
 svm = [
@@ -77,7 +77,7 @@ dev = [
     "eth-abi>=5.0.0",
     "eth-keys>=0.5.0",
     "eth-utils>=4.0.0",
-    "eth-account>=0.12.0",
+    "eth-account>=0.13.0",
     "web3>=7.0.0",
     # SVM dependencies
     "solders>=0.27.0",
@@ -90,9 +90,9 @@ dev = [
 ]
 
 [project.urls]
-Homepage = "https://github.com/coinbase/x402"
+Homepage = "https://github.com/x402-foundation/x402"
 Documentation = "https://x402.org"
-Repository = "https://github.com/coinbase/x402"
+Repository = "https://github.com/x402-foundation/x402"
 
 [build-system]
 requires = ["hatchling"]
@@ -162,7 +162,7 @@ package = "x402"
 filename = "CHANGELOG.md"
 directory = "changelog.d/"
 title_format = "## [{version}] - {project_date}"
-issue_format = "[#{issue}](https://github.com/coinbase/x402/pull/{issue})"
+issue_format = "[#{issue}](https://github.com/x402-foundation/x402/pull/{issue})"
 
 [tool.towncrier.fragment.feature]
 name = "Added"

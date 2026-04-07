@@ -5,12 +5,12 @@ import (
 	"fmt"
 	"os"
 
-	x402 "github.com/coinbase/x402/go"
-	evm "github.com/coinbase/x402/go/mechanisms/evm/exact/client"
-	evmsigners "github.com/coinbase/x402/go/signers/evm"
-	"github.com/coinbase/x402/go/mcp"
 	"github.com/joho/godotenv"
 	mcpsdk "github.com/modelcontextprotocol/go-sdk/mcp"
+	x402 "github.com/x402-foundation/x402/go"
+	"github.com/x402-foundation/x402/go/mcp"
+	evm "github.com/x402-foundation/x402/go/mechanisms/evm/exact/client"
+	evmsigners "github.com/x402-foundation/x402/go/signers/evm"
 )
 
 // MCP Client with x402 Payment Support - Simple Example
@@ -73,7 +73,7 @@ func runSimple() error {
 
 	// Create x402 payment client and wrap session
 	paymentClient := x402.Newx402Client()
-	paymentClient.Register("eip155:84532", evm.NewExactEvmScheme(evmSigner))
+	paymentClient.Register("eip155:84532", evm.NewExactEvmScheme(evmSigner, nil))
 	x402Mcp := mcp.NewX402MCPClient(clientSession, paymentClient, mcp.Options{
 		AutoPayment: mcp.BoolPtr(true),
 		OnPaymentRequested: func(context mcp.PaymentRequiredContext) (bool, error) {
