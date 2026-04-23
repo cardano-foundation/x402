@@ -46,13 +46,13 @@ sequenceDiagram
     %% Server Verification
     alt Server Submission
         Server->>Cardano: 6a. Submit signed transaction
-        Note right of Cardano: Transaction included in mempool or block
-        Cardano-->>Server: 6b. Transaction hash + confirmation
+        Note right of Cardano: Node accepts tx into mempool;<br/>block inclusion is asynchronous
+        Cardano-->>Server: 6b. Transaction hash (submission ack)
     else Remote Submission (via Facilitator)
       Server->>Facilitator: 6a. POST /settle<br/>(Payment details)
       Facilitator->>Cardano: 6b. Submit signed transaction
-      Note right of Cardano: Transaction included in mempool or block
-      Cardano-->>Facilitator: 6c. Transaction hash + confirmation
+      Note right of Cardano: Node accepts tx into mempool;<br/>block inclusion is asynchronous
+      Cardano-->>Facilitator: 6c. Transaction hash (submission ack)
       Facilitator->>Server: 6d. Settlement Response<br/>(txHash, status)
     end
 
@@ -81,10 +81,10 @@ The protocol flow for `exact` on Cardano is client-driven.
    - **Server submission**: The **Resource Server** submits the transaction directly.
    - **Facilitator submission**: The **Resource Server** sends the transaction to the **Facilitator's** `/settle` endpoint, which submits it to the blockchain.
 
-6. The Cardano blockchain includes the transaction in the mempool or a block and returns the transaction hash and confirmation status.
+6. The Cardano node validates the submitted transaction and, if accepted, places it in its mempool and returns the transaction hash synchronously. Block inclusion — and any subsequent probabilistic confirmation — happens asynchronously and is observed later via the settlement `status` field.
 
 7. **Resource Server** receives the transaction hash and status.
-   - Cardano uses Ouroboros Praos, which has probabilistic finality. A transaction that appears in the mempool or in a recent block can be rolled back. Granting access upon mempool inclusion (`status: "mempool"`) is therefore **strongly discouraged** and SHOULD NOT be used for any resource with real economic value. Servers that choose to accept mempool status MUST document this risk and accept full liability for rolled-back transactions.
+   - Cardano uses Ouroboros Praos, which has probabilistic finality. A transaction that has only been accepted into the mempool, or that appears in a recent block, can still be rolled back. Granting access on the basis of mempool acceptance alone (`status: "mempool"`) is therefore **strongly discouraged** and SHOULD NOT be used for any resource with real economic value. Servers that choose to accept mempool status MUST document this risk and accept full liability for rolled-back transactions.
 
 8. **Resource Server** grants the **Client** access to the requested resource, returning an HTTP 200 OK response with a `PAYMENT-RESPONSE` header containing:
    - `transaction`: The Cardano transaction hash
