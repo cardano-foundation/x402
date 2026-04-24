@@ -198,6 +198,207 @@ On success, the `PAYMENT-RESPONSE` payload MAY include extension-specific inform
 
 This extension does not currently specify additional normative fields in the settlement response; future versions MAY add them.
 
+## End-to-End Example
+
+This section shows a complete Masumi-routed flow using the Cardano `exact` scheme together with the `cardano-masumi` extension. All three messages — `PaymentRequired`, `PAYMENT-SIGNATURE`, `PAYMENT-RESPONSE` — are shown consistently.
+
+For brevity, the signed transaction is truncated; in practice it is the Base64-encoded CBOR of a fully signed Cardano transaction that pays the declared `amount` of the declared `asset` to `payTo` (the Masumi script address) and consumes the UTXO referenced by `payload.nonce` as an input.
+
+### Step 1 — `402 Payment Required` (server → client)
+
+```json
+{
+  "x402Version": 2,
+  "error": "PAYMENT-SIGNATURE header is required",
+  "resource": {
+    "url": "https://api.example.com/premium-data",
+    "description": "Access to premium market data",
+    "mimeType": "application/json"
+  },
+  "accepts": [
+    {
+      "scheme": "exact",
+      "network": "cardano:mainnet",
+      "amount": "10000",
+      "asset": "c48cbb3d5e57ed56e276bc45f99ab39abe94e6cd7ac39fb402da47ad.0014df105553444d",
+      "payTo": "addr1wxmasumiscriptaddressexample000000000000000000000000000000000",
+      "maxTimeoutSeconds": 600,
+      "extra": {
+        "scriptHash": "masumi_script_hash",
+        "script": {
+          "type": "plutusV3",
+          "code": "<hex-encoded script code, if not on-chain>"
+        },
+        "parameters": {}
+      }
+    }
+  ],
+  "extensions": {
+    "cardano-masumi": {
+      "info": {
+        "paymentType": "Web3CardanoV1",
+        "blockchainIdentifier": "blockchain_identifier",
+        "sellerVkey": "sdasdqweqwewewewqe",
+        "agentIdentifier": "agent_identifier",
+        "identifierFromPurchaser": "aabbaabb11221122aabb",
+        "inputHash": "9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08",
+        "payByTime": "1713626260",
+        "submitResultTime": "1713636260",
+        "unlockTime": "1713636260",
+        "externalDisputeUnlockTime": "1713636260"
+      },
+      "schema": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "type": "object",
+        "properties": {
+          "paymentType": { "type": "string" },
+          "blockchainIdentifier": { "type": "string" },
+          "sellerVkey": { "type": "string" },
+          "agentIdentifier": { "type": "string" },
+          "identifierFromPurchaser": { "type": "string" },
+          "inputHash": { "type": "string" },
+          "payByTime": { "type": "string" },
+          "submitResultTime": { "type": "string" },
+          "unlockTime": { "type": "string" },
+          "externalDisputeUnlockTime": { "type": "string" }
+        },
+        "required": [
+          "paymentType",
+          "blockchainIdentifier",
+          "sellerVkey",
+          "agentIdentifier",
+          "identifierFromPurchaser",
+          "inputHash",
+          "payByTime",
+          "submitResultTime",
+          "unlockTime",
+          "externalDisputeUnlockTime"
+        ]
+      }
+    }
+  }
+}
+```
+
+### Step 2 — `PAYMENT-SIGNATURE` header (client → server)
+
+The client selects the offer above, builds and signs a Cardano transaction that pays the Masumi script address with a datum consistent with the Masumi fields, and submits it via the `PAYMENT-SIGNATURE` header. The decoded (pre-Base64) header payload is:
+
+```json
+{
+  "x402Version": 2,
+  "resource": {
+    "url": "https://api.example.com/premium-data",
+    "description": "Access to premium market data",
+    "mimeType": "application/json"
+  },
+  "accepted": {
+    "scheme": "exact",
+    "network": "cardano:mainnet",
+    "amount": "10000",
+    "asset": "c48cbb3d5e57ed56e276bc45f99ab39abe94e6cd7ac39fb402da47ad.0014df105553444d",
+    "payTo": "addr1wxmasumiscriptaddressexample000000000000000000000000000000000",
+    "maxTimeoutSeconds": 600,
+    "extra": {
+      "scriptHash": "masumi_script_hash",
+      "script": {
+        "type": "plutusV3",
+        "code": "<hex-encoded script code>"
+      },
+      "parameters": {}
+    }
+  },
+  "payload": {
+    "transaction": "AAAIAQDi1Hwj...AAAAAAA=",
+    "nonce": "662cbf645fcd8914eb89115b83970a950493dd2fbaf39dea3b96e8cbdc132939#0"
+  },
+  "extensions": {
+    "cardano-masumi": {
+      "info": {
+        "paymentType": "Web3CardanoV1",
+        "blockchainIdentifier": "blockchain_identifier",
+        "sellerVkey": "sdasdqweqwewewewqe",
+        "agentIdentifier": "agent_identifier",
+        "identifierFromPurchaser": "aabbaabb11221122aabb",
+        "inputHash": "9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08",
+        "payByTime": "1713626260",
+        "submitResultTime": "1713636260",
+        "unlockTime": "1713636260",
+        "externalDisputeUnlockTime": "1713636260"
+      },
+      "schema": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "type": "object",
+        "properties": {
+          "paymentType": { "type": "string" },
+          "blockchainIdentifier": { "type": "string" },
+          "sellerVkey": { "type": "string" },
+          "agentIdentifier": { "type": "string" },
+          "identifierFromPurchaser": { "type": "string" },
+          "inputHash": { "type": "string" },
+          "payByTime": { "type": "string" },
+          "submitResultTime": { "type": "string" },
+          "unlockTime": { "type": "string" },
+          "externalDisputeUnlockTime": { "type": "string" }
+        },
+        "required": [
+          "paymentType",
+          "blockchainIdentifier",
+          "sellerVkey",
+          "agentIdentifier",
+          "identifierFromPurchaser",
+          "inputHash",
+          "payByTime",
+          "submitResultTime",
+          "unlockTime",
+          "externalDisputeUnlockTime"
+        ]
+      }
+    }
+  }
+}
+```
+
+Notes on this step:
+
+- The client MUST echo `extensions["cardano-masumi"].info` unchanged from what it received in Step 1 (per the v2 rule that the client may append but not delete or overwrite server-supplied extension info).
+- The `extra` object still carries the generic script reference required by the core Cardano scheme; this is what allows a non-Masumi facilitator to verify the underlying payment independent of the extension.
+- `payload.nonce` references a UTXO consumed as an input of the signed transaction, as required by the core scheme's replay-prevention rule.
+
+### Step 3 — `PAYMENT-RESPONSE` / `SettlementResponse` (server → client, on success)
+
+```json
+{
+  "success": true,
+  "network": "cardano:mainnet",
+  "transaction": "2f9a7b3c1d4e5f60718293a4b5c6d7e8f90112233445566778899aabbccddeeff",
+  "extensions": {
+    "status": "confirmed",
+    "cardano-masumi": {
+      "info": {
+        "blockchainIdentifier": "blockchain_identifier"
+      }
+    }
+  }
+}
+```
+
+Notes on this step:
+
+- Core fields (`success`, `network`, `transaction`, `extensions.status`) follow the core Cardano scheme.
+- The `cardano-masumi` settlement-extension payload echoes the `blockchainIdentifier` so clients and downstream consumers can correlate the on-chain tx with the Masumi off-chain payment stream. Future versions of this extension MAY specify additional settlement-side fields (e.g., Masumi state transitions); this example reflects the minimum required today.
+- A non-Masumi-aware client receiving this response can still interpret the core fields correctly and SHOULD ignore `extensions["cardano-masumi"]`.
+
+### What a non-Masumi-aware stack sees
+
+A minimally conformant Cardano `exact` stack that does not implement the `cardano-masumi` extension processes the same flow as a generic script-parameterized Cardano payment:
+
+- Recipient, amount, asset, nonce, and TTL checks apply to the transaction exactly as specified in the core scheme.
+- The Masumi script address is visible in `payTo`; the Masumi script (or hash) is visible in `extra`.
+- The `cardano-masumi` extension block is ignored.
+
+Such a stack will not enforce Masumi's off-chain invariants (escrow timing, dispute windows, agent/seller accounting) — those are, by design, the exclusive responsibility of Masumi-aware implementations.
+
 ## Security Considerations
 
 - This extension MUST NOT be used to weaken the core Cardano verification rules. In particular, possession of a valid Masumi datum does not substitute for the nonce/replay, TTL, or amount/asset checks.
