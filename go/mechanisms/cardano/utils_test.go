@@ -79,13 +79,13 @@ func TestConvertToTokenAmount(t *testing.T) {
 
 func TestParseMoneyToDecimal(t *testing.T) {
 	cases := map[interface{}]string{
-		"$1.50":       "1.50",
-		"1.50":        "1.50",
-		" 1.5 USDM ":  "1.5",
-		"3 USD":       "3",
-		1.50:          "1.5",
-		2:             "2",
-		int64(7):      "7",
+		"$1.50":      "1.50",
+		"1.50":       "1.50",
+		" 1.5 USDM ": "1.5",
+		"3 USD":      "3",
+		1.50:         "1.5",
+		2:            "2",
+		int64(7):     "7",
 	}
 	for in, want := range cases {
 		got, err := ParseMoneyToDecimal(in)

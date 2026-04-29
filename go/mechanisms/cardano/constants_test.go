@@ -7,12 +7,12 @@ import (
 
 func TestIsCardanoNetwork(t *testing.T) {
 	cases := map[string]bool{
-		"cardano:mainnet":   true,
-		"cardano:preprod":   true,
-		"cardano:preview":   true,
-		"eip155:8453":       false,
-		"solana:mainnet":    false,
-		"":                  false,
+		"cardano:mainnet": true,
+		"cardano:preprod": true,
+		"cardano:preview": true,
+		"eip155:8453":     false,
+		"solana:mainnet":  false,
+		"":                false,
 	}
 	for input, want := range cases {
 		got := IsCardanoNetwork(input)
@@ -40,11 +40,11 @@ func TestAssetRegex(t *testing.T) {
 	re := regexp.MustCompile(CardanoAssetRegex)
 	policy := "c48cbb3d5e57ed56e276bc45f99ab39abe94e6cd7ac39fb402da47ad"
 	cases := map[string]bool{
-		"lovelace":                             true,
-		policy + ".0014df105553444d":           true,
-		"LOVELACE":                             false, // case-sensitive in spec
-		"0xtoken":                              false,
-		policy:                                 false, // no dot
+		"lovelace":                   true,
+		policy + ".0014df105553444d": true,
+		"LOVELACE":                   false, // case-sensitive in spec
+		"0xtoken":                    false,
+		policy:                       false, // no dot
 	}
 	for input, want := range cases {
 		if got := re.MatchString(input); got != want {

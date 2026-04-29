@@ -147,38 +147,25 @@ class ExactCardanoScheme:
                 payer="",
             )
 
-        if (
-            payload.accepted.scheme != SCHEME_EXACT
-            or requirements.scheme != SCHEME_EXACT
-        ):
-            return VerifyResponse(
-                is_valid=False, invalid_reason=ERR_UNSUPPORTED_SCHEME, payer=""
-            )
+        if payload.accepted.scheme != SCHEME_EXACT or requirements.scheme != SCHEME_EXACT:
+            return VerifyResponse(is_valid=False, invalid_reason=ERR_UNSUPPORTED_SCHEME, payer="")
 
         accepted_network = str(payload.accepted.network)
         required_network = str(requirements.network)
         if accepted_network != required_network:
-            return VerifyResponse(
-                is_valid=False, invalid_reason=ERR_NETWORK_MISMATCH, payer=""
-            )
+            return VerifyResponse(is_valid=False, invalid_reason=ERR_NETWORK_MISMATCH, payer="")
         if not is_cardano_network(required_network):
-            return VerifyResponse(
-                is_valid=False, invalid_reason=ERR_NETWORK_MISMATCH, payer=""
-            )
+            return VerifyResponse(is_valid=False, invalid_reason=ERR_NETWORK_MISMATCH, payer="")
 
         try:
             cardano_payload = decode_cardano_payload(payload.payload)
         except Exception:
-            return VerifyResponse(
-                is_valid=False, invalid_reason=ERR_INVALID_PAYLOAD, payer=""
-            )
+            return VerifyResponse(is_valid=False, invalid_reason=ERR_INVALID_PAYLOAD, payer="")
 
         try:
             tx_hash, index = parse_utxo_ref(cardano_payload.nonce)
         except ValueError:
-            return VerifyResponse(
-                is_valid=False, invalid_reason=ERR_NONCE_INVALID, payer=""
-            )
+            return VerifyResponse(is_valid=False, invalid_reason=ERR_NONCE_INVALID, payer="")
         nonce_lower = f"{tx_hash}#{index}"
 
         try:
@@ -210,18 +197,14 @@ class ExactCardanoScheme:
         # cannot be submitted on mainnet and vice versa.
         expected_network_id = get_cardano_network_id(required_network)
         if decoded.network_id is not None and decoded.network_id != expected_network_id:
-            return VerifyResponse(
-                is_valid=False, invalid_reason=ERR_NETWORK_ID_MISMATCH, payer=""
-            )
+            return VerifyResponse(is_valid=False, invalid_reason=ERR_NETWORK_ID_MISMATCH, payer="")
 
         # SECURITY: refuse unsigned transactions in verify() so /verify cannot
         # return a false-positive that would let callers grant access on an
         # unpaid request. Submission would also fail, but the spec's verify()
         # is supposed to detect this up front.
         if decoded.vkey_witness_count == 0 and decoded.script_witness_count == 0:
-            return VerifyResponse(
-                is_valid=False, invalid_reason=ERR_TRANSACTION_UNSIGNED, payer=""
-            )
+            return VerifyResponse(is_valid=False, invalid_reason=ERR_TRANSACTION_UNSIGNED, payer="")
 
         # Rule 6 (and lower-bound): TTL must not be in the past, AND any
         # validity-start (lower bound) must already have arrived. Both checks
@@ -238,9 +221,7 @@ class ExactCardanoScheme:
                     payer="",
                 )
             if decoded.ttl_slot is not None and decoded.ttl_slot <= current_slot:
-                return VerifyResponse(
-                    is_valid=False, invalid_reason=ERR_TTL_EXPIRED, payer=""
-                )
+                return VerifyResponse(is_valid=False, invalid_reason=ERR_TTL_EXPIRED, payer="")
             if (
                 decoded.validity_start_slot is not None
                 and decoded.validity_start_slot > current_slot
@@ -252,15 +233,11 @@ class ExactCardanoScheme:
         # Rule 5 (input check): nonce UTXO must appear as an input.
         input_set = {i.lower() for i in decoded.inputs}
         if nonce_lower not in input_set:
-            return VerifyResponse(
-                is_valid=False, invalid_reason=ERR_NONCE_NOT_IN_INPUTS, payer=""
-            )
+            return VerifyResponse(is_valid=False, invalid_reason=ERR_NONCE_NOT_IN_INPUTS, payer="")
 
         # Rule 5 (chain check): nonce UTXO must currently be unspent.
         try:
-            snapshot: CardanoUtxoSnapshot = self._signer.get_utxo(
-                nonce_lower, required_network
-            )
+            snapshot: CardanoUtxoSnapshot = self._signer.get_utxo(nonce_lower, required_network)
         except Exception as exc:
             return VerifyResponse(
                 is_valid=False,
@@ -269,9 +246,7 @@ class ExactCardanoScheme:
                 payer="",
             )
         if not snapshot.exists:
-            return VerifyResponse(
-                is_valid=False, invalid_reason=ERR_NONCE_NOT_ON_CHAIN, payer=""
-            )
+            return VerifyResponse(is_valid=False, invalid_reason=ERR_NONCE_NOT_ON_CHAIN, payer="")
 
         payer = snapshot.address or ""
 
@@ -329,12 +304,8 @@ class ExactCardanoScheme:
                 is_valid=False, invalid_reason=ERR_RECIPIENT_MISMATCH, payer=payer
             )
         if not asset_seen_for_recipient:
-            return VerifyResponse(
-                is_valid=False, invalid_reason=ERR_ASSET_MISMATCH, payer=payer
-            )
-        return VerifyResponse(
-            is_valid=False, invalid_reason=ERR_AMOUNT_INSUFFICIENT, payer=payer
-        )
+            return VerifyResponse(is_valid=False, invalid_reason=ERR_ASSET_MISMATCH, payer=payer)
+        return VerifyResponse(is_valid=False, invalid_reason=ERR_AMOUNT_INSUFFICIENT, payer=payer)
 
     def settle(
         self,

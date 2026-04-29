@@ -94,7 +94,9 @@ def test_decode_cardano_transaction_without_pycardano(monkeypatch):
 
     sys.modules.pop("pycardano", None)
 
-    real_import = __builtins__["__import__"] if isinstance(__builtins__, dict) else __builtins__.__import__
+    real_import = (
+        __builtins__["__import__"] if isinstance(__builtins__, dict) else __builtins__.__import__
+    )
 
     def fake_import(name, *args, **kwargs):
         if name == "pycardano":

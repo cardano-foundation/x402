@@ -80,9 +80,7 @@ class ExactCardanoScheme:
                 )
             if not _ASSET_RE.match(asset):
                 raise ValueError(f"Invalid Cardano asset unit: {asset}")
-            return AssetAmount(
-                amount=price["amount"], asset=asset, extra=price.get("extra") or {}
-            )
+            return AssetAmount(amount=price["amount"], asset=asset, extra=price.get("extra") or {})
         if isinstance(price, AssetAmount):
             if not price.asset or not _ASSET_RE.match(price.asset):
                 raise ValueError(f"Invalid Cardano asset unit: {price.asset}")
@@ -117,9 +115,7 @@ class ExactCardanoScheme:
         """
         _ = extension_keys
         if not is_cardano_network(str(supported_kind.network)):
-            raise ValueError(
-                f"Unsupported Cardano network: {supported_kind.network}"
-            )
+            raise ValueError(f"Unsupported Cardano network: {supported_kind.network}")
         # Merge supported_kind extras with whatever the requirements already
         # carry; requirements take precedence so server-side overrides are
         # respected.

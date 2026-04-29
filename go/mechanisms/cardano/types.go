@@ -38,15 +38,15 @@ func (p ExactCardanoPayload) ToMap() map[string]interface{} {
 // Returns an error if either field is missing or empty.
 func ExactCardanoPayloadFromMap(raw map[string]interface{}) (ExactCardanoPayload, error) {
 	if raw == nil {
-		return ExactCardanoPayload{}, errors.New("Cardano payload is nil")
+		return ExactCardanoPayload{}, errors.New("cardano payload is nil")
 	}
 	tx, _ := raw["transaction"].(string)
 	if tx == "" {
-		return ExactCardanoPayload{}, errors.New("Cardano payload is missing a transaction string")
+		return ExactCardanoPayload{}, errors.New("cardano payload is missing a transaction string")
 	}
 	nonce, _ := raw["nonce"].(string)
 	if nonce == "" {
-		return ExactCardanoPayload{}, errors.New("Cardano payload is missing a nonce string")
+		return ExactCardanoPayload{}, errors.New("cardano payload is missing a nonce string")
 	}
 	return ExactCardanoPayload{Transaction: tx, Nonce: nonce}, nil
 }

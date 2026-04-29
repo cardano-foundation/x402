@@ -121,9 +121,7 @@ class FacilitatorCardanoSignerWithEvaluate(FacilitatorCardanoSigner, Protocol):
     contract through this opt-in subclass-Protocol pattern.
     """
 
-    def evaluate_transaction(
-        self, signed_transaction_base64: str, network: str
-    ) -> None:
+    def evaluate_transaction(self, signed_transaction_base64: str, network: str) -> None:
         """Ask a Cardano node / evaluation service to dry-run the signed
         transaction. Implementations should raise on rejection; the
         exception's str() is surfaced as `invalid_message` on the verify

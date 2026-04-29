@@ -70,9 +70,7 @@ class ExactCardanoScheme:
         if not requirements.amount:
             raise ValueError("Amount is required")
         if not _AMOUNT_RE.match(requirements.amount):
-            raise ValueError(
-                f"Amount must be a non-negative integer, got: {requirements.amount}"
-            )
+            raise ValueError(f"Amount must be a non-negative integer, got: {requirements.amount}")
 
         result = self._signer.sign_payment_transaction(
             network=network,
