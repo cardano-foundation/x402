@@ -1,3 +1,11 @@
+## v2.10.0 - 2026-04-27
+### Fixed
+- MCP payload extraction failing with no method set
+
+## v2.9.0 - 2026-04-13
+### Added
+- Add optional `extra.memo` support to SVM exact scheme for seller-defined payment references
+
 ## v2.8.0 - 2026-04-02
 ### Added
 - Add Arbitrum One (chain ID 42161) and Arbitrum Sepolid (chain ID 421614) support with USDC as the default stablecoin

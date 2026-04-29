@@ -1,5 +1,28 @@
 # @x402/mcp Changelog
 
+## 2.11.0
+
+### Minor Changes
+
+- 71a223d: Added `extensions` field to `PaymentWrapperConfig` so paid MCP tools can declare Bazaar discovery metadata and appear in `/discovery/resources`.
+
+### Patch Changes
+
+- a051f48: Enables `ResourceServerExtension` to register resource-server verify/settle hooks, and enforces extension mutation policy: `enrichPaymentRequiredResponse` may only change `payTo` / `amount` / `asset` when those baseline values are vacant; `scheme` / `network` / `maxTimeoutSeconds` and baseline `extra` entries are immutable. `enrichSettlementResponse` may not rewrite facilitator core fields (`success`, `transaction`, `network`, etc.). Lifecycle hook contexts are typed as read-only for core protocol fields.
+- Updated dependencies [a051f48]
+- Updated dependencies [dc04108]
+  - @x402/core@2.11.0
+
+## 2.10.0
+
+### Minor Changes
+
+- 9424291: chore: bump viem lockfile to 2.47.12
+
+  Updates the resolved viem version across all direct dependencies, adding chain definitions for Mezo Testnet, MegaETH, Stable, and Stable Testnet that were missing from previously locked versions.
+
+  - @x402/core@2.10.0
+
 ## 2.9.0
 
 ### Minor Changes
