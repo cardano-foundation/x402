@@ -9,9 +9,9 @@ import (
 )
 
 var (
-	assetRE  = regexp.MustCompile(CardanoAssetRegex)
-	utxoRE   = regexp.MustCompile(CardanoUTXORefRegex)
-	addrRE   = regexp.MustCompile(CardanoAddressRegex)
+	assetRE = regexp.MustCompile(CardanoAssetRegex)
+	utxoRE  = regexp.MustCompile(CardanoUTXORefRegex)
+	addrRE  = regexp.MustCompile(CardanoAddressRegex)
 )
 
 // ValidateAssetUnit returns nil when asset is the literal "lovelace" or a

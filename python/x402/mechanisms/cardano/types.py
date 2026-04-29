@@ -81,9 +81,7 @@ class CardanoScriptDescriptor(TypedDict):
 class CardanoScriptParameter(TypedDict):
     """Single parameter applied to a Plutus script during transaction building."""
 
-    type: Literal[
-        "bytes", "bigint", "integer", "string", "constr", "list", "map", "boolean"
-    ]
+    type: Literal["bytes", "bigint", "integer", "string", "constr", "list", "map", "boolean"]
     value: Any
 
 

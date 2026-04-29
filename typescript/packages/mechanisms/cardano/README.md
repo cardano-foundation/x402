@@ -12,11 +12,11 @@ This package implements the [`exact` scheme on Cardano](../../../../specs/scheme
 
 The implementation registers the following x402 network identifiers, matching the spec verbatim:
 
-| Network         | Identifier         | Cardano Network ID |
-| --------------- | ------------------ | ------------------ |
-| Mainnet         | `cardano:mainnet`  | 1                  |
-| Preprod testnet | `cardano:preprod`  | 0                  |
-| Preview testnet | `cardano:preview`  | 0                  |
+| Network         | Identifier        | Cardano Network ID |
+| --------------- | ----------------- | ------------------ |
+| Mainnet         | `cardano:mainnet` | 1                  |
+| Preprod testnet | `cardano:preprod` | 0                  |
+| Preview testnet | `cardano:preview` | 0                  |
 
 These identifiers are deliberately human-readable and match the x402 Cardano spec; they are not canonical CAIP-2.
 
@@ -30,7 +30,7 @@ c48cbb3d5e57ed56e276bc45f99ab39abe94e6cd7ac39fb402da47ad.0014df105553444d
 
 ## Optional Cardano serialization library
 
-This package depends on `@emurgo/cardano-serialization-lib-nodejs` as a *peer dependency* to keep the TypeScript bundle light. The dep is resolved lazily inside `decodeCardanoTransaction` so the package can be imported without it; verification calls require it.
+This package depends on `@emurgo/cardano-serialization-lib-nodejs` as a _peer dependency_ to keep the TypeScript bundle light. The dep is resolved lazily inside `decodeCardanoTransaction` so the package can be imported without it; verification calls require it.
 
 ```bash
 pnpm add @emurgo/cardano-serialization-lib-nodejs

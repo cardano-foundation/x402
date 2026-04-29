@@ -66,8 +66,14 @@ class StubClientSigner:
 class StubFacilitatorSigner:
     """Stub Cardano facilitator signer for unit tests."""
 
-    def __init__(self, *, exists: bool = True, address: str = "addr1qpayer00",
-                 current_slot: int = 100, status: str = "confirmed"):
+    def __init__(
+        self,
+        *,
+        exists: bool = True,
+        address: str = "addr1qpayer00",
+        current_slot: int = 100,
+        status: str = "confirmed",
+    ):
         self._exists = exists
         self._address = address
         self._current_slot = current_slot
@@ -442,8 +448,6 @@ def test_server_enhance_payment_requirements_merges_extras():
 def test_server_rejects_non_cardano_network_in_enhance():
     server = ExactCardanoServerScheme()
     base = make_requirements()
-    supported = SupportedKind(
-        x402_version=2, scheme="exact", network="ethereum:1", extra={}
-    )
+    supported = SupportedKind(x402_version=2, scheme="exact", network="ethereum:1", extra={})
     with pytest.raises(ValueError, match="Unsupported Cardano network"):
         server.enhance_payment_requirements(base, supported, [])

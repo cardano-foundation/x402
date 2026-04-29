@@ -95,9 +95,7 @@ def decode_cardano_payload(raw: dict[str, Any]) -> ExactCardanoPayload:
     return ExactCardanoPayload.from_dict(raw)
 
 
-def output_satisfies(
-    output: CardanoUtxoOutput, recipient: str, asset: str, amount: int
-) -> bool:
+def output_satisfies(output: CardanoUtxoOutput, recipient: str, asset: str, amount: int) -> bool:
     """Return True when `output` pays at least `amount` of `asset` to
     `recipient`.
 
