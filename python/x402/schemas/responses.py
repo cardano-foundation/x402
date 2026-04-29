@@ -73,6 +73,7 @@ class SettleResponse(BaseX402Model):
     transaction: str
     network: Network
     extensions: dict[str, Any] | None = None
+    amount: str | None = None
 
 
 class SupportedKind(BaseX402Model):
