@@ -65,6 +65,8 @@ class SettleResponse(BaseX402Model):
         transaction: Transaction hash/identifier.
         network: Network where settlement occurred.
         amount: Settled amount in atomic units.
+        extensions: Optional scheme-specific extension data (e.g. Cardano
+            settlement status: "confirmed" | "mempool").
     """
 
     success: bool
