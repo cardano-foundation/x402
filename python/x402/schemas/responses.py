@@ -62,6 +62,8 @@ class SettleResponse(BaseX402Model):
         payer: The payer's address.
         transaction: Transaction hash/identifier.
         network: Network where settlement occurred.
+        extensions: Optional scheme-specific extension data (e.g. Cardano
+            settlement status: "confirmed" | "mempool").
     """
 
     success: bool
@@ -70,6 +72,7 @@ class SettleResponse(BaseX402Model):
     payer: str | None = None
     transaction: str
     network: Network
+    extensions: dict[str, Any] | None = None
 
 
 class SupportedKind(BaseX402Model):
