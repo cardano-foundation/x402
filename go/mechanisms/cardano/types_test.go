@@ -57,7 +57,6 @@ func TestPaymentResponseHeaderEncoding(t *testing.T) {
 		Success:     true,
 		Transaction: "abc123",
 		Network:     CardanoPreprod,
-		Payer:       "addr_test1qpayer",
 		Extensions:  map[string]interface{}{"status": "confirmed"},
 	}
 	b64, err := h.EncodeHeader()
@@ -80,5 +79,31 @@ func TestPaymentResponseHeaderEncoding(t *testing.T) {
 	}
 	if decoded.Extensions["status"] != "confirmed" {
 		t.Errorf("extensions not preserved: %v", decoded.Extensions)
+	}
+}
+
+func TestPaymentResponseHeaderEncodingFailure(t *testing.T) {
+	h := PaymentResponseHeader{
+		Success:     false,
+		Network:     CardanoPreprod,
+		ErrorReason: "Utxo not found in utxo set",
+	}
+	b64, err := h.EncodeHeader()
+	if err != nil {
+		t.Fatal(err)
+	}
+	raw, err := base64.StdEncoding.DecodeString(b64)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var decoded PaymentResponseHeader
+	if err := json.Unmarshal(raw, &decoded); err != nil {
+		t.Fatal(err)
+	}
+	if decoded.Success {
+		t.Errorf("expected success=false: %+v", decoded)
+	}
+	if decoded.ErrorReason != "Utxo not found in utxo set" {
+		t.Errorf("errorReason not preserved: %s", decoded.ErrorReason)
 	}
 }

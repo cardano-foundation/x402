@@ -353,10 +353,8 @@ export class ExactCardanoScheme implements SchemeNetworkFacilitator {
       return {
         success: false,
         errorReason: verifyResult.invalidReason ?? "verification_failed",
-        errorMessage: verifyResult.invalidMessage,
         transaction: "",
         network: payload.accepted.network,
-        payer: verifyResult.payer ?? "",
       };
     }
 
@@ -370,7 +368,6 @@ export class ExactCardanoScheme implements SchemeNetworkFacilitator {
         errorReason: ERR_DUPLICATE_SETTLEMENT,
         transaction: "",
         network: payload.accepted.network,
-        payer: verifyResult.payer ?? "",
       };
     }
 
@@ -388,10 +385,8 @@ export class ExactCardanoScheme implements SchemeNetworkFacilitator {
         return {
           success: false,
           errorReason: ERR_SETTLEMENT_NOT_CONFIRMED,
-          errorMessage: `Signer returned status '${submission.status}' but acceptMempool is disabled`,
           transaction: submission.txHash,
           network: payload.accepted.network,
-          payer: verifyResult.payer ?? "",
           extensions: { status: submission.status },
         };
       }
@@ -400,20 +395,17 @@ export class ExactCardanoScheme implements SchemeNetworkFacilitator {
         success: true,
         transaction: submission.txHash,
         network: payload.accepted.network,
-        payer: verifyResult.payer ?? "",
         extensions: { status: submission.status },
       };
-    } catch (error) {
+    } catch {
       // Submission threw (network error, deserialization error, etc.). Free
       // the claim so the caller can retry with a corrected payload.
       this.releaseClaim(cacheKey);
       return {
         success: false,
         errorReason: ERR_SETTLEMENT_FAILED,
-        errorMessage: error instanceof Error ? error.message : String(error),
         transaction: "",
         network: payload.accepted.network,
-        payer: verifyResult.payer ?? "",
       };
     }
   }
