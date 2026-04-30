@@ -357,10 +357,8 @@ class ExactCardanoScheme:
             return SettleResponse(
                 success=False,
                 error_reason=verify_result.invalid_reason or "verification_failed",
-                error_message=verify_result.invalid_message,
                 transaction="",
                 network=str(payload.accepted.network),
-                payer=verify_result.payer or "",
             )
 
         cardano_payload = ExactCardanoPayload.from_dict(payload.payload)
@@ -373,24 +371,21 @@ class ExactCardanoScheme:
                 error_reason=ERR_DUPLICATE_SETTLEMENT,
                 transaction="",
                 network=str(payload.accepted.network),
-                payer=verify_result.payer or "",
             )
 
         try:
             submission = self._signer.submit_transaction(
                 cardano_payload.transaction, str(requirements.network)
             )
-        except Exception as exc:
+        except Exception:
             # Submission threw — release the claim so the caller can retry
             # with a corrected payload.
             self._release_claim(cache_key)
             return SettleResponse(
                 success=False,
                 error_reason=ERR_SETTLEMENT_FAILED,
-                error_message=str(exc),
                 transaction="",
                 network=str(payload.accepted.network),
-                payer=verify_result.payer or "",
             )
 
         if submission.status != "confirmed" and not self._accept_mempool:
@@ -401,12 +396,8 @@ class ExactCardanoScheme:
             return SettleResponse(
                 success=False,
                 error_reason=ERR_SETTLEMENT_NOT_CONFIRMED,
-                error_message=(
-                    f"Signer returned status '{submission.status}' but accept_mempool is disabled"
-                ),
                 transaction=submission.tx_hash,
                 network=str(payload.accepted.network),
-                payer=verify_result.payer or "",
                 extensions={"status": submission.status},
             )
 
@@ -414,7 +405,6 @@ class ExactCardanoScheme:
             success=True,
             transaction=submission.tx_hash,
             network=str(payload.accepted.network),
-            payer=verify_result.payer or "",
             extensions={"status": submission.status},
         )
 

@@ -60,15 +60,17 @@ func ExactCardanoPayloadFromMap(raw map[string]interface{}) (ExactCardanoPayload
 //	  "success":     true,
 //	  "transaction": "<txhash>",
 //	  "network":     "cardano:preprod",
-//	  "payer":       "addr_test1q...",
-//	  "extensions":  { "status": "confirmed" | "mempool" }
+//	  "extensions":  { "status": "confirmed" | "mempool" },
+//	  "errorReason": "Utxo not found in utxo set"
 //	}
+//
+// ErrorReason is only populated when Success is false.
 type PaymentResponseHeader struct {
 	Success     bool                   `json:"success"`
 	Transaction string                 `json:"transaction,omitempty"`
 	Network     string                 `json:"network,omitempty"`
-	Payer       string                 `json:"payer,omitempty"`
 	Extensions  map[string]interface{} `json:"extensions,omitempty"`
+	ErrorReason string                 `json:"errorReason,omitempty"`
 }
 
 // EncodeHeader returns the base64-encoded JSON suitable for the

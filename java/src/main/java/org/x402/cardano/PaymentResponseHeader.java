@@ -18,13 +18,14 @@ import java.util.Map;
  *   "success":     true,
  *   "transaction": "<txhash>",
  *   "network":     "cardano:preprod",
- *   "payer":       "addr_test1q...",
- *   "extensions":  { "status": "confirmed" }
+ *   "extensions":  { "status": "confirmed" },
+ *   "errorReason": "Utxo not found in utxo set"
  * }
  * }</pre>
  *
  * <p>Clients (typically a wallet UI) decode this header to display tx hashes
- * and confirmation state to the user.
+ * and confirmation state to the user. {@code errorReason} is only populated
+ * when {@code success} is {@code false}.
  */
 @JsonInclude(JsonInclude.Include.NON_NULL)
 public class PaymentResponseHeader {
@@ -38,11 +39,11 @@ public class PaymentResponseHeader {
     /** Network identifier echoed from the requirements. */
     public String network;
 
-    /** Payer bech32 address from the verify response (may be null). */
-    public String payer;
-
     /** Extension data — for Cardano, {@code {"status": "confirmed" | "mempool"}}. */
     public Map<String, Object> extensions;
+
+    /** Optional error reason when {@code success} is {@code false}. */
+    public String errorReason;
 
     /** Default no-arg constructor (required by Jackson). */
     public PaymentResponseHeader() {}
@@ -58,8 +59,8 @@ public class PaymentResponseHeader {
         h.success = settle.success;
         h.transaction = settle.transaction;
         h.network = settle.network;
-        h.payer = settle.payer;
         h.extensions = settle.extensions;
+        h.errorReason = settle.errorReason;
         return h;
     }
 
