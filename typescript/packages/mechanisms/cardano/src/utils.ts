@@ -123,7 +123,13 @@ export async function decodeCardanoTransaction(
   const tx = csl.Transaction.from_bytes(txBytes);
   const body = tx.body();
 
-  const txHashBytes = csl.hash_transaction(body).to_bytes();
+  // CSL v13+ removed the top-level `hash_transaction` export. Prefer
+  // `FixedTransaction` (available since v11 and still present in v15) and
+  // fall back to the legacy call only when running against CSL v11/v12,
+  // so the package keeps its declared peer-dep range of `>=11.5.0`.
+  const txHashBytes = csl.FixedTransaction
+    ? csl.FixedTransaction.new_from_body_bytes(body.to_bytes()).transaction_hash().to_bytes()
+    : csl.hash_transaction!(body).to_bytes();
   const txHash = Buffer.from(txHashBytes).toString("hex");
 
   const networkId = readNetworkId(body);
@@ -230,7 +236,14 @@ interface CslTransaction {
 
 interface CslModule {
   Transaction: { from_bytes(bytes: Uint8Array): CslTransaction };
-  hash_transaction(body: CslTransactionBody): { to_bytes(): Uint8Array };
+  // CSL v11/v12 only.
+  hash_transaction?(body: CslTransactionBody): { to_bytes(): Uint8Array };
+  // CSL v13+ replacement: stable body hash via FixedTransaction.
+  FixedTransaction?: {
+    new_from_body_bytes(bytes: Uint8Array): {
+      transaction_hash(): { to_bytes(): Uint8Array };
+    };
+  };
 }
 
 /**
