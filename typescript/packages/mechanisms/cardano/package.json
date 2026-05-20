@@ -26,6 +26,7 @@
   "description": "x402 Payment Protocol Cardano Implementation",
   "devDependencies": {
     "@eslint/js": "^9.24.0",
+    "@harmoniclabs/buildooor": "^0.2.7",
     "@types/node": "^22.13.4",
     "@typescript-eslint/eslint-plugin": "^8.29.1",
     "@typescript-eslint/parser": "^8.29.1",
@@ -45,10 +46,10 @@
     "@x402/core": "workspace:*"
   },
   "peerDependencies": {
-    "@emurgo/cardano-serialization-lib-nodejs": ">=11.5.0"
+    "@harmoniclabs/buildooor": ">=0.2.0"
   },
   "peerDependenciesMeta": {
-    "@emurgo/cardano-serialization-lib-nodejs": {
+    "@harmoniclabs/buildooor": {
       "optional": true
     }
   },

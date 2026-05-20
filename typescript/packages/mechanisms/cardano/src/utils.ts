@@ -87,20 +87,26 @@ export function outputSatisfies(
   return assetAmount >= amount;
 }
 
+type BuildooorModule = typeof import("@harmoniclabs/buildooor");
+
 /**
- * Lazily resolves the optional Cardano serialization library
- * (`@emurgo/cardano-serialization-lib-nodejs`). Throws a clear error when the
- * dependency is not installed so the package can ship without forcing the
- * heavy WASM bundle on consumers that only need types/constants.
+ * Lazily resolves the optional Buildooor transaction library
+ * (`@harmoniclabs/buildooor`). Throws a clear error when the dependency is
+ * not installed so the package can ship without forcing it on consumers that
+ * only need types/constants.
  *
- * @returns The CSL module.
+ * Buildooor is pure TypeScript, so loading it does not incur a WASM
+ * initialization step (unlike the previous `@emurgo/cardano-serialization-lib-nodejs`
+ * peer dep, which pulled in a ~4 MB WASM blob).
+ *
+ * @returns The Buildooor module.
  */
-export async function loadCardanoSerializationLib(): Promise<unknown> {
+async function loadBuildooor(): Promise<BuildooorModule> {
   try {
-    return await import("@emurgo/cardano-serialization-lib-nodejs");
+    return (await import("@harmoniclabs/buildooor")) as BuildooorModule;
   } catch (cause) {
     const error = new Error(
-      `${ERR_CARDANO_SDK_MISSING}: install '@emurgo/cardano-serialization-lib-nodejs' to enable Cardano transaction verification`,
+      `${ERR_CARDANO_SDK_MISSING}: install '@harmoniclabs/buildooor' to enable Cardano transaction verification`,
     );
     (error as { cause?: unknown }).cause = cause;
     throw error;
@@ -109,7 +115,7 @@ export async function loadCardanoSerializationLib(): Promise<unknown> {
 
 /**
  * Decodes a base64-encoded signed Cardano transaction into a structural
- * summary using `cardano-serialization-lib`. Only the fields required by the
+ * summary using `@harmoniclabs/buildooor`. Only the fields required by the
  * facilitator are surfaced.
  *
  * @param transactionBase64 - The base64-encoded CBOR transaction.
@@ -118,285 +124,53 @@ export async function loadCardanoSerializationLib(): Promise<unknown> {
 export async function decodeCardanoTransaction(
   transactionBase64: string,
 ): Promise<DecodedCardanoTransaction> {
-  const csl = (await loadCardanoSerializationLib()) as CslModule;
-  const txBytes = Buffer.from(transactionBase64, "base64");
-  const tx = csl.Transaction.from_bytes(txBytes);
-  const body = tx.body();
+  const { Tx } = await loadBuildooor();
+  const txHex = Buffer.from(transactionBase64, "base64").toString("hex");
+  const tx = Tx.fromCbor(txHex);
+  const body = tx.body;
 
-  // CSL v13+ removed the top-level `hash_transaction` export. Prefer
-  // `FixedTransaction` (available since v11 and still present in v15) and
-  // fall back to the legacy call only when running against CSL v11/v12,
-  // so the package keeps its declared peer-dep range of `>=11.5.0`.
-  const txHashBytes = csl.FixedTransaction
-    ? csl.FixedTransaction.new_from_body_bytes(body.to_bytes()).transaction_hash().to_bytes()
-    : csl.hash_transaction!(body).to_bytes();
-  const txHash = Buffer.from(txHashBytes).toString("hex");
+  const txHash = tx.hash.toString();
 
-  const networkId = readNetworkId(body);
-  const ttlSlot = readTtl(body);
-  const validityStartSlot = readValidityStart(body);
+  const inputs = body.inputs.map(u => `${u.utxoRef.id.toString()}#${u.utxoRef.index}`);
 
-  const inputs = readInputs(body);
-  const outputs = readOutputs(csl, body);
-  const { vkeyWitnessCount, scriptWitnessCount } = readWitnessCounts(tx);
+  const outputs: CardanoUtxoOutput[] = body.outputs.map(out => {
+    const assets: Record<string, bigint> = {};
+    // Buildooor's Value is iterable over { policy, assets } entries. The
+    // policy field is already a hex string; the lovelace entry uses an
+    // empty-policy marker and is read out via `.lovelaces` below instead.
+    for (const { policy, assets: list } of out.value) {
+      const policyHex = policy.toLowerCase();
+      if (policyHex === "") continue;
+      for (const { name, quantity } of list) {
+        const nameHex = Buffer.from(name).toString("hex").toLowerCase();
+        assets[`${policyHex}.${nameHex}`] = quantity;
+      }
+    }
+    return {
+      address: out.address.toString(),
+      coin: out.value.lovelaces,
+      assets,
+    };
+  });
+
+  const ws = tx.witnesses;
+  const sz = (a: readonly unknown[] | undefined): number => a?.length ?? 0;
+  const vkeyWitnessCount = sz(ws.vkeyWitnesses) + sz(ws.bootstrapWitnesses);
+  const scriptWitnessCount =
+    sz(ws.nativeScripts) +
+    sz(ws.plutusV1Scripts) +
+    sz(ws.plutusV2Scripts) +
+    sz(ws.plutusV3Scripts) +
+    sz(ws.redeemers);
 
   return {
     txHash,
-    networkId,
-    ttlSlot,
-    validityStartSlot,
+    networkId: body.network === "mainnet" ? 1 : body.network === "testnet" ? 0 : undefined,
+    ttlSlot: body.ttl,
+    validityStartSlot: body.validityIntervalStart,
     inputs,
     outputs,
     vkeyWitnessCount,
     scriptWitnessCount,
   };
-}
-
-interface CslTransactionInput {
-  transaction_id(): { to_bytes(): Uint8Array };
-  index(): number | bigint;
-}
-
-interface CslTransactionInputs {
-  len(): number;
-  get(index: number): CslTransactionInput;
-}
-
-interface CslAddress {
-  to_bech32(): string;
-}
-
-interface CslAssetName {
-  name(): Uint8Array;
-}
-
-interface CslBigNum {
-  to_str(): string;
-}
-
-interface CslAssets {
-  len(): number;
-  keys(): { len(): number; get(index: number): CslAssetName };
-  get(name: CslAssetName): CslBigNum | undefined;
-}
-
-interface CslScriptHash {
-  to_bytes(): Uint8Array;
-}
-
-interface CslMultiAsset {
-  len(): number;
-  keys(): { len(): number; get(index: number): CslScriptHash };
-  get(scriptHash: CslScriptHash): CslAssets | undefined;
-}
-
-interface CslValue {
-  coin(): CslBigNum;
-  multiasset(): CslMultiAsset | undefined;
-}
-
-interface CslTransactionOutput {
-  address(): CslAddress;
-  amount(): CslValue;
-}
-
-interface CslTransactionOutputs {
-  len(): number;
-  get(index: number): CslTransactionOutput;
-}
-
-interface CslTransactionBody {
-  inputs(): CslTransactionInputs;
-  outputs(): CslTransactionOutputs;
-  ttl?(): unknown;
-  ttl_bignum?(): CslBigNum | undefined;
-  validity_start_interval?(): unknown;
-  validity_start_interval_bignum?(): CslBigNum | undefined;
-  network_id?(): { kind(): number } | undefined;
-}
-
-interface CslWitnessGroup {
-  len(): number;
-}
-
-interface CslTransactionWitnessSet {
-  vkeys?(): CslWitnessGroup | undefined;
-  bootstraps?(): CslWitnessGroup | undefined;
-  native_scripts?(): CslWitnessGroup | undefined;
-  plutus_scripts?(): CslWitnessGroup | undefined;
-  plutus_v2_scripts?(): CslWitnessGroup | undefined;
-  plutus_v3_scripts?(): CslWitnessGroup | undefined;
-  redeemers?(): CslWitnessGroup | undefined;
-}
-
-interface CslTransaction {
-  body(): CslTransactionBody;
-  witness_set(): CslTransactionWitnessSet;
-}
-
-interface CslModule {
-  Transaction: { from_bytes(bytes: Uint8Array): CslTransaction };
-  // CSL v11/v12 only.
-  hash_transaction?(body: CslTransactionBody): { to_bytes(): Uint8Array };
-  // CSL v13+ replacement: stable body hash via FixedTransaction.
-  FixedTransaction?: {
-    new_from_body_bytes(bytes: Uint8Array): {
-      transaction_hash(): { to_bytes(): Uint8Array };
-    };
-  };
-}
-
-/**
- * Counts the verification-relevant witnesses on a Cardano transaction. Used
- * by the facilitator to reject unsigned payments in `verify()`.
- *
- * @param tx - The CSL transaction.
- * @returns Counts of vkey/bootstrap witnesses and of script witnesses.
- */
-function readWitnessCounts(tx: CslTransaction): {
-  vkeyWitnessCount: number;
-  scriptWitnessCount: number;
-} {
-  let vkeyWitnessCount = 0;
-  let scriptWitnessCount = 0;
-  const ws = tx.witness_set();
-  const sizeOf = (group: CslWitnessGroup | undefined): number =>
-    group && typeof group.len === "function" ? group.len() : 0;
-  if (typeof ws.vkeys === "function") vkeyWitnessCount += sizeOf(ws.vkeys());
-  if (typeof ws.bootstraps === "function") vkeyWitnessCount += sizeOf(ws.bootstraps());
-  if (typeof ws.native_scripts === "function") scriptWitnessCount += sizeOf(ws.native_scripts());
-  if (typeof ws.plutus_scripts === "function") scriptWitnessCount += sizeOf(ws.plutus_scripts());
-  if (typeof ws.plutus_v2_scripts === "function")
-    scriptWitnessCount += sizeOf(ws.plutus_v2_scripts());
-  if (typeof ws.plutus_v3_scripts === "function")
-    scriptWitnessCount += sizeOf(ws.plutus_v3_scripts());
-  if (typeof ws.redeemers === "function") scriptWitnessCount += sizeOf(ws.redeemers());
-  return { vkeyWitnessCount, scriptWitnessCount };
-}
-
-/**
- * Reads the optional network_id field from the transaction body. Returns
- * `undefined` when the body does not declare a network id (older era txs).
- *
- * @param body - The CSL transaction body.
- * @returns The numeric network id or undefined.
- */
-function readNetworkId(body: CslTransactionBody): number | undefined {
-  if (typeof body.network_id !== "function") {
-    return undefined;
-  }
-  const id = body.network_id();
-  if (!id) {
-    return undefined;
-  }
-  return id.kind();
-}
-
-/**
- * Reads the TTL slot from the transaction body using whichever accessor the
- * loaded CSL build exposes (`ttl_bignum` on newer builds, `ttl` on older).
- *
- * @param body - The CSL transaction body.
- * @returns The TTL slot or undefined.
- */
-function readTtl(body: CslTransactionBody): bigint | undefined {
-  if (typeof body.ttl_bignum === "function") {
-    const v = body.ttl_bignum();
-    if (v) {
-      return BigInt(v.to_str());
-    }
-  }
-  if (typeof body.ttl === "function") {
-    const v = body.ttl();
-    if (v == null) return undefined;
-    if (typeof v === "number" || typeof v === "bigint") return BigInt(v);
-    if (typeof v === "object" && v !== null && "to_str" in v) {
-      return BigInt((v as CslBigNum).to_str());
-    }
-  }
-  return undefined;
-}
-
-/**
- * Reads the validity_start_interval (lower bound) from the transaction body.
- *
- * @param body - The CSL transaction body.
- * @returns The validity-start slot or undefined.
- */
-function readValidityStart(body: CslTransactionBody): bigint | undefined {
-  if (typeof body.validity_start_interval_bignum === "function") {
-    const v = body.validity_start_interval_bignum();
-    if (v) return BigInt(v.to_str());
-  }
-  if (typeof body.validity_start_interval === "function") {
-    const v = body.validity_start_interval();
-    if (v == null) return undefined;
-    if (typeof v === "number" || typeof v === "bigint") return BigInt(v);
-    if (typeof v === "object" && v !== null && "to_str" in v) {
-      return BigInt((v as CslBigNum).to_str());
-    }
-  }
-  return undefined;
-}
-
-/**
- * Returns the transaction inputs as `txHash#index` strings.
- *
- * @param body - The CSL transaction body.
- * @returns Ordered list of UTXO references.
- */
-function readInputs(body: CslTransactionBody): string[] {
-  const inputs = body.inputs();
-  const result: string[] = [];
-  const len = inputs.len();
-  for (let i = 0; i < len; i++) {
-    const input = inputs.get(i);
-    const txId = Buffer.from(input.transaction_id().to_bytes()).toString("hex");
-    const idx = Number(input.index());
-    result.push(`${txId}#${idx}`);
-  }
-  return result;
-}
-
-/**
- * Decodes the transaction outputs into a SDK-agnostic representation.
- *
- * @param csl - The loaded CSL module.
- * @param body - The CSL transaction body.
- * @returns Ordered decoded outputs.
- */
-function readOutputs(csl: CslModule, body: CslTransactionBody): CardanoUtxoOutput[] {
-  void csl;
-  const outputs = body.outputs();
-  const result: CardanoUtxoOutput[] = [];
-  const len = outputs.len();
-  for (let i = 0; i < len; i++) {
-    const out = outputs.get(i);
-    const address = out.address().to_bech32();
-    const value = out.amount();
-    const coin = BigInt(value.coin().to_str());
-    const assets: Record<string, bigint> = {};
-    const multi = value.multiasset();
-    if (multi) {
-      const scriptHashes = multi.keys();
-      const policyCount = scriptHashes.len();
-      for (let p = 0; p < policyCount; p++) {
-        const scriptHash = scriptHashes.get(p);
-        const policyHex = Buffer.from(scriptHash.to_bytes()).toString("hex").toLowerCase();
-        const inner = multi.get(scriptHash);
-        if (!inner) continue;
-        const names = inner.keys();
-        const nameCount = names.len();
-        for (let n = 0; n < nameCount; n++) {
-          const assetName = names.get(n);
-          const nameHex = Buffer.from(assetName.name()).toString("hex").toLowerCase();
-          const qty = inner.get(assetName);
-          if (!qty) continue;
-          assets[`${policyHex}.${nameHex}`] = BigInt(qty.to_str());
-        }
-      }
-    }
-    result.push({ address, coin, assets });
-  }
-  return result;
 }
