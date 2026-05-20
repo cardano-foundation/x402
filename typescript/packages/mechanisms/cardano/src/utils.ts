@@ -95,10 +95,6 @@ type BuildooorModule = typeof import("@harmoniclabs/buildooor");
  * not installed so the package can ship without forcing it on consumers that
  * only need types/constants.
  *
- * Buildooor is pure TypeScript, so loading it does not incur a WASM
- * initialization step (unlike the previous `@emurgo/cardano-serialization-lib-nodejs`
- * peer dep, which pulled in a ~4 MB WASM blob).
- *
  * @returns The Buildooor module.
  */
 async function loadBuildooor(): Promise<BuildooorModule> {
