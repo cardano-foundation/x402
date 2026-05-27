@@ -39,6 +39,7 @@ from x402.extensions.erc20_approval_gas_sponsoring import (
 from x402.mechanisms.evm import FacilitatorWeb3Signer
 from x402.mechanisms.evm.constants import TX_STATUS_SUCCESS
 from x402.mechanisms.evm.exact import register_exact_evm_facilitator
+from x402.mechanisms.evm.upto import UptoEvmFacilitatorScheme
 from x402.mechanisms.evm.types import TransactionReceipt
 from x402.mechanisms.evm.upto import UptoEvmFacilitatorScheme
 from x402.mechanisms.svm import FacilitatorKeypairSigner
