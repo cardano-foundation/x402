@@ -206,6 +206,7 @@ interface CslTransactionOutputs {
 }
 
 interface CslTransactionBody {
+  to_bytes(): Uint8Array;
   inputs(): CslTransactionInputs;
   outputs(): CslTransactionOutputs;
   ttl?(): unknown;
@@ -235,15 +236,15 @@ interface CslTransaction {
 }
 
 interface CslModule {
-  Transaction: { from_bytes(bytes: Uint8Array): CslTransaction };
-  // CSL v11/v12 only.
-  hash_transaction?(body: CslTransactionBody): { to_bytes(): Uint8Array };
   // CSL v13+ replacement: stable body hash via FixedTransaction.
   FixedTransaction?: {
     new_from_body_bytes(bytes: Uint8Array): {
       transaction_hash(): { to_bytes(): Uint8Array };
     };
   };
+  Transaction: { from_bytes(bytes: Uint8Array): CslTransaction };
+  // CSL v11/v12 only.
+  hash_transaction?(body: CslTransactionBody): { to_bytes(): Uint8Array };
 }
 
 /**
