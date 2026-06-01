@@ -18,9 +18,9 @@ import (
 	"fmt"
 	"strings"
 
-	x402 "github.com/x402-foundation/x402/go"
-	"github.com/x402-foundation/x402/go/mechanisms/cardano"
-	"github.com/x402-foundation/x402/go/types"
+	x402 "github.com/x402-foundation/x402/go/v2"
+	"github.com/x402-foundation/x402/go/v2/mechanisms/cardano"
+	"github.com/x402-foundation/x402/go/v2/types"
 )
 
 // ExactCardanoScheme implements x402.SchemeNetworkServer for the Cardano
