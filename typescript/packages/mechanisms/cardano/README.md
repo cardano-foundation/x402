@@ -28,13 +28,9 @@ Cardano native tokens are identified as `${policyId}.${assetNameHex}`, e.g. USDM
 c48cbb3d5e57ed56e276bc45f99ab39abe94e6cd7ac39fb402da47ad.0014df105553444d
 ```
 
-## Optional Cardano serialization library
+## Transaction decoding
 
-This package depends on `@emurgo/cardano-serialization-lib-nodejs` as a _peer dependency_ to keep the TypeScript bundle light. The dep is resolved lazily inside `decodeCardanoTransaction` so the package can be imported without it; verification calls require it.
-
-```bash
-pnpm add @emurgo/cardano-serialization-lib-nodejs
-```
+CBOR transaction decoding in the facilitator uses Intersect's [Evolution SDK](https://www.npmjs.com/package/@evolution-sdk/evolution) — a pure-TypeScript Cardano serialization library with no WASM. It is bundled as a regular dependency; nothing extra to install.
 
 ## Asset transfer methods
 

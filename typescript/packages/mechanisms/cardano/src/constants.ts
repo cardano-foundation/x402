@@ -210,7 +210,5 @@ export const ERR_SETTLEMENT_NOT_CONFIRMED = "exact_cardano_settlement_not_confir
 export const ERR_DUPLICATE_SETTLEMENT = "duplicate_settlement";
 /** Error: the script assetTransferMethod was selected but reconstruction failed. */
 export const ERR_SCRIPT_ADDRESS_MISMATCH = "invalid_exact_cardano_payload_script_address_mismatch";
-/** Error: required Cardano SDK is not installed. */
-export const ERR_CARDANO_SDK_MISSING = "exact_cardano_sdk_missing";
 /** Error: transaction is not signed (no vkey/bootstrap witnesses present). */
 export const ERR_TRANSACTION_UNSIGNED = "invalid_exact_cardano_payload_unsigned";
