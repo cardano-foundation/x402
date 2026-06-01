@@ -12,7 +12,6 @@ import {
   CARDANO_NETWORKS,
   ERR_AMOUNT_INSUFFICIENT,
   ERR_ASSET_MISMATCH,
-  ERR_CARDANO_SDK_MISSING,
   ERR_CHAIN_LOOKUP_FAILED,
   ERR_DUPLICATE_SETTLEMENT,
   ERR_INVALID_PAYLOAD,
@@ -163,25 +162,12 @@ export class ExactCardanoScheme implements SchemeNetworkFacilitator {
 
       let decoded: DecodedCardanoTransaction;
       try {
-        decoded = await decodeCardanoTransaction(cardanoPayload.transaction);
+        decoded = decodeCardanoTransaction(cardanoPayload.transaction);
       } catch (cause) {
-        const message = cause instanceof Error ? cause.message : String(cause);
-        // A missing peer dep is a facilitator misconfiguration, not client error.
-        // Bubble up as a chain-lookup-style failure with a descriptive message so
-        // operators can fix the install, instead of marking valid payments as
-        // malformed CBOR.
-        if (message.startsWith(ERR_CARDANO_SDK_MISSING)) {
-          return {
-            isValid: false,
-            invalidReason: ERR_CHAIN_LOOKUP_FAILED,
-            invalidMessage: message,
-            payer: "",
-          };
-        }
         return {
           isValid: false,
           invalidReason: ERR_TRANSACTION_DECODE_FAILED,
-          invalidMessage: message,
+          invalidMessage: cause instanceof Error ? cause.message : String(cause),
           payer: "",
         };
       }

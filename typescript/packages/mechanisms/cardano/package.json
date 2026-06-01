@@ -42,15 +42,8 @@
     "vitest": "^3.0.5"
   },
   "dependencies": {
+    "@evolution-sdk/evolution": "^0.5.9",
     "@x402/core": "workspace:*"
-  },
-  "peerDependencies": {
-    "@emurgo/cardano-serialization-lib-nodejs": ">=11.5.0"
-  },
-  "peerDependenciesMeta": {
-    "@emurgo/cardano-serialization-lib-nodejs": {
-      "optional": true
-    }
   },
   "exports": {
     ".": {

@@ -1,8 +1,9 @@
 import { describe, expect, it, vi } from "vitest";
 
-// Stub the optional CSL-bound decoder so the test does not require the WASM
-// dependency. The mock must be declared before importing the facilitator
-// scheme so the bound import inside that module picks up the stub.
+// Stub `decodeCardanoTransaction` so the test injects deterministic decoded
+// shapes without going through Evolution SDK. The mock must be declared
+// before importing the facilitator scheme so the bound import inside that
+// module picks up the stub.
 vi.mock("../../src/utils", async original => {
   const actual = (await original()) as Record<string, unknown>;
   return {
@@ -50,7 +51,7 @@ describe("Cardano facilitator security", () => {
       }
     }
 
-    vi.mocked(decodeCardanoTransaction).mockResolvedValueOnce({
+    vi.mocked(decodeCardanoTransaction).mockReturnValueOnce({
       txHash: "abc",
       networkId: 1,
       ttlSlot: undefined,
