@@ -1,3 +1,0 @@
-kind: added
-body: 'Add Cardano `exact` scheme implementation. New `mechanisms/cardano` package with the server-side scheme registering `cardano:mainnet`, `cardano:preprod`, and `cardano:preview` networks, USDM as the default money parser, and DTOs for the spec''s three `assetTransferMethod` variants (default address-to-address, Masumi smart protocol, script payments). Verification and settlement are dispatched to a remote V2-compatible facilitator.'
-time: 2026-06-02T00:00:00.000000000Z
