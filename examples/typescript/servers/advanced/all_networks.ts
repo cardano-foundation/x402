@@ -12,6 +12,7 @@ import { config } from "dotenv";
 import express from "express";
 import { paymentMiddleware, x402ResourceServer } from "@x402/express";
 import { ExactAvmScheme } from "@x402/avm/exact/server";
+import { ExactCardanoScheme } from "@x402/cardano/exact/server";
 import { ExactEvmScheme } from "@x402/evm/exact/server";
 import { ExactHederaScheme } from "@x402/hedera/exact/server";
 import { ExactSvmScheme } from "@x402/svm/exact/server";
@@ -23,15 +24,16 @@ config();
 
 // Configuration - optional per network
 const avmAddress = process.env.AVM_ADDRESS as string | undefined;
+const cardanoAddress = process.env.CARDANO_ADDRESS as string | undefined;
 const evmAddress = process.env.EVM_ADDRESS as `0x${string}` | undefined;
 const svmAddress = process.env.SVM_ADDRESS as string | undefined;
 const stellarAddress = process.env.STELLAR_ADDRESS as string | undefined;
 const hederaAddress = process.env.HEDERA_ACCOUNT_ID as string | undefined;
 
 // Validate at least one address is provided
-if (!avmAddress && !evmAddress && !svmAddress && !stellarAddress && !hederaAddress) {
+if (!avmAddress && !cardanoAddress && !evmAddress && !svmAddress && !stellarAddress && !hederaAddress) {
   console.error(
-    "❌ At least one of AVM_ADDRESS, EVM_ADDRESS, SVM_ADDRESS, STELLAR_ADDRESS, or HEDERA_ACCOUNT_ID is required",
+    "❌ At least one of AVM_ADDRESS, CARDANO_ADDRESS, EVM_ADDRESS, SVM_ADDRESS, STELLAR_ADDRESS, or HEDERA_ACCOUNT_ID is required",
   );
   process.exit(1);
 }
@@ -44,6 +46,7 @@ if (!facilitatorUrl) {
 
 // Network configuration
 const AVM_NETWORK = "algorand:SGO1GKSzyE7IEPItTxCByw9x8FmnrCDexi9/cOUJOiI=" as const; // Algorand Testnet
+const CARDANO_NETWORK = "cardano:preprod" as const; // Cardano Preprod Testnet
 const EVM_NETWORK = "eip155:84532" as const; // Base Sepolia
 const HEDERA_NETWORK = "hedera:testnet" as const; // Hedera Testnet
 const SVM_NETWORK = "solana:EtWTRABZaYq6iMfeYKouRu166VU2xqa1" as const; // Solana Devnet
@@ -64,6 +67,14 @@ if (avmAddress) {
     price: "$0.001",
     network: AVM_NETWORK,
     payTo: avmAddress,
+  });
+}
+if (cardanoAddress) {
+  accepts.push({
+    scheme: "exact",
+    price: "$0.001",
+    network: CARDANO_NETWORK,
+    payTo: cardanoAddress,
   });
 }
 if (evmAddress) {
@@ -109,6 +120,9 @@ const facilitatorClient = new HTTPFacilitatorClient({ url: facilitatorUrl });
 const server = new x402ResourceServer(facilitatorClient);
 if (avmAddress) {
   server.register(AVM_NETWORK, new ExactAvmScheme());
+}
+if (cardanoAddress) {
+  server.register(CARDANO_NETWORK, new ExactCardanoScheme());
 }
 if (evmAddress) {
   server.register(EVM_NETWORK, new ExactEvmScheme());
@@ -161,6 +175,9 @@ app.listen(port, () => {
   console.log(`🚀 All Networks Server listening at http://localhost:${port}`);
   if (avmAddress) {
     console.log(`   AVM: ${avmAddress} on ${AVM_NETWORK}`);
+  }
+  if (cardanoAddress) {
+    console.log(`   Cardano: ${cardanoAddress} on ${CARDANO_NETWORK}`);
   }
   if (evmAddress) {
     console.log(`   EVM: ${evmAddress} on ${EVM_NETWORK}`);

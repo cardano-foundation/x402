@@ -5,7 +5,8 @@ import tsconfigPaths from "vite-tsconfig-paths";
 export default defineConfig(({ mode }) => ({
   test: {
     env: loadEnv(mode, process.cwd(), ""),
-    exclude: ["**/node_modules/**", "**/dist/**", "**/test/integrations/**", "**/test/e2e/**"],
+    include: ["**/test/e2e/**/*.test.ts"],
+    testTimeout: 120_000,
   },
   plugins: [tsconfigPaths({ projects: ["."] })],
 }));
