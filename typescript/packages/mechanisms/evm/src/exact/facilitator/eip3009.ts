@@ -1,6 +1,7 @@
 import {
   PaymentPayload,
   PaymentRequirements,
+  FacilitatorContext,
   SettleResponse,
   VerifyResponse,
 } from "@x402/core/types";
@@ -10,6 +11,7 @@ import { FacilitatorEvmSigner } from "../../signer";
 import { getEvmChainId } from "../../utils";
 import { ExactEIP3009Payload } from "../../types";
 import * as Errors from "./errors";
+import { resolveDataSuffix } from "../../shared/extensions";
 import {
   diagnoseEip3009SimulationFailure,
   executeTransferWithAuthorization,
@@ -246,6 +248,7 @@ export async function verifyEIP3009(
  * @param requirements - The payment requirements
  * @param eip3009Payload - The EIP-3009 specific payload
  * @param config - Facilitator configuration
+ * @param context - Optional facilitator context for extension capabilities
  * @returns Promise resolving to settlement response
  */
 export async function settleEIP3009(
@@ -254,6 +257,7 @@ export async function settleEIP3009(
   requirements: PaymentRequirements,
   eip3009Payload: ExactEIP3009Payload,
   config: EIP3009FacilitatorConfig,
+  context?: FacilitatorContext,
 ): Promise<SettleResponse> {
   const payer = eip3009Payload.authorization.from;
 
@@ -312,10 +316,16 @@ export async function settleEIP3009(
       }
     }
 
+    const dataSuffix = await resolveDataSuffix(context, {
+      paymentPayload: payload,
+      paymentRequirements: requirements,
+    });
+
     const tx = await executeTransferWithAuthorization(
       signer,
       getAddress(requirements.asset),
       eip3009Payload,
+      dataSuffix,
     );
 
     // Wait for transaction confirmation
