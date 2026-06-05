@@ -1,12 +1,19 @@
-import { PaymentRequirements, PaymentPayloadResult, PaymentPayloadContext } from "@x402/core/types";
-import { EIP2612_GAS_SPONSORING_KEY, ERC20_APPROVAL_GAS_SPONSORING_KEY } from "../exact/extensions";
+import type {
+  PaymentRequirements,
+  PaymentPayloadResult,
+  PaymentPayloadContext,
+} from "@x402/core/types";
+import {
+  EIP2612_GAS_SPONSORING_KEY,
+  ERC20_APPROVAL_GAS_SPONSORING_KEY,
+} from "../../exact/extensions";
 import { getAddress } from "viem";
-import { PERMIT2_ADDRESS, erc20AllowanceAbi } from "../constants";
-import { getEvmChainId } from "../utils";
-import { ClientEvmSigner } from "../signer";
-import { signEip2612Permit } from "../exact/client/eip2612";
-import { signErc20ApprovalTransaction } from "../exact/client/erc20approval";
-import { resolveExtensionRpcCapabilities, type ExactEvmSchemeOptions } from "./rpc";
+import { PERMIT2_ADDRESS, erc20AllowanceAbi } from "../../constants";
+import { getEvmChainId } from "../../utils";
+import { ClientEvmSigner } from "../../signer";
+import { signEip2612Permit } from "../../exact/client/eip2612";
+import { signErc20ApprovalTransaction } from "../../exact/client/erc20approval";
+import { resolveExtensionRpcCapabilities, type ExactEvmSchemeOptions } from "../rpc";
 
 /**
  * Attempts to sign an EIP-2612 permit for gasless Permit2 approval.
