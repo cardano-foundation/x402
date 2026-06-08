@@ -831,15 +831,12 @@ importers:
         specifier: ^0.5.9
         version: 0.5.9(@effect/cluster@0.58.2(@effect/platform@0.96.1(effect@3.21.2))(@effect/rpc@0.75.1(@effect/platform@0.96.1(effect@3.21.2))(effect@3.21.2))(@effect/sql@0.51.1(@effect/experimental@0.60.0(@effect/platform@0.96.1(effect@3.21.2))(effect@3.21.2))(@effect/platform@0.96.1(effect@3.21.2))(effect@3.21.2))(@effect/workflow@0.18.1(@effect/experimental@0.60.0(@effect/platform@0.96.1(effect@3.21.2))(effect@3.21.2))(@effect/platform@0.96.1(effect@3.21.2))(@effect/rpc@0.75.1(@effect/platform@0.96.1(effect@3.21.2))(effect@3.21.2))(effect@3.21.2))(effect@3.21.2))(@effect/rpc@0.75.1(@effect/platform@0.96.1(effect@3.21.2))(effect@3.21.2))(@effect/sql@0.51.1(@effect/experimental@0.60.0(@effect/platform@0.96.1(effect@3.21.2))(effect@3.21.2))(@effect/platform@0.96.1(effect@3.21.2))(effect@3.21.2))(bufferutil@4.0.9)(utf-8-validate@5.0.10)
       '@x402/core':
-        specifier: workspace:*
+        specifier: workspace:~
         version: link:../../core
     devDependencies:
       '@eslint/js':
         specifier: ^9.24.0
         version: 9.33.0
-      '@types/express':
-        specifier: ^5.0.1
-        version: 5.0.3
       '@types/node':
         specifier: ^22.13.4
         version: 22.17.2
@@ -849,12 +846,6 @@ importers:
       '@typescript-eslint/parser':
         specifier: ^8.29.1
         version: 8.48.0(eslint@9.33.0(jiti@2.6.1))(typescript@5.9.3)
-      '@x402/express':
-        specifier: workspace:*
-        version: link:../../http/express
-      '@x402/fetch':
-        specifier: workspace:*
-        version: link:../../http/fetch
       eslint:
         specifier: ^9.24.0
         version: 9.33.0(jiti@2.6.1)
@@ -867,9 +858,6 @@ importers:
       eslint-plugin-prettier:
         specifier: ^5.2.6
         version: 5.5.4(eslint@9.33.0(jiti@2.6.1))(prettier@3.5.2)
-      express:
-        specifier: ^4.18.2
-        version: 4.21.2
       prettier:
         specifier: 3.5.2
         version: 3.5.2
@@ -877,7 +865,7 @@ importers:
         specifier: ^8.4.0
         version: 8.5.0(jiti@2.6.1)(postcss@8.5.6)(tsx@4.21.0)(typescript@5.9.3)(yaml@2.8.1)
       tsx:
-        specifier: ^4.19.2
+        specifier: ^4.21.0
         version: 4.21.0
       typescript:
         specifier: ^5.7.3

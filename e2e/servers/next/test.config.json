@@ -132,6 +132,13 @@
       "protocolFamily": "stellar"
     },
     {
+      "path": "/api/exact/cardano",
+      "method": "GET",
+      "description": "Cardano endpoint using proxy middleware",
+      "requiresPayment": true,
+      "protocolFamily": "cardano"
+    },
+    {
       "path": "/api/exact/evm/eip3009/withx402",
       "method": "GET",
       "description": "EVM EIP-3009 endpoint using withX402 wrapper",
@@ -219,6 +226,13 @@
       "protocolFamily": "stellar"
     },
     {
+      "path": "/api/exact/cardano/withx402",
+      "method": "GET",
+      "description": "Cardano endpoint using withX402 wrapper",
+      "requiresPayment": true,
+      "protocolFamily": "cardano"
+    },
+    {
       "path": "/api/health",
       "method": "GET",
       "description": "Health check endpoint",
@@ -243,6 +257,8 @@
       "APTOS_PAYEE_ADDRESS",
       "HEDERA_PAYEE_ADDRESS",
       "STELLAR_PAYEE_ADDRESS",
+      "CARDANO_PAYEE_ADDRESS",
+      "BLOCKFROST_PROJECT_ID",
       "EVM_RECEIVER_AUTHORIZER_PRIVATE_KEY"
     ]
   }
