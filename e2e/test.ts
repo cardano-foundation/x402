@@ -588,11 +588,6 @@ async function runTest() {
   const facilitatorTvmPrivateKey = process.env.FACILITATOR_TVM_PRIVATE_KEY;
   const facilitatorCardanoMnemonic = process.env.FACILITATOR_CARDANO_MNEMONIC;
   const batchSettlementRecovery = envFlagDefaultTrue(process.env.BATCH_SETTLEMENT_RECOVERY);
-  if (!serverEvmAddress || !serverSvmAddress || !clientEvmPrivateKey || !clientSvmPrivateKey || !facilitatorEvmPrivateKey || !facilitatorSvmPrivateKey) {
-    errorLog('❌ Missing required environment variables:');
-    errorLog(' SERVER_EVM_ADDRESS, SERVER_SVM_ADDRESS, CLIENT_EVM_PRIVATE_KEY, CLIENT_SVM_PRIVATE_KEY, FACILITATOR_EVM_PRIVATE_KEY, and FACILITATOR_SVM_PRIVATE_KEY must be set');
-    process.exit(1);
-  }
 
   // Discover all servers, clients, and facilitators (always include legacy)
   const discovery = new TestDiscovery('.', true); // Always discover legacy
@@ -721,6 +716,10 @@ async function runTest() {
       ['SERVER_CARDANO_ADDRESS', serverCardanoAddress],
       ['CLIENT_CARDANO_MNEMONIC', clientCardanoMnemonic],
       ['FACILITATOR_CARDANO_MNEMONIC', facilitatorCardanoMnemonic],
+      // Blockfrost project id backs both the client (UTXO lookup) and the
+      // facilitator (UTXO/slot queries + submission); a cardano run cannot work
+      // without it, so fail fast here rather than at runtime.
+      ['BLOCKFROST_PROJECT_ID', process.env.BLOCKFROST_PROJECT_ID],
     ],
   };
 

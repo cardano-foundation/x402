@@ -18,7 +18,7 @@ import {
   PrivateKeyVariants,
 } from "@aptos-labs/ts-sdk";
 import { base58 } from "@scure/base";
-import { createKeyPairSignerFromBytes } from "@solana/kit";
+import { createKeyPairSignerFromBytes, generateKeyPairSigner } from "@solana/kit";
 import { toFacilitatorAptosSigner } from "@x402/aptos";
 import { ExactAptosScheme } from "@x402/aptos/exact/facilitator";
 import { toFacilitatorAvmSigner } from "@x402/avm";
@@ -125,27 +125,33 @@ if (APTOS_RPC_URL) console.log(`🌐 Aptos RPC URL: ${APTOS_RPC_URL}`);
 if (HEDERA_NODE_URL) console.log(`🌐 Hedera Node URL: ${HEDERA_NODE_URL}`);
 if (STELLAR_RPC_URL) console.log(`🌐 Stellar RPC URL: ${STELLAR_RPC_URL}`);
 
-// Validate required environment variables
+// EVM and SVM are optional so a single-family run (e.g. --families=cardano) can
+// start without their credentials. When absent we fall back to throwaway
+// placeholder accounts: the EVM/SVM schemes still register but are never
+// exercised unless an EVM/SVM scenario actually runs — which the test runner
+// only does when real per-family credentials are present.
+const PLACEHOLDER_EVM_PRIVATE_KEY =
+  "0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80" as `0x${string}`;
+const evmPrivateKey = (process.env.EVM_PRIVATE_KEY ||
+  PLACEHOLDER_EVM_PRIVATE_KEY) as `0x${string}`;
 if (!process.env.EVM_PRIVATE_KEY) {
-  console.error("❌ EVM_PRIVATE_KEY environment variable is required");
-  process.exit(1);
+  console.warn(
+    "⚠️  EVM_PRIVATE_KEY not set — using a placeholder account (EVM scenarios will not work)",
+  );
 }
-
 if (!process.env.SVM_PRIVATE_KEY) {
-  console.error("❌ SVM_PRIVATE_KEY environment variable is required");
-  process.exit(1);
+  console.warn(
+    "⚠️  SVM_PRIVATE_KEY not set — using a generated placeholder account (SVM scenarios will not work)",
+  );
 }
 
 // Initialize the EVM account from private key
-const evmAccount = privateKeyToAccount(
-  process.env.EVM_PRIVATE_KEY as `0x${string}`,
-  { nonceManager },
-);
+const evmAccount = privateKeyToAccount(evmPrivateKey, { nonceManager });
 console.info(`EVM Facilitator account: ${evmAccount.address}`);
 
 // Dedicated receiver authorizer for the batch-settlement scheme (falls back to EVM_PRIVATE_KEY)
 const receiverAuthorizerPrivateKey =
-  process.env.EVM_RECEIVER_AUTHORIZER_PRIVATE_KEY ?? process.env.EVM_PRIVATE_KEY;
+  process.env.EVM_RECEIVER_AUTHORIZER_PRIVATE_KEY || evmPrivateKey;
 const authorizerAccount = privateKeyToAccount(
   receiverAuthorizerPrivateKey as `0x${string}`,
 );
@@ -158,10 +164,10 @@ const authorizerSigner: AuthorizerSigner = {
 };
 console.info(`EVM Receiver Authorizer: ${authorizerSigner.address}`);
 
-// Initialize the SVM account from private key
-const svmAccount = await createKeyPairSignerFromBytes(
-  base58.decode(process.env.SVM_PRIVATE_KEY as string),
-);
+// Initialize the SVM account from private key (or a throwaway placeholder)
+const svmAccount = process.env.SVM_PRIVATE_KEY
+  ? await createKeyPairSignerFromBytes(base58.decode(process.env.SVM_PRIVATE_KEY))
+  : await generateKeyPairSigner();
 console.info(`SVM Facilitator account: ${svmAccount.address}`);
 
 // Initialize the Aptos account from private key (format to AIP-80 compliant format) if provided
