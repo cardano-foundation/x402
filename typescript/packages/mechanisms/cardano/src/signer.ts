@@ -60,6 +60,19 @@ function resolveChain(network: string): Chain {
 }
 
 /**
+ * Normalizes a BIP-39 mnemonic: trims, collapses internal whitespace, and
+ * lowercases it. The BIP-39 word list is all lowercase, so this recovers the
+ * correct wallet from a mnemonic that picked up stray capitalization or extra
+ * whitespace (e.g. when copied into an env file) instead of failing derivation.
+ *
+ * @param mnemonic - The raw mnemonic phrase.
+ * @returns The normalized mnemonic.
+ */
+function normalizeMnemonic(mnemonic: string): string {
+  return mnemonic.trim().replace(/\s+/g, " ").toLowerCase();
+}
+
+/**
  * Attaches the configured provider to a chain-scoped client assembly.
  *
  * @param assembly - The chain-scoped client assembly.
@@ -322,14 +335,15 @@ export interface ClientCardanoSignerConfig {
  */
 export function toClientCardanoSigner(config: ClientCardanoSignerConfig): ClientCardanoSigner {
   const chain = resolveChain(config.network);
+  const mnemonic = normalizeMnemonic(config.mnemonic);
   const client = withProvider(Client.make(chain), config.provider).withSeed({
-    mnemonic: config.mnemonic,
+    mnemonic,
     accountIndex: config.accountIndex,
   });
 
   // Derive the funding address synchronously so getAddress() needs no await.
   const address = Address.toBech32(
-    addressFromSeed(config.mnemonic, {
+    addressFromSeed(mnemonic, {
       accountIndex: config.accountIndex,
       networkId: chain.id,
     }).address,
@@ -428,15 +442,16 @@ export function toFacilitatorCardanoSigner(
   config: FacilitatorCardanoSignerConfig,
 ): FacilitatorCardanoSigner {
   const chain = resolveChain(config.network);
+  const mnemonic = normalizeMnemonic(config.mnemonic);
   const client = withProvider(Client.make(chain), config.provider).withSeed({
-    mnemonic: config.mnemonic,
+    mnemonic,
     accountIndex: config.accountIndex,
   });
   const slotConfig = chain.slotConfig;
 
   // Derive the facilitator address synchronously so getAddresses() needs no await.
   const address = Address.toBech32(
-    addressFromSeed(config.mnemonic, {
+    addressFromSeed(mnemonic, {
       accountIndex: config.accountIndex,
       networkId: chain.id,
     }).address,
