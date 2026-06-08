@@ -61,6 +61,8 @@ import {
   type FacilitatorStellarSigner,
 } from "@x402/stellar";
 import { ExactStellarScheme } from "@x402/stellar/exact/facilitator";
+import { toFacilitatorCardanoSigner } from "@x402/cardano";
+import { ExactCardanoScheme } from "@x402/cardano/exact/facilitator";
 import crypto from "crypto";
 import dotenv from "dotenv";
 import express from "express";
@@ -90,6 +92,7 @@ const AVM_NETWORK =
   "algorand:SGO1GKSzyE7IEPItTxCByw9x8FmnrCDexi9/cOUJOiI=";
 const HEDERA_NETWORK = process.env.HEDERA_NETWORK || "hedera:testnet";
 const STELLAR_NETWORK = process.env.STELLAR_NETWORK || "stellar:testnet";
+const CARDANO_NETWORK = process.env.CARDANO_NETWORK || "cardano:preprod";
 const EVM_RPC_URL = process.env.EVM_RPC_URL;
 const SVM_RPC_URL = process.env.SVM_RPC_URL;
 const AVM_RPC_URL = process.env.AVM_RPC_URL;
@@ -114,6 +117,7 @@ console.log(`🌐 Aptos Network: ${APTOS_NETWORK}`);
 console.log(`🌐 AVM Network: ${AVM_NETWORK}`);
 console.log(`🌐 Hedera Network: ${HEDERA_NETWORK}`);
 console.log(`🌐 Stellar Network: ${STELLAR_NETWORK}`);
+console.log(`🌐 Cardano Network: ${CARDANO_NETWORK}`);
 if (EVM_RPC_URL) console.log(`🌐 EVM RPC URL: ${EVM_RPC_URL}`);
 if (SVM_RPC_URL) console.log(`🌐 SVM RPC URL: ${SVM_RPC_URL}`);
 if (AVM_RPC_URL) console.log(`🌐 AVM RPC URL: ${AVM_RPC_URL}`);
@@ -214,6 +218,23 @@ if (process.env.STELLAR_PRIVATE_KEY) {
     STELLAR_NETWORK as Network,
   );
   console.info(`Stellar Facilitator account: ${stellarSigner.address}`);
+}
+
+// Initialize the Cardano signer from mnemonic + Blockfrost connection (optional)
+let cardanoSigner: ReturnType<typeof toFacilitatorCardanoSigner> | undefined;
+if (process.env.CARDANO_MNEMONIC) {
+  cardanoSigner = toFacilitatorCardanoSigner({
+    mnemonic: process.env.CARDANO_MNEMONIC as string,
+    network: CARDANO_NETWORK,
+    provider: {
+      blockfrost: {
+        baseUrl: process.env.BLOCKFROST_PREPROD_URL as string,
+        projectId: process.env.BLOCKFROST_PROJECT_ID as string,
+      },
+    },
+    awaitConfirmation: true,
+  });
+  console.info(`Cardano Facilitator account: ${cardanoSigner.getAddresses()[0]}`);
 }
 
 // Create a Viem client with both wallet and public capabilities
@@ -449,6 +470,12 @@ if (stellarSigner) {
   facilitator.register(
     STELLAR_NETWORK as Network,
     new ExactStellarScheme([stellarSigner]),
+  );
+}
+if (cardanoSigner) {
+  facilitator.register(
+    CARDANO_NETWORK as Network,
+    new ExactCardanoScheme(cardanoSigner),
   );
 }
 
@@ -772,6 +799,7 @@ app.get("/health", (req, res) => {
     aptosNetwork: aptosAccount ? APTOS_NETWORK : "(not configured)",
     hederaNetwork: hederaSigner ? HEDERA_NETWORK : "(not configured)",
     stellarNetwork: stellarSigner ? STELLAR_NETWORK : "(not configured)",
+    cardanoNetwork: cardanoSigner ? CARDANO_NETWORK : "(not configured)",
     facilitator: "typescript",
     version: "2.0.0",
     extensions: [BAZAAR.key],
@@ -810,6 +838,7 @@ app.listen(parseInt(PORT), () => {
 ║  Aptos Address: ${aptosAccount ? aptosAccount.accountAddress.toStringLong().slice(0, 20) + "..." : "(not configured)"}
 ║  Hedera Address: ${process.env.HEDERA_ACCOUNT_ID || "(not configured)"} ║
 ║  Stellar Address: ${stellarSigner ? stellarSigner.address : "(not configured)"} ║
+║  Cardano Address: ${cardanoSigner ? cardanoSigner.getAddresses()[0] : "(not configured)"} ║
 ║  Extensions:   bazaar                                  ║
 ║                                                        ║
 ║  Endpoints:                                            ║

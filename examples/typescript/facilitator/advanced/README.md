@@ -10,6 +10,7 @@ Express.js facilitator service demonstrating advanced x402 patterns including al
 - SVM private key with Solana Devnet SOL for transaction fees
 - Stellar private key with testnet XLM for transaction fees (fund via [Stellar Laboratory](https://lab.stellar.org/account/create) ➡️ Generate keypair ➡️ Fund account with Friendbot)
 - Hedera account id + private key for Hedera testnet fees (optional)
+- Cardano wallet seed with preprod tADA for submission fees, funded via the [Cardano testnets faucet](https://docs.cardano.org/cardano-testnets/tools/faucet/) (optional)
 
 ## Setup
 
@@ -21,6 +22,9 @@ cp .env-local .env
 
 and fill required environment variables:
 
+- `CARDANO_MNEMONIC` - Cardano wallet seed phrase for the fee-paying facilitator wallet (optional)
+- `CARDANO_NETWORK` - Cardano network (optional, defaults to `cardano:preprod`)
+- `BLOCKFROST_PREPROD_URL` / `BLOCKFROST_PROJECT_ID` - Blockfrost endpoint + project id (required when `CARDANO_MNEMONIC` is set)
 - `EVM_PRIVATE_KEY` - Ethereum private key
 - `SVM_PRIVATE_KEY` - Solana private key
 - `STELLAR_PRIVATE_KEY` - Stellar secret key (starts with `S`)
@@ -249,3 +253,6 @@ Networks use [CAIP-2](https://github.com/ChainAgnostic/CAIPs/blob/main/CAIPs/cai
 - `stellar:pubnet` — Stellar Mainnet
 - `hedera:testnet` — Hedera Testnet
 - `hedera:mainnet` — Hedera Mainnet
+- `cardano:preprod` — Cardano Preprod Testnet
+- `cardano:preview` — Cardano Preview Testnet
+- `cardano:mainnet` — Cardano Mainnet

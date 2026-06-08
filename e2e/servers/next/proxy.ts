@@ -8,6 +8,7 @@ import { ExactSvmScheme } from "@x402/svm/exact/server";
 import { ExactAptosScheme } from "@x402/aptos/exact/server";
 import { ExactHederaScheme } from "@x402/hedera/exact/server";
 import { ExactStellarScheme } from "@x402/stellar/exact/server";
+import { ExactCardanoScheme } from "@x402/cardano/exact/server";
 import { ExactAvmScheme } from "@x402/avm/exact/server";
 import { bazaarResourceServerExtension, declareDiscoveryExtension } from "@x402/extensions/bazaar";
 import {
@@ -21,6 +22,7 @@ export const AVM_PAYEE_ADDRESS = process.env.AVM_PAYEE_ADDRESS as string;
 export const APTOS_PAYEE_ADDRESS = process.env.APTOS_PAYEE_ADDRESS as string;
 export const HEDERA_PAYEE_ADDRESS = process.env.HEDERA_PAYEE_ADDRESS as string | undefined;
 export const STELLAR_PAYEE_ADDRESS = process.env.STELLAR_PAYEE_ADDRESS as string | undefined;
+export const CARDANO_PAYEE_ADDRESS = process.env.CARDANO_PAYEE_ADDRESS as string | undefined;
 export const EVM_NETWORK = (process.env.EVM_NETWORK || "eip155:84532") as `${string}:${string}`;
 export const SVM_NETWORK = (process.env.SVM_NETWORK ||
   "solana:EtWTRABZaYq6iMfeYKouRu166VU2xqa1") as `${string}:${string}`;
@@ -31,6 +33,8 @@ export const HEDERA_ASSET = process.env.HEDERA_ASSET ?? "0.0.0"; // 0.0.0 = HBAR
 export const HEDERA_AMOUNT = process.env.HEDERA_AMOUNT ?? "100000"; // price in smallest units (tinybars or token decimals), defaults to 0.001 HBAR or 0.1 USDC
 export const STELLAR_NETWORK = (process.env.STELLAR_NETWORK ||
   "stellar:testnet") as `${string}:${string}`;
+export const CARDANO_NETWORK = (process.env.CARDANO_NETWORK ||
+  "cardano:preprod") as `${string}:${string}`;
 const EVM_PERMIT2_ASSET = process.env.EVM_PERMIT2_ASSET as `0x${string}`;
 const facilitatorUrl = process.env.FACILITATOR_URL;
 
@@ -79,6 +83,9 @@ if (HEDERA_PAYEE_ADDRESS) {
 }
 if (STELLAR_PAYEE_ADDRESS) {
   server.register("stellar:*", new ExactStellarScheme());
+}
+if (CARDANO_PAYEE_ADDRESS) {
+  server.register("cardano:*", new ExactCardanoScheme());
 }
 
 // Register Bazaar discovery extension
@@ -310,6 +317,35 @@ export const proxy = paymentProxy(
         },
       }
       : {}),
+    ...(CARDANO_PAYEE_ADDRESS
+      ? {
+        "/api/exact/cardano": {
+          accepts: {
+            payTo: CARDANO_PAYEE_ADDRESS,
+            scheme: "exact",
+            price: "$0.001",
+            network: CARDANO_NETWORK,
+          },
+          extensions: {
+            ...declareDiscoveryExtension({
+              output: {
+                example: {
+                  message: "Protected endpoint accessed successfully",
+                  timestamp: "2024-01-01T00:00:00Z",
+                },
+                schema: {
+                  properties: {
+                    message: { type: "string" },
+                    timestamp: { type: "string" },
+                  },
+                  required: ["message", "timestamp"],
+                },
+              },
+            }),
+          },
+        },
+      }
+      : {}),
     "/api/exact/evm/permit2/proxy": {
       accepts: {
         payTo: EVM_PAYEE_ADDRESS,
@@ -453,6 +489,7 @@ export const config = {
     "/api/exact/aptos",
     "/api/exact/hedera",
     "/api/exact/stellar",
+    "/api/exact/cardano",
     "/api/exact/evm/permit2/proxy",
     "/api/exact/evm/permit2-eip2612GasSponsoring/proxy",
     "/api/exact/evm/permit2-erc20ApprovalGasSponsoring/proxy",

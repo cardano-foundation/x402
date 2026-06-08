@@ -1,14 +1,14 @@
 {
   "name": "@x402/cardano",
-  "version": "2.9.0",
+  "version": "2.14.0",
   "main": "./dist/cjs/index.js",
   "module": "./dist/esm/index.js",
   "types": "./dist/cjs/index.d.ts",
   "scripts": {
     "build": "tsup",
+    "start": "tsx --env-file=.env index.ts",
     "test": "vitest run",
     "test:integration": "vitest run --config vitest.integration.config.ts",
-    "test:e2e": "vitest run --config vitest.e2e.config.ts",
     "test:watch": "vitest",
     "watch": "tsc --watch",
     "format": "prettier -c .prettierrc --write \"**/*.{ts,js,cjs,json,md}\"",
@@ -27,11 +27,7 @@
   "description": "x402 Payment Protocol Cardano Implementation",
   "devDependencies": {
     "@eslint/js": "^9.24.0",
-    "@types/express": "^5.0.1",
     "@types/node": "^22.13.4",
-    "@x402/express": "workspace:*",
-    "@x402/fetch": "workspace:*",
-    "express": "^4.18.2",
     "@typescript-eslint/eslint-plugin": "^8.29.1",
     "@typescript-eslint/parser": "^8.29.1",
     "eslint": "^9.24.0",
@@ -40,7 +36,7 @@
     "eslint-plugin-prettier": "^5.2.6",
     "prettier": "3.5.2",
     "tsup": "^8.4.0",
-    "tsx": "^4.19.2",
+    "tsx": "^4.21.0",
     "typescript": "^5.7.3",
     "vite": "^6.2.6",
     "vite-tsconfig-paths": "^5.1.4",
@@ -48,7 +44,7 @@
   },
   "dependencies": {
     "@evolution-sdk/evolution": "^0.5.9",
-    "@x402/core": "workspace:*"
+    "@x402/core": "workspace:~"
   },
   "exports": {
     ".": {

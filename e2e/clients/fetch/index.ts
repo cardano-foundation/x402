@@ -19,6 +19,8 @@ import { createClientHederaSigner, PrivateKey as HederaPrivateKey } from "@x402/
 import { ExactHederaScheme } from "@x402/hedera/exact/client";
 import { ExactStellarScheme } from "@x402/stellar/exact/client";
 import { createEd25519Signer, Ed25519Signer } from "@x402/stellar";
+import { ExactCardanoScheme } from "@x402/cardano/exact/client";
+import { toClientCardanoSigner } from "@x402/cardano";
 import { ExactAvmScheme as ExactAvmClientScheme } from "@x402/avm/exact/client";
 import { toClientAvmSigner } from "@x402/avm";
 import { base58 } from "@scure/base";
@@ -101,6 +103,21 @@ if (process.env.STELLAR_PRIVATE_KEY) {
   stellarSigner = createEd25519Signer(process.env.STELLAR_PRIVATE_KEY);
 }
 
+// Initialize Cardano signer if a mnemonic and Blockfrost connection are provided
+let cardanoSigner: ReturnType<typeof toClientCardanoSigner> | undefined;
+if (process.env.CARDANO_MNEMONIC) {
+  cardanoSigner = toClientCardanoSigner({
+    mnemonic: process.env.CARDANO_MNEMONIC,
+    network: process.env.CARDANO_NETWORK || "cardano:preprod",
+    provider: {
+      blockfrost: {
+        baseUrl: process.env.BLOCKFROST_PREPROD_URL as string,
+        projectId: process.env.BLOCKFROST_PROJECT_ID as string,
+      },
+    },
+  });
+}
+
 // Initialize AVM signer if key is provided
 let avmSigner: ReturnType<typeof toClientAvmSigner> | undefined;
 if (process.env.AVM_PRIVATE_KEY) {
@@ -124,6 +141,9 @@ if (hederaClientSigner) {
 }
 if (stellarSigner) {
   client.register("stellar:*", new ExactStellarScheme(stellarSigner));
+}
+if (cardanoSigner) {
+  client.register("cardano:*", new ExactCardanoScheme(cardanoSigner));
 }
 if (avmSigner) {
   client.register("algorand:*", new ExactAvmClientScheme(avmSigner));

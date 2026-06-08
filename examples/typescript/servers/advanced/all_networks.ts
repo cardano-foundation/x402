@@ -31,7 +31,14 @@ const stellarAddress = process.env.STELLAR_ADDRESS as string | undefined;
 const hederaAddress = process.env.HEDERA_ACCOUNT_ID as string | undefined;
 
 // Validate at least one address is provided
-if (!avmAddress && !cardanoAddress && !evmAddress && !svmAddress && !stellarAddress && !hederaAddress) {
+if (
+  !avmAddress &&
+  !cardanoAddress &&
+  !evmAddress &&
+  !svmAddress &&
+  !stellarAddress &&
+  !hederaAddress
+) {
   console.error(
     "❌ At least one of AVM_ADDRESS, CARDANO_ADDRESS, EVM_ADDRESS, SVM_ADDRESS, STELLAR_ADDRESS, or HEDERA_ACCOUNT_ID is required",
   );

@@ -59,6 +59,7 @@ export interface FacilitatorConfig {
   hederaPrivateKey?: string;
   stellarPrivateKey?: string;
   tvmPrivateKey?: string;
+  cardanoMnemonic?: string;
   networks: NetworkSet;
 }
 
@@ -143,6 +144,10 @@ export class GenericFacilitatorProxy extends BaseProxy implements FacilitatorPro
       TONCENTER_BASE_URL: process.env.TONCENTER_BASE_URL || config.networks.tvm.rpcUrl,
       TONAPI_API_KEY: process.env.TONAPI_API_KEY || '',
       TONAPI_BASE_URL: process.env.TONAPI_BASE_URL || '',
+      CARDANO_MNEMONIC: config.cardanoMnemonic || '',
+      CARDANO_NETWORK: config.networks.cardano.caip2,
+      BLOCKFROST_PROJECT_ID: process.env.BLOCKFROST_PROJECT_ID || '',
+      BLOCKFROST_PREPROD_URL: config.networks.cardano.rpcUrl,
     };
 
     // Pass through any additional environment variables required by the facilitator
