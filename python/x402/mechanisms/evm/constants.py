@@ -322,6 +322,7 @@ X402_UPTO_PERMIT2_PROXY_SETTLE_WITH_PERMIT_ABI = [
 ]
 
 # Error codes
+ERR_ASSET_NOT_DEPLOYED_CONTRACT = "asset_not_deployed_contract"
 ERR_INVALID_SIGNATURE = "invalid_exact_evm_payload_signature"
 ERR_UNDEPLOYED_SMART_WALLET = "invalid_exact_evm_payload_undeployed_smart_wallet"
 ERR_SMART_WALLET_DEPLOYMENT_FAILED = "smart_wallet_deployment_failed"

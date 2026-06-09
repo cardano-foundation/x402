@@ -2,6 +2,7 @@ package x402
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"sync"
 
@@ -526,42 +527,90 @@ func (c *x402Client) enrichPaymentPayloadWithExtensions(
 		}
 	}
 
+	// Re-merge server extensions over the enriched payload
+	enriched.Extensions = mergeExtensions(required.Extensions, enriched.Extensions)
+
 	return enriched, nil
 }
 
-// mergeExtensions merges server-declared extensions with scheme-provided extensions.
-// Scheme extensions overlay on top of server extensions at each key.
-func mergeExtensions(server, scheme map[string]interface{}) map[string]interface{} {
-	if scheme == nil {
+// asStringMap returns v as a map[string]interface{} so it can participate in the
+// extension deep-merge. Values that are already maps are returned directly; typed
+// structs/pointers attached by scheme clients (e.g. gas-sponsoring info structs) are
+// coerced via a JSON round-trip, mirroring the payload's eventual serialization. Non-object
+// values (strings, numbers, slices, nil) return ok=false so the caller treats them atomically.
+func asStringMap(v interface{}) (map[string]interface{}, bool) {
+	if v == nil {
+		return nil, false
+	}
+	if m, ok := v.(map[string]interface{}); ok {
+		return m, true
+	}
+	data, err := json.Marshal(v)
+	if err != nil {
+		return nil, false
+	}
+	var m map[string]interface{}
+	if err := json.Unmarshal(data, &m); err != nil || m == nil {
+		return nil, false
+	}
+	return m, true
+}
+
+// mergeExtensions merges server-declared extensions with client/scheme-provided
+// extensions, always preserving server-declared fields. For keys present on both
+// sides whose values are objects, server fields win and only client fields the
+// server did not declare are added (recursing into nested objects); for any
+// other key the client value is used.
+func mergeExtensions(server, client map[string]interface{}) map[string]interface{} {
+	if client == nil {
 		return server
 	}
 	if server == nil {
-		return scheme
+		return client
 	}
-	merged := make(map[string]interface{})
+
+	merged := make(map[string]interface{}, len(server))
 	for k, v := range server {
 		merged[k] = v
 	}
-	for k, schemeVal := range scheme {
-		if serverVal, exists := merged[k]; exists {
-			serverMap, sOk := serverVal.(map[string]interface{})
-			schemeMap, cOk := schemeVal.(map[string]interface{})
-			if sOk && cOk {
-				// Deep merge: scheme overlays server
-				m := make(map[string]interface{})
-				for mk, mv := range serverMap {
-					m[mk] = mv
+
+	for key, clientVal := range client {
+		serverMap, sOk := asStringMap(merged[key])
+		clientMap, cOk := asStringMap(clientVal)
+		if !sOk || !cOk {
+			merged[key] = clientVal
+			continue
+		}
+
+		// Deep-merge into a copy of the server object, preserving server fields and
+		// only adding client fields the server did not declare.
+		extensionValue := make(map[string]interface{}, len(serverMap))
+		for k, v := range serverMap {
+			extensionValue[k] = v
+		}
+		type mergePair struct{ target, source map[string]interface{} }
+		pending := []mergePair{{target: extensionValue, source: clientMap}}
+		for i := 0; i < len(pending); i++ {
+			target, source := pending[i].target, pending[i].source
+			for fieldKey, clientFieldVal := range source {
+				serverFieldMap, sfOk := asStringMap(target[fieldKey])
+				clientFieldMap, cfOk := asStringMap(clientFieldVal)
+				if sfOk && cfOk {
+					nested := make(map[string]interface{}, len(serverFieldMap))
+					for k, v := range serverFieldMap {
+						nested[k] = v
+					}
+					target[fieldKey] = nested
+					pending = append(pending, mergePair{target: nested, source: clientFieldMap})
+					continue
 				}
-				for mk, mv := range schemeMap {
-					m[mk] = mv
+				if _, exists := target[fieldKey]; !exists {
+					target[fieldKey] = clientFieldVal
 				}
-				merged[k] = m
-				continue
 			}
 		}
-		merged[k] = schemeVal
+
+		merged[key] = extensionValue
 	}
 	return merged
 }
-
-// Helper functions use the generic findSchemesByNetwork from utils.go

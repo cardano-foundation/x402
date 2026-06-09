@@ -106,6 +106,11 @@ export async function verifyPermit2(
   const chainId = getEvmChainId(requirements.network);
   const tokenAddress = getAddress(requirements.asset);
 
+  const assetBytecode = await signer.getCode({ address: tokenAddress });
+  if (!assetBytecode || assetBytecode === "0x") {
+    return { isValid: false, invalidReason: Errors.ErrAssetNotDeployedContract, payer };
+  }
+
   if (
     getAddress(permit2Payload.permit2Authorization.spender) !==
     getAddress(x402ExactPermit2ProxyAddress)

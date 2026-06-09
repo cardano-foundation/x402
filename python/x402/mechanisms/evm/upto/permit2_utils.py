@@ -24,6 +24,7 @@ from ....schemas import (  # noqa: E402
 )
 from ..constants import (  # noqa: E402
     BALANCE_OF_ABI,
+    ERR_ASSET_NOT_DEPLOYED_CONTRACT,
     ERR_ERC20_APPROVAL_BROADCAST_FAILED,
     ERR_PERMIT2_AMOUNT_MISMATCH,
     ERR_PERMIT2_DEADLINE_EXPIRED,
@@ -110,6 +111,12 @@ def verify_upto_permit2(
             is_valid=False, invalid_reason=ERR_UPTO_FAILED_TO_GET_NETWORK_CONFIG, payer=payer
         )
     token_address = normalize_address(requirements.asset)
+
+    code = signer.get_code(token_address)
+    if len(code) == 0:
+        return VerifyResponse(
+            is_valid=False, invalid_reason=ERR_ASSET_NOT_DEPLOYED_CONTRACT, payer=payer
+        )
 
     # 3. Spender check
     try:
