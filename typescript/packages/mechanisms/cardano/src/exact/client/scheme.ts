@@ -65,7 +65,7 @@ export class ExactCardanoScheme implements SchemeNetworkClient {
       throw new Error(`Amount must be a non-negative integer, got: ${paymentRequirements.amount}`);
     }
 
-    const result = await this.signer.signPaymentTransaction({
+    const result = await this.signer.buildAndSignPaymentTransaction({
       network: paymentRequirements.network,
       payTo: paymentRequirements.payTo,
       asset: paymentRequirements.asset,
