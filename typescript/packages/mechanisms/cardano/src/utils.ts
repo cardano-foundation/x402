@@ -35,17 +35,6 @@ export function parseUtxoRef(ref: string): { txHash: string; index: number } {
 }
 
 /**
- * Encodes a Cardano payment payload as a JSON object suitable for the x402
- * `payload` field. Matches the spec's PAYMENT-SIGNATURE schema.
- *
- * @param payload - The payload to serialize.
- * @returns A plain object representation of the payload.
- */
-export function encodeCardanoPayload(payload: ExactCardanoPayload): Record<string, unknown> {
-  return { transaction: payload.transaction, nonce: payload.nonce };
-}
-
-/**
  * Reads a Cardano payment payload back out of an arbitrary record.
  *
  * @param raw - The raw payload coming from the x402 envelope.
@@ -61,32 +50,6 @@ export function decodeCardanoPayload(raw: Record<string, unknown>): ExactCardano
     throw new Error("Cardano payload is missing a nonce string");
   }
   return { transaction, nonce };
-}
-
-/**
- * Returns true when the supplied output pays at least `amount` of `asset` to
- * `recipient`.
- *
- * @param output - The decoded UTXO output.
- * @param recipient - The expected bech32 recipient address.
- * @param asset - Asset unit (`policyId.assetNameHex`).
- * @param amount - Required amount in the asset's smallest unit.
- * @returns True when the output satisfies the requirement.
- */
-export function outputSatisfies(
-  output: CardanoUtxoOutput,
-  recipient: string,
-  asset: string,
-  amount: bigint,
-): boolean {
-  if (output.address !== recipient) {
-    return false;
-  }
-  if (asset.toLowerCase() === "lovelace") {
-    return output.coin >= amount;
-  }
-  const assetAmount = output.assets[asset.toLowerCase()] ?? 0n;
-  return assetAmount >= amount;
 }
 
 /**

@@ -65,6 +65,10 @@ export interface ExactCardanoFacilitatorConfig {
  * Performs all checks listed in the "Facilitator Verification Rules" section
  * of `specs/schemes/exact/scheme_exact_cardano.md` (rules 1-6) before
  * accepting a payment. Settlement re-runs verification before submitting.
+ *
+ * The duplicate-settlement cache is in-process only; across multiple
+ * facilitator instances the authoritative replay guard is the on-chain UTXO
+ * spend (rule 5), which makes the consumed nonce UTXO fail re-verification.
  */
 export class ExactCardanoScheme implements SchemeNetworkFacilitator {
   readonly scheme = SCHEME_EXACT;
@@ -311,8 +315,12 @@ export class ExactCardanoScheme implements SchemeNetworkFacilitator {
       if (!assetFoundForRecipient) {
         return { isValid: false, invalidReason: ERR_ASSET_MISMATCH, payer };
       }
-      void bestAvailable;
-      return { isValid: false, invalidReason: ERR_AMOUNT_INSUFFICIENT, payer };
+      return {
+        isValid: false,
+        invalidReason: ERR_AMOUNT_INSUFFICIENT,
+        invalidMessage: `output to ${requirements.payTo} pays ${bestAvailable}, requires ${requestedAmount}`,
+        payer,
+      };
     } catch (error) {
       return {
         isValid: false,
@@ -373,6 +381,7 @@ export class ExactCardanoScheme implements SchemeNetworkFacilitator {
           errorReason: ERR_SETTLEMENT_NOT_CONFIRMED,
           transaction: submission.txHash,
           network: payload.accepted.network,
+          payer: verifyResult.payer,
           extensions: { status: submission.status },
         };
       }
@@ -381,6 +390,7 @@ export class ExactCardanoScheme implements SchemeNetworkFacilitator {
         success: true,
         transaction: submission.txHash,
         network: payload.accepted.network,
+        payer: verifyResult.payer,
         extensions: { status: submission.status },
       };
     } catch {
@@ -442,10 +452,6 @@ export class ExactCardanoScheme implements SchemeNetworkFacilitator {
     return { ok: false, reason: ERR_UNSUPPORTED_SCHEME };
   }
 
-  /**
-   *
-   * @param key
-   */
   /**
    * Atomically claim a cache key for an in-flight or completed settlement.
    * Synchronous so concurrent settle() calls cannot all race past the check.
