@@ -6,6 +6,7 @@ import type {
   PaymentRequirements,
   Price,
   SchemeNetworkServer,
+  SupportedKind,
 } from "@x402/core/types";
 import {
   CARDANO_ASSET_REGEX,
@@ -94,21 +95,12 @@ export class ExactCardanoScheme implements SchemeNetworkServer {
    *
    * @param paymentRequirements - The base payment requirements.
    * @param supportedKind - The matching SupportedKind.
-   * @param supportedKind.x402Version - The x402 version (unused).
-   * @param supportedKind.scheme - The scheme name (unused).
-   * @param supportedKind.network - The network identifier.
-   * @param supportedKind.extra - Optional facilitator extra metadata.
    * @param extensionKeys - The list of facilitator extension keys.
    * @returns Promise resolving to enhanced payment requirements.
    */
   enhancePaymentRequirements(
     paymentRequirements: PaymentRequirements,
-    supportedKind: {
-      x402Version: number;
-      scheme: string;
-      network: Network;
-      extra?: Record<string, unknown>;
-    },
+    supportedKind: SupportedKind,
     extensionKeys: string[],
   ): Promise<PaymentRequirements> {
     void extensionKeys;

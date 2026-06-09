@@ -21,17 +21,6 @@ import {
 import { parseAssetUnit, parseUtxoRef } from "./utils";
 
 /**
- * Configuration for the client-side signer.
- */
-export interface ClientCardanoConfig {
-  /**
-   * Optional custom RPC / chain query URL used by the client (e.g. a Blockfrost
-   * or Koios endpoint).
-   */
-  rpcUrl?: string;
-}
-
-/**
  * Provider connection used by the reference signers. Exactly one of
  * `blockfrost` or `koios` must be supplied. These map directly onto the
  * Evolution SDK provider configs.
@@ -424,9 +413,10 @@ export interface FacilitatorCardanoSignerConfig {
    */
   accountIndex?: number;
   /**
-   * When `true`, `submitTransaction` awaits on-chain confirmation before
-   * reporting `status: "confirmed"`. When `false` (default) it returns
-   * `status: "mempool"` immediately after broadcast.
+   * When `true` (default), `submitTransaction` awaits on-chain confirmation
+   * before reporting `status: "confirmed"`. Set to `false` to return
+   * `status: "mempool"` immediately after broadcast — note the facilitator
+   * scheme rejects mempool-only settlements unless `acceptMempool` is enabled.
    */
   awaitConfirmation?: boolean;
 }
@@ -502,11 +492,11 @@ export function toFacilitatorCardanoSigner(
       );
       const hash = await client.submitTx(tx);
       const txHash = Buffer.from(hash.hash).toString("hex").toLowerCase();
-      if (config.awaitConfirmation) {
-        await client.awaitTx(hash);
-        return { txHash, status: "confirmed" };
+      if (config.awaitConfirmation === false) {
+        return { txHash, status: "mempool" };
       }
-      return { txHash, status: "mempool" };
+      await client.awaitTx(hash);
+      return { txHash, status: "confirmed" };
     },
 
     async waitForConfirmation(txHash: string, network: string): Promise<void> {

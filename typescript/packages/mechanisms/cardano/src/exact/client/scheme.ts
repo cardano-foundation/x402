@@ -1,5 +1,4 @@
 import type {
-  PaymentPayload,
   PaymentPayloadResult,
   PaymentRequirements,
   SchemeNetworkClient,
@@ -11,7 +10,7 @@ import {
   isCardanoNetwork,
   SCHEME_EXACT,
 } from "../../constants";
-import type { ClientCardanoConfig, ClientCardanoSigner } from "../../signer";
+import type { ClientCardanoSigner } from "../../signer";
 import type { ExactCardanoPayload } from "../../types";
 
 /**
@@ -28,14 +27,8 @@ export class ExactCardanoScheme implements SchemeNetworkClient {
    * Creates a new Cardano client scheme.
    *
    * @param signer - The Cardano client signer.
-   * @param _config - Optional client configuration (reserved for future use).
    */
-  constructor(
-    private readonly signer: ClientCardanoSigner,
-    private readonly _config?: ClientCardanoConfig,
-  ) {
-    void this._config;
-  }
+  constructor(private readonly signer: ClientCardanoSigner) {}
 
   /**
    * Builds a Cardano payment payload by delegating signing to the configured
@@ -92,8 +85,6 @@ export class ExactCardanoScheme implements SchemeNetworkClient {
       transaction: result.transaction,
       nonce: result.nonce,
     };
-
-    void (null as unknown as PaymentPayload);
 
     return {
       x402Version,
