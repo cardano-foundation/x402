@@ -10,6 +10,8 @@
 
 import { toFacilitatorAvmSigner } from "@x402/avm";
 import { ExactAvmScheme } from "@x402/avm/exact/facilitator";
+import { toFacilitatorCardanoSigner } from "@x402/cardano";
+import { ExactCardanoScheme } from "@x402/cardano/exact/facilitator";
 import { x402Facilitator } from "@x402/core/facilitator";
 import {
   PaymentPayload,
@@ -49,6 +51,10 @@ const PORT = process.env.PORT || "4022";
 
 // Configuration - optional per network (alphabetic order)
 const avmPrivateKey = process.env.AVM_PRIVATE_KEY as string | undefined;
+const cardanoMnemonic = process.env.CARDANO_MNEMONIC as string | undefined;
+const cardanoNetwork = process.env.CARDANO_NETWORK || "cardano:preprod";
+const blockfrostBaseUrl = process.env.BLOCKFROST_PREPROD_URL;
+const blockfrostProjectId = process.env.BLOCKFROST_PROJECT_ID;
 const evmPrivateKey = process.env.EVM_PRIVATE_KEY as `0x${string}` | undefined;
 const svmPrivateKey = process.env.SVM_PRIVATE_KEY as string | undefined;
 const stellarPrivateKey = process.env.STELLAR_PRIVATE_KEY as string | undefined;
@@ -59,19 +65,21 @@ const hederaPrivateKey = process.env.HEDERA_PRIVATE_KEY;
 // Validate at least one private key is provided
 if (
   !avmPrivateKey &&
+  !cardanoMnemonic &&
   !evmPrivateKey &&
   !svmPrivateKey &&
   !stellarPrivateKey &&
   !(hederaAccountId && hederaPrivateKey)
 ) {
   console.error(
-    "❌ At least one of AVM_PRIVATE_KEY, EVM_PRIVATE_KEY, SVM_PRIVATE_KEY, STELLAR_PRIVATE_KEY, or HEDERA_ACCOUNT_ID + HEDERA_PRIVATE_KEY is required",
+    "❌ At least one of AVM_PRIVATE_KEY, CARDANO_MNEMONIC, EVM_PRIVATE_KEY, SVM_PRIVATE_KEY, STELLAR_PRIVATE_KEY, or HEDERA_ACCOUNT_ID + HEDERA_PRIVATE_KEY is required",
   );
   process.exit(1);
 }
 
 // Network configuration (alphabetic order)
 const AVM_NETWORK = "algorand:SGO1GKSzyE7IEPItTxCByw9x8FmnrCDexi9/cOUJOiI="; // Algorand Testnet
+const CARDANO_NETWORK = cardanoNetwork; // Cardano Preprod Testnet (default)
 const EVM_NETWORK = "eip155:84532"; // Base Sepolia
 const HEDERA_NETWORK = "hedera:testnet"; // Hedera Testnet
 const SVM_NETWORK = "solana:EtWTRABZaYq6iMfeYKouRu166VU2xqa1"; // Solana Devnet
@@ -103,6 +111,22 @@ if (avmPrivateKey) {
   const avmSigner = toFacilitatorAvmSigner(avmPrivateKey);
   console.info(`AVM Facilitator account: ${avmSigner.getAddresses()[0]}`);
   facilitator.register(AVM_NETWORK, new ExactAvmScheme(avmSigner));
+}
+
+// Register Cardano scheme if a mnemonic and Blockfrost connection are provided
+if (cardanoMnemonic) {
+  if (!blockfrostBaseUrl || !blockfrostProjectId) {
+    console.error("❌ CARDANO_MNEMONIC requires BLOCKFROST_PREPROD_URL and BLOCKFROST_PROJECT_ID");
+    process.exit(1);
+  }
+  const cardanoSigner = toFacilitatorCardanoSigner({
+    mnemonic: cardanoMnemonic,
+    network: CARDANO_NETWORK,
+    provider: { blockfrost: { baseUrl: blockfrostBaseUrl, projectId: blockfrostProjectId } },
+    awaitConfirmation: true,
+  });
+  console.info(`Cardano Facilitator account: ${cardanoSigner.getAddresses()[0]}`);
+  facilitator.register(CARDANO_NETWORK, new ExactCardanoScheme(cardanoSigner));
 }
 
 // Register EVM scheme if private key is provided

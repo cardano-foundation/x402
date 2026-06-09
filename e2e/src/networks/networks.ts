@@ -6,7 +6,7 @@
  */
 
 export type NetworkMode = 'testnet' | 'mainnet';
-export type ProtocolFamily = 'evm' | 'svm' | 'avm' | 'aptos' | 'hedera' | 'stellar' | 'tvm';
+export type ProtocolFamily = 'evm' | 'svm' | 'avm' | 'aptos' | 'hedera' | 'stellar' | 'tvm' | 'cardano';
 
 export type NetworkConfig = {
   name: string;
@@ -23,6 +23,7 @@ export type NetworkSet = {
   hedera: NetworkConfig;
   stellar: NetworkConfig;
   tvm: NetworkConfig;
+  cardano: NetworkConfig;
 };
 
 /**
@@ -66,6 +67,11 @@ const NETWORK_SETS: Record<NetworkMode, NetworkSet> = {
       caip2: 'tvm:-3',
       rpcUrl: process.env.TONCENTER_TESTNET_BASE_URL || 'https://testnet.toncenter.com',
     },
+    cardano: {
+      name: 'Cardano Preprod',
+      caip2: 'cardano:preprod',
+      rpcUrl: process.env.BLOCKFROST_PREPROD_URL || 'https://cardano-preprod.blockfrost.io/api/v0',
+    },
   },
   mainnet: {
     evm: {
@@ -104,6 +110,11 @@ const NETWORK_SETS: Record<NetworkMode, NetworkSet> = {
       caip2: 'tvm:-239',
       rpcUrl: process.env.TONCENTER_MAINNET_BASE_URL || 'https://toncenter.com',
     },
+    cardano: {
+      name: 'Cardano Mainnet',
+      caip2: 'cardano:mainnet',
+      rpcUrl: process.env.BLOCKFROST_MAINNET_URL || 'https://cardano-mainnet.blockfrost.io/api/v0',
+    },
   },
 };
 
@@ -138,7 +149,7 @@ export function resolveEvmPermit2Asset(networks: NetworkSet): string {
  * Get network config for a protocol family in a given mode
  * 
  * @param mode - 'testnet' or 'mainnet'
- * @param protocolFamily - 'evm', 'svm', 'avm', 'aptos', 'hedera', 'stellar', or 'tvm'
+ * @param protocolFamily - 'evm', 'svm', 'avm', 'aptos', 'hedera', 'stellar', 'tvm', or 'cardano'
  * @returns NetworkConfig for the specified protocol
  */
 export function getNetworkForProtocol(
@@ -156,6 +167,6 @@ export function getNetworkForProtocol(
  */
 export function getNetworkModeDescription(mode: NetworkMode): string {
   const set = NETWORK_SETS[mode];
-  const networks = [set.evm.name, set.svm.name, set.avm.name, set.aptos.name, set.hedera.name, set.stellar.name, set.tvm.name];
+  const networks = [set.evm.name, set.svm.name, set.avm.name, set.aptos.name, set.hedera.name, set.stellar.name, set.tvm.name, set.cardano.name];
   return networks.join(' + ');
 }

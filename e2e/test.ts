@@ -568,6 +568,7 @@ async function runTest() {
   const serverHederaAddress = process.env.SERVER_HEDERA_ADDRESS;
   const serverStellarAddress = process.env.SERVER_STELLAR_ADDRESS;
   const serverTvmAddress = process.env.SERVER_TVM_ADDRESS;
+  const serverCardanoAddress = process.env.SERVER_CARDANO_ADDRESS;
   const clientEvmPrivateKey = process.env.CLIENT_EVM_PRIVATE_KEY;
   const clientSvmPrivateKey = process.env.CLIENT_SVM_PRIVATE_KEY;
   const clientAvmPrivateKey = process.env.CLIENT_AVM_PRIVATE_KEY;
@@ -576,6 +577,7 @@ async function runTest() {
   const clientHederaPrivateKey = process.env.CLIENT_HEDERA_PRIVATE_KEY;
   const clientStellarPrivateKey = process.env.CLIENT_STELLAR_PRIVATE_KEY;
   const clientTvmPrivateKey = process.env.CLIENT_TVM_PRIVATE_KEY;
+  const clientCardanoMnemonic = process.env.CLIENT_CARDANO_MNEMONIC;
   const facilitatorEvmPrivateKey = process.env.FACILITATOR_EVM_PRIVATE_KEY;
   const facilitatorSvmPrivateKey = process.env.FACILITATOR_SVM_PRIVATE_KEY;
   const facilitatorAvmPrivateKey = process.env.FACILITATOR_AVM_PRIVATE_KEY;
@@ -584,12 +586,8 @@ async function runTest() {
   const facilitatorHederaPrivateKey = process.env.FACILITATOR_HEDERA_PRIVATE_KEY;
   const facilitatorStellarPrivateKey = process.env.FACILITATOR_STELLAR_PRIVATE_KEY;
   const facilitatorTvmPrivateKey = process.env.FACILITATOR_TVM_PRIVATE_KEY;
+  const facilitatorCardanoMnemonic = process.env.FACILITATOR_CARDANO_MNEMONIC;
   const batchSettlementRecovery = envFlagDefaultTrue(process.env.BATCH_SETTLEMENT_RECOVERY);
-  if (!serverEvmAddress || !serverSvmAddress || !clientEvmPrivateKey || !clientSvmPrivateKey || !facilitatorEvmPrivateKey || !facilitatorSvmPrivateKey) {
-    errorLog('❌ Missing required environment variables:');
-    errorLog(' SERVER_EVM_ADDRESS, SERVER_SVM_ADDRESS, CLIENT_EVM_PRIVATE_KEY, CLIENT_SVM_PRIVATE_KEY, FACILITATOR_EVM_PRIVATE_KEY, and FACILITATOR_SVM_PRIVATE_KEY must be set');
-    process.exit(1);
-  }
 
   // Discover all servers, clients, and facilitators (always include legacy)
   const discovery = new TestDiscovery('.', true); // Always discover legacy
@@ -672,6 +670,7 @@ async function runTest() {
   log(`   HEDERA: ${networks.hedera.name} (${networks.hedera.caip2})`);
   log(`   STELLAR: ${networks.stellar.name} (${networks.stellar.caip2})`);
   log(`   TVM: ${networks.tvm.name} (${networks.tvm.caip2})`);
+  log(`   CARDANO: ${networks.cardano.name} (${networks.cardano.caip2})`);
 
   if (networkMode === 'mainnet') {
     log('\n⚠️  WARNING: Running on MAINNET - real funds will be used!');
@@ -712,6 +711,15 @@ async function runTest() {
       ['SERVER_TVM_ADDRESS', serverTvmAddress],
       ['CLIENT_TVM_PRIVATE_KEY', clientTvmPrivateKey],
       ['FACILITATOR_TVM_PRIVATE_KEY', facilitatorTvmPrivateKey],
+    ],
+    cardano: [
+      ['SERVER_CARDANO_ADDRESS', serverCardanoAddress],
+      ['CLIENT_CARDANO_MNEMONIC', clientCardanoMnemonic],
+      ['FACILITATOR_CARDANO_MNEMONIC', facilitatorCardanoMnemonic],
+      // Blockfrost project id backs both the client (UTXO lookup) and the
+      // facilitator (UTXO/slot queries + submission); a cardano run cannot work
+      // without it, so fail fast here rather than at runtime.
+      ['BLOCKFROST_PROJECT_ID', process.env.BLOCKFROST_PROJECT_ID],
     ],
   };
 
@@ -906,6 +914,10 @@ async function runTest() {
     'TVM_PROVIDER',
     'TONAPI_API_KEY',
     'TONAPI_BASE_URL',
+    'CARDANO_MNEMONIC',
+    'CARDANO_NETWORK',
+    'BLOCKFROST_PROJECT_ID',
+    'BLOCKFROST_PREPROD_URL',
   ]);
 
   for (const [facilitatorName, facilitator] of uniqueFacilitators) {
@@ -1051,6 +1063,7 @@ async function runTest() {
         APTOS_NETWORK: networks.aptos.caip2,
         STELLAR_NETWORK: networks.stellar.caip2,
         TVM_NETWORK: networks.tvm.caip2,
+        CARDANO_NETWORK: networks.cardano.caip2,
       },
       stdio: 'pipe',
     },
@@ -1116,6 +1129,7 @@ async function runTest() {
       hederaPrivateKey: clientHederaPrivateKey || '',
       stellarPrivateKey: clientStellarPrivateKey || '',
       tvmPrivateKey: clientTvmPrivateKey || '',
+      cardanoMnemonic: clientCardanoMnemonic || '',
       serverUrl: `http://localhost:${port}`,
       endpointPath: scenario.endpoint.path,
       evmNetwork: networks.evm.caip2,
@@ -1126,6 +1140,8 @@ async function runTest() {
       hederaNodeUrl: networks.hedera.rpcUrl,
       tvmNetwork: networks.tvm.caip2,
       tvmRpcUrl: networks.tvm.rpcUrl,
+      cardanoNetwork: networks.cardano.caip2,
+      cardanoRpcUrl: networks.cardano.rpcUrl,
     };
 
     try {
@@ -1355,6 +1371,7 @@ async function runTest() {
     const facilitatorSupportsHedera = facilitatorConfig?.protocolFamilies?.includes('hedera') ?? false;
     const facilitatorSupportsStellar = facilitatorConfig?.protocolFamilies?.includes('stellar') ?? false;
     const facilitatorSupportsTvm = facilitatorConfig?.protocolFamilies?.includes('tvm') ?? false;
+    const facilitatorSupportsCardano = facilitatorConfig?.protocolFamilies?.includes('cardano') ?? false;
 
     const serverConfig: ServerConfig = {
       port,
@@ -1372,6 +1389,7 @@ async function runTest() {
       hederaAmount: process.env.HEDERA_AMOUNT,
       stellarPayTo: facilitatorSupportsStellar ? (serverStellarAddress || '') : '',
       tvmPayTo: facilitatorSupportsTvm ? (serverTvmAddress || '') : '',
+      cardanoPayTo: facilitatorSupportsCardano ? (serverCardanoAddress || '') : '',
       networks,
       facilitatorUrl,
       mockFacilitatorUrl,

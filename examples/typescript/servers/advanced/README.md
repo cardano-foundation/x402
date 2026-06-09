@@ -57,12 +57,15 @@ cp .env-local .env
 and fill required environment variables:
 
 - `FACILITATOR_URL` - Facilitator endpoint URL
+- `CARDANO_ADDRESS` - Cardano `addr_test1...` address to receive payments (optional for `all-networks`)
 - `EVM_ADDRESS` - Ethereum address to receive payments
 - `SVM_ADDRESS` - Solana address to receive payments (optional for `all-networks`)
 - `STELLAR_ADDRESS` - Stellar public address (starts with `G`) to receive payments
 - `HEDERA_ACCOUNT_ID` - Hedera account id to receive payments (optional for `all-networks`; format: `0.0.XXXXX`)
 
 > **Hedera Testnet:** Get testnet HBAR from the [Hedera Faucet](https://portal.hedera.com/faucet).
+>
+> **Cardano Testnet:** Get test ADA (tADA) for preprod/preview from the [Cardano testnets faucet](https://docs.cardano.org/cardano-testnets/tools/faucet/).
 
 2. Install and build all packages from the typescript examples root:
 

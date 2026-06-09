@@ -8,7 +8,8 @@
     "avm",
     "aptos",
     "hedera",
-    "stellar"
+    "stellar",
+    "cardano"
   ],
   "x402Versions": [
     1,
@@ -44,6 +45,10 @@
       "HEDERA_NETWORK",
       "HEDERA_NODE_URL",
       "STELLAR_PRIVATE_KEY",
+      "CARDANO_MNEMONIC",
+      "CARDANO_NETWORK",
+      "BLOCKFROST_PROJECT_ID",
+      "BLOCKFROST_PREPROD_URL",
       "CHANNEL_SALT",
       "BATCH_SETTLEMENT_PHASE",
       "BATCH_SETTLEMENT_RECOVERY",

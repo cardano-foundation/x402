@@ -19,10 +19,12 @@ import { createClientHederaSigner, PrivateKey as HederaPrivateKey } from "@x402/
 import { ExactHederaScheme } from "@x402/hedera/exact/client";
 import { ExactStellarScheme } from "@x402/stellar/exact/client";
 import { createEd25519Signer, Ed25519Signer } from "@x402/stellar";
+import { ExactCardanoScheme } from "@x402/cardano/exact/client";
+import { toClientCardanoSigner } from "@x402/cardano";
 import { ExactAvmScheme as ExactAvmClientScheme } from "@x402/avm/exact/client";
 import { toClientAvmSigner } from "@x402/avm";
 import { base58 } from "@scure/base";
-import { createKeyPairSignerFromBytes } from "@solana/kit";
+import { createKeyPairSignerFromBytes, generateKeyPairSigner } from "@solana/kit";
 import { x402Client, x402HTTPClient } from "@x402/core/client";
 
 config();
@@ -30,10 +32,18 @@ config();
 const baseURL = process.env.RESOURCE_SERVER_URL as string;
 const endpointPath = process.env.ENDPOINT_PATH as string;
 const url = `${baseURL}${endpointPath}`;
-const evmAccount = privateKeyToAccount(process.env.EVM_PRIVATE_KEY as `0x${string}`);
-const svmSigner = await createKeyPairSignerFromBytes(
-  base58.decode(process.env.SVM_PRIVATE_KEY as string),
+// EVM/SVM are optional for single-family runs (e.g. --families=cardano). When
+// their keys are absent we use throwaway placeholder accounts so the client can
+// still start; their schemes register but are never selected unless an EVM/SVM
+// scenario actually runs (which requires real keys).
+const PLACEHOLDER_EVM_PRIVATE_KEY =
+  "0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80" as `0x${string}`;
+const evmAccount = privateKeyToAccount(
+  (process.env.EVM_PRIVATE_KEY || PLACEHOLDER_EVM_PRIVATE_KEY) as `0x${string}`,
 );
+const svmSigner = process.env.SVM_PRIVATE_KEY
+  ? await createKeyPairSignerFromBytes(base58.decode(process.env.SVM_PRIVATE_KEY))
+  : await generateKeyPairSigner();
 
 const evmNetwork = process.env.EVM_NETWORK || "eip155:84532";
 const evmRpcUrl = process.env.EVM_RPC_URL;
@@ -101,6 +111,21 @@ if (process.env.STELLAR_PRIVATE_KEY) {
   stellarSigner = createEd25519Signer(process.env.STELLAR_PRIVATE_KEY);
 }
 
+// Initialize Cardano signer if a mnemonic and Blockfrost connection are provided
+let cardanoSigner: ReturnType<typeof toClientCardanoSigner> | undefined;
+if (process.env.CARDANO_MNEMONIC) {
+  cardanoSigner = toClientCardanoSigner({
+    mnemonic: process.env.CARDANO_MNEMONIC,
+    network: process.env.CARDANO_NETWORK || "cardano:preprod",
+    provider: {
+      blockfrost: {
+        baseUrl: process.env.BLOCKFROST_PREPROD_URL as string,
+        projectId: process.env.BLOCKFROST_PROJECT_ID as string,
+      },
+    },
+  });
+}
+
 // Initialize AVM signer if key is provided
 let avmSigner: ReturnType<typeof toClientAvmSigner> | undefined;
 if (process.env.AVM_PRIVATE_KEY) {
@@ -124,6 +149,9 @@ if (hederaClientSigner) {
 }
 if (stellarSigner) {
   client.register("stellar:*", new ExactStellarScheme(stellarSigner));
+}
+if (cardanoSigner) {
+  client.register("cardano:*", new ExactCardanoScheme(cardanoSigner));
 }
 if (avmSigner) {
   client.register("algorand:*", new ExactAvmClientScheme(avmSigner));
