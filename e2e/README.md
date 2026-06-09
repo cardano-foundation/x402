@@ -119,6 +119,7 @@ CLIENT_HEDERA_ACCOUNT_ID=0.0....    # Hedera account id for client payments
 CLIENT_HEDERA_PRIVATE_KEY=0x...     # Hedera ECDSA private key for client payments
 CLIENT_STELLAR_PRIVATE_KEY=...      # Stellar private key for client payments
 CLIENT_TVM_PRIVATE_KEY=...          # TVM private key for client payments
+CLIENT_CARDANO_MNEMONIC=...         # Cardano wallet mnemonic (24 words) for client payments
 
 # Server payment addresses
 SERVER_EVM_ADDRESS=0x...            # Where servers receive EVM payments
@@ -127,6 +128,7 @@ SERVER_APTOS_ADDRESS=0x...          # Where servers receive Aptos payments
 SERVER_HEDERA_ADDRESS=0.0....       # Where servers receive Hedera payments
 SERVER_STELLAR_ADDRESS=...          # Where servers receive Stellar payments
 SERVER_TVM_ADDRESS=...              # Where servers receive TVM payments
+SERVER_CARDANO_ADDRESS=addr_test1... # Where servers receive Cardano payments
 
 # Facilitator wallets (⚠️ TEST WALLETS ONLY — used to fund/drain client between tests)
 FACILITATOR_EVM_PRIVATE_KEY=0x...   # EVM private key for facilitator
@@ -136,12 +138,17 @@ FACILITATOR_HEDERA_ACCOUNT_ID=0.0... # Hedera fee payer account id for facilitat
 FACILITATOR_HEDERA_PRIVATE_KEY=0x... # Hedera ECDSA private key for facilitator
 FACILITATOR_STELLAR_PRIVATE_KEY=... # Stellar private key for facilitator
 FACILITATOR_TVM_PRIVATE_KEY=...     # TVM private key for facilitator
+FACILITATOR_CARDANO_MNEMONIC=...    # Cardano wallet mnemonic (24 words) for facilitator
 
 # TVM support
 TVM_PROVIDER=tonapi                 # Optional: toncenter (default) or tonapi
 TONAPI_API_KEY=...                  # Required when TVM_PROVIDER=tonapi
 TONAPI_BASE_URL=...                 # Optional custom TonAPI base URL
 TONCENTER_API_KEY=...               # Recommended when TVM_PROVIDER=toncenter
+
+# Cardano support (client UTXO lookup + facilitator submission via Blockfrost)
+BLOCKFROST_PROJECT_ID=preprod...    # Blockfrost preprod project id (get one at blockfrost.io)
+BLOCKFROST_PREPROD_URL=https://cardano-preprod.blockfrost.io/api/v0
 ```
 
 To run Python SDK TVM e2e scenarios through TonAPI instead of Toncenter:
@@ -172,6 +179,17 @@ You need **three separate Stellar accounts** for e2e tests (client, server, faci
 3. Get testnet USDC from [Circle Faucet](https://faucet.circle.com/) (select Stellar network).
 
 > **Note:** The facilitator account only needs XLM (step 1). Client and server accounts need all three steps.
+
+#### Cardano Preprod
+
+The Cardano e2e endpoint is paid in **lovelace** (native tADA), so you only need test ADA — no stablecoin trustline or sourcing.
+
+1. Create a preprod wallet to obtain a **24-word mnemonic** and an `addr_test1...` address — either with a CIP-30 wallet (Eternl / Lace in **preprod** mode) or programmatically via `PrivateKey.generateMnemonic()` from `@evolution-sdk/evolution`. You need a **client** mnemonic (`CLIENT_CARDANO_MNEMONIC`) and a **facilitator** mnemonic (`FACILITATOR_CARDANO_MNEMONIC`); the server only needs an address (`SERVER_CARDANO_ADDRESS`) — the client's `addr_test1...` works.
+2. Fund the **client** wallet with test ADA from the [Cardano testnets faucet](https://docs.cardano.org/cardano-testnets/tools/faucet/) (select **Preprod**); ~10 tADA is plenty. Only the client needs funds — it builds, signs, and pays the fee; the facilitator only broadcasts the transaction.
+3. Get a free **Blockfrost** preprod project id at [blockfrost.io](https://blockfrost.io/) and set `BLOCKFROST_PROJECT_ID` (and `BLOCKFROST_PREPROD_URL`).
+
+> **Note:** Cardano currently runs standalone only via the chain-agnostic apps — `--clients=fetch --servers=express --facilitators=typescript`. Other apps still require EVM+SVM credentials to start.
+
 ##### TON testnet funding for TVM e2e and examples
 
 - **Testnet TON**: use [@testgiver_ton_bot](https://t.me/testgiver_ton_bot) to fund the facilitator and payer wallets with TON for relay fees. The facilitator wallet must hold **at least 1.1 TON** before running tests.
