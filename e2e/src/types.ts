@@ -1,6 +1,6 @@
 import type { NetworkSet } from './networks/networks';
 
-export type ProtocolFamily = 'evm' | 'svm' | 'avm' | 'aptos' | 'hedera' | 'stellar' | 'tvm';
+export type ProtocolFamily = 'evm' | 'svm' | 'avm' | 'aptos' | 'hedera' | 'stellar' | 'tvm' | 'cardano';
 export type Transport = 'http' | 'mcp';
 export type PaymentScheme = 'exact' | 'upto' | 'batch-settlement';
 export type AssetTransferMethod = 'eip3009' | 'permit2';
@@ -82,6 +82,7 @@ export interface ClientConfig {
   hederaPrivateKey: string;
   stellarPrivateKey: string;
   tvmPrivateKey: string;
+  cardanoMnemonic: string;
   serverUrl: string;
   endpointPath: string;
   evmNetwork: string;
@@ -92,6 +93,8 @@ export interface ClientConfig {
   hederaNodeUrl: string;
   tvmNetwork: string;
   tvmRpcUrl: string;
+  cardanoNetwork: string;
+  cardanoRpcUrl: string;
   batchSettlement?: BatchSettlementClientConfig;
 }
 
@@ -106,6 +109,7 @@ export interface ServerConfig {
   hederaAmount?: string;
   stellarPayTo: string;
   tvmPayTo: string;
+  cardanoPayTo: string;
   networks: NetworkSet;
   facilitatorUrl?: string;
   mockFacilitatorUrl?: string;

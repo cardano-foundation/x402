@@ -129,6 +129,12 @@ export class GenericServerProxy extends BaseProxy implements ServerProxy {
         TVM_NETWORK: config.networks.tvm.caip2,
         TVM_PAYEE_ADDRESS: config.tvmPayTo,
 
+        // Cardano network config
+        CARDANO_NETWORK: config.networks.cardano.caip2,
+        CARDANO_PAYEE_ADDRESS: config.cardanoPayTo,
+        BLOCKFROST_PROJECT_ID: process.env.BLOCKFROST_PROJECT_ID || '',
+        BLOCKFROST_PREPROD_URL: config.networks.cardano.rpcUrl,
+
         // Facilitator
         FACILITATOR_URL: config.facilitatorUrl || '',
         MOCK_FACILITATOR_URL: config.mockFacilitatorUrl || '',

@@ -1,3 +1,25 @@
+import {
+  Address,
+  Assets,
+  type Chain,
+  Client,
+  mainnet,
+  preprod,
+  preview,
+  Transaction,
+  TransactionHash,
+  TransactionInput,
+} from "@evolution-sdk/evolution";
+import { addressFromSeed } from "@evolution-sdk/evolution/sdk/wallet/Derivation";
+
+import {
+  CARDANO_MAINNET_CAIP2,
+  CARDANO_PREPROD_CAIP2,
+  CARDANO_PREVIEW_CAIP2,
+  LOVELACE_ASSET,
+} from "./constants";
+import { parseAssetUnit, parseUtxoRef } from "./utils";
+
 /**
  * Configuration for the client-side signer.
  */
@@ -7,6 +29,82 @@ export interface ClientCardanoConfig {
    * or Koios endpoint).
    */
   rpcUrl?: string;
+}
+
+/**
+ * Provider connection used by the reference signers. Exactly one of
+ * `blockfrost` or `koios` must be supplied. These map directly onto the
+ * Evolution SDK provider configs.
+ */
+export type CardanoProviderConfig =
+  | { blockfrost: { baseUrl: string; projectId?: string }; koios?: never }
+  | { koios: { baseUrl: string; token?: string }; blockfrost?: never };
+
+/**
+ * Resolves an x402 Cardano network identifier to an Evolution SDK chain preset.
+ *
+ * @param network - The x402 network identifier (e.g. "cardano:mainnet").
+ * @returns The matching Evolution SDK chain preset.
+ */
+function resolveChain(network: string): Chain {
+  switch (network) {
+    case CARDANO_MAINNET_CAIP2:
+      return mainnet;
+    case CARDANO_PREPROD_CAIP2:
+      return preprod;
+    case CARDANO_PREVIEW_CAIP2:
+      return preview;
+    default:
+      throw new Error(`Unsupported Cardano network: ${network}`);
+  }
+}
+
+/**
+ * Normalizes a BIP-39 mnemonic: trims, collapses internal whitespace, and
+ * lowercases it. The BIP-39 word list is all lowercase, so this recovers the
+ * correct wallet from a mnemonic that picked up stray capitalization or extra
+ * whitespace (e.g. when copied into an env file) instead of failing derivation.
+ *
+ * @param mnemonic - The raw mnemonic phrase.
+ * @returns The normalized mnemonic.
+ */
+function normalizeMnemonic(mnemonic: string): string {
+  return mnemonic.trim().replace(/\s+/g, " ").toLowerCase();
+}
+
+/**
+ * Attaches the configured provider to a chain-scoped client assembly.
+ *
+ * @param assembly - The chain-scoped client assembly.
+ * @param provider - The provider connection config.
+ * @returns A read-capable client.
+ */
+function withProvider(
+  assembly: ReturnType<typeof Client.make>,
+  provider: CardanoProviderConfig,
+): ReturnType<ReturnType<typeof Client.make>["withBlockfrost"]> {
+  if (provider.blockfrost) {
+    return assembly.withBlockfrost(provider.blockfrost);
+  }
+  return assembly.withKoios(provider.koios);
+}
+
+/**
+ * Builds the payment-output assets for the requested asset/amount. Lovelace
+ * lives in the output coin; native assets live in the multi-asset map.
+ *
+ * @param asset - The asset unit (`lovelace` or `policyId.assetNameHex`).
+ * @param amount - The amount in the asset's smallest unit.
+ * @returns Evolution SDK assets describing the output value.
+ */
+function buildOutputAssets(asset: string, amount: bigint): Assets.Assets {
+  if (asset.toLowerCase() === LOVELACE_ASSET) {
+    return Assets.fromLovelace(amount);
+  }
+  const { policyId, assetNameHex } = parseAssetUnit(asset);
+  // Native-asset outputs still require lovelace; build() bumps it to the
+  // protocol minimum when autoMinUtxo is enabled.
+  return Assets.addByHex(Assets.zero, policyId, assetNameHex, amount);
 }
 
 /**
@@ -198,4 +296,230 @@ export interface FacilitatorCardanoSigner {
    * @returns A promise that resolves on a successful dry-run.
    */
   evaluateTransaction?(signedTransactionBase64: string, network: string): Promise<void>;
+}
+
+/**
+ * Configuration for the reference {@link toClientCardanoSigner} factory.
+ */
+export interface ClientCardanoSignerConfig {
+  /**
+   * BIP-39 mnemonic controlling the funding wallet.
+   */
+  mnemonic: string;
+  /**
+   * The x402 network identifier (one of `CARDANO_NETWORKS`).
+   */
+  network: string;
+  /**
+   * Provider connection used to read wallet UTXOs and protocol parameters.
+   */
+  provider: CardanoProviderConfig;
+  /**
+   * Optional account index for key derivation. Defaults to 0.
+   */
+  accountIndex?: number;
+}
+
+/**
+ * Builds a reference {@link ClientCardanoSigner} backed by the Evolution SDK.
+ *
+ * The signer picks a wallet UTXO as the replay-protection nonce, pays the
+ * requested asset/amount to `payTo`, sets the transaction TTL from
+ * `maxTimeoutSeconds`, signs offline, and returns the base64 signed CBOR plus
+ * the chosen UTXO reference. The returned transaction satisfies the
+ * facilitator's `verify()` rules: the nonce appears as an input, an output
+ * pays the requested asset/amount, and at least one vkey witness is present.
+ *
+ * @param config - The client signer configuration.
+ * @returns A ready-to-use client signer.
+ */
+export function toClientCardanoSigner(config: ClientCardanoSignerConfig): ClientCardanoSigner {
+  const chain = resolveChain(config.network);
+  const mnemonic = normalizeMnemonic(config.mnemonic);
+  const client = withProvider(Client.make(chain), config.provider).withSeed({
+    mnemonic,
+    accountIndex: config.accountIndex,
+  });
+
+  // Derive the funding address synchronously so getAddress() needs no await.
+  const address = Address.toBech32(
+    addressFromSeed(mnemonic, {
+      accountIndex: config.accountIndex,
+      networkId: chain.id,
+    }).address,
+  );
+
+  return {
+    getAddress(): string {
+      return address;
+    },
+
+    async signPaymentTransaction(input: ClientCardanoSignInput): Promise<ClientCardanoSignResult> {
+      if (input.network !== config.network) {
+        throw new Error(
+          `Signer configured for ${config.network} but asked to pay on ${input.network}`,
+        );
+      }
+
+      const changeAddress = await client.address();
+      const utxos = await client.getWalletUtxos();
+      if (utxos.length === 0) {
+        throw new Error("Funding wallet has no UTXOs available for the payment");
+      }
+      // Use the first wallet UTXO as the nonce; collectFrom forces it to appear
+      // as a transaction input (verification rule 5).
+      const nonceUtxo = utxos[0];
+      const nonceTxHash = Buffer.from(nonceUtxo.transactionId.hash).toString("hex").toLowerCase();
+      const nonce = `${nonceTxHash}#${Number(nonceUtxo.index)}`;
+
+      const outputAssets = buildOutputAssets(input.asset, BigInt(input.amount));
+      const ttlMs = BigInt(Date.now()) + BigInt(input.maxTimeoutSeconds) * 1000n;
+
+      const signBuilder = await client
+        .newTx()
+        .collectFrom({ inputs: [nonceUtxo] })
+        .payToAddress({ address: Address.fromBech32(input.payTo), assets: outputAssets })
+        .setValidity({ to: ttlMs })
+        .build({
+          changeAddress,
+          autoMinUtxo: input.asset.toLowerCase() !== LOVELACE_ASSET,
+        });
+
+      const submitBuilder = await signBuilder.sign();
+      const unsigned = await signBuilder.toTransaction();
+      const signed = new Transaction.Transaction({
+        body: unsigned.body,
+        witnessSet: submitBuilder.witnessSet,
+        isValid: true,
+        auxiliaryData: null,
+      });
+
+      return {
+        transaction: Buffer.from(Transaction.toCBORBytes(signed)).toString("base64"),
+        nonce,
+      };
+    },
+  };
+}
+
+/**
+ * Configuration for the reference {@link toFacilitatorCardanoSigner} factory.
+ */
+export interface FacilitatorCardanoSignerConfig {
+  /**
+   * BIP-39 mnemonic controlling the facilitator wallet (its address is exposed
+   * via `getAddresses` for the `/supported` response).
+   */
+  mnemonic: string;
+  /**
+   * The x402 network identifier (one of `CARDANO_NETWORKS`).
+   */
+  network: string;
+  /**
+   * Provider connection used for chain lookups and submission.
+   */
+  provider: CardanoProviderConfig;
+  /**
+   * Optional account index for key derivation. Defaults to 0.
+   */
+  accountIndex?: number;
+  /**
+   * When `true`, `submitTransaction` awaits on-chain confirmation before
+   * reporting `status: "confirmed"`. When `false` (default) it returns
+   * `status: "mempool"` immediately after broadcast.
+   */
+  awaitConfirmation?: boolean;
+}
+
+/**
+ * Builds a reference {@link FacilitatorCardanoSigner} backed by the Evolution
+ * SDK provider for chain queries and transaction submission.
+ *
+ * @param config - The facilitator signer configuration.
+ * @returns A ready-to-use facilitator signer.
+ */
+export function toFacilitatorCardanoSigner(
+  config: FacilitatorCardanoSignerConfig,
+): FacilitatorCardanoSigner {
+  const chain = resolveChain(config.network);
+  const mnemonic = normalizeMnemonic(config.mnemonic);
+  const client = withProvider(Client.make(chain), config.provider).withSeed({
+    mnemonic,
+    accountIndex: config.accountIndex,
+  });
+  const slotConfig = chain.slotConfig;
+
+  // Derive the facilitator address synchronously so getAddresses() needs no await.
+  const address = Address.toBech32(
+    addressFromSeed(mnemonic, {
+      accountIndex: config.accountIndex,
+      networkId: chain.id,
+    }).address,
+  );
+
+  const assertNetwork = (network: string): void => {
+    if (network !== config.network) {
+      throw new Error(`Signer configured for ${config.network} but asked about ${network}`);
+    }
+  };
+
+  return {
+    getAddresses(): readonly string[] {
+      return [address];
+    },
+
+    async getUtxo(ref: string, network: string): Promise<CardanoUtxoSnapshot> {
+      assertNetwork(network);
+      const { txHash, index } = parseUtxoRef(ref);
+      const input = new TransactionInput.TransactionInput({
+        transactionId: TransactionHash.fromHex(txHash),
+        index: BigInt(index),
+      });
+      const utxos = await client.getUtxosByOutRef([input]);
+      if (utxos.length === 0) {
+        return { exists: false };
+      }
+      return { exists: true, address: Address.toBech32(utxos[0].address) };
+    },
+
+    async getCurrentSlot(network: string): Promise<bigint> {
+      assertNetwork(network);
+      // SlotConfig.zeroTime and slotLength are both in milliseconds for the
+      // Evolution presets: slot = zeroSlot + floor((nowMs - zeroTime) / slotLength).
+      const elapsedSlots = Math.floor(
+        (Date.now() - Number(slotConfig.zeroTime)) / slotConfig.slotLength,
+      );
+      return slotConfig.zeroSlot + BigInt(elapsedSlots);
+    },
+
+    async submitTransaction(
+      signedTransactionBase64: string,
+      network: string,
+    ): Promise<CardanoSubmissionResult> {
+      assertNetwork(network);
+      const tx = Transaction.fromCBORBytes(
+        Uint8Array.from(Buffer.from(signedTransactionBase64, "base64")),
+      );
+      const hash = await client.submitTx(tx);
+      const txHash = Buffer.from(hash.hash).toString("hex").toLowerCase();
+      if (config.awaitConfirmation) {
+        await client.awaitTx(hash);
+        return { txHash, status: "confirmed" };
+      }
+      return { txHash, status: "mempool" };
+    },
+
+    async waitForConfirmation(txHash: string, network: string): Promise<void> {
+      assertNetwork(network);
+      await client.awaitTx(TransactionHash.fromHex(txHash));
+    },
+
+    async evaluateTransaction(signedTransactionBase64: string, network: string): Promise<void> {
+      assertNetwork(network);
+      const tx = Transaction.fromCBORBytes(
+        Uint8Array.from(Buffer.from(signedTransactionBase64, "base64")),
+      );
+      await client.evaluateTx(tx);
+    },
+  };
 }

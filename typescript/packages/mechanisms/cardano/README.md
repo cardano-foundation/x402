@@ -32,6 +32,36 @@ c48cbb3d5e57ed56e276bc45f99ab39abe94e6cd7ac39fb402da47ad.0014df105553444d
 
 CBOR transaction decoding in the facilitator uses Intersect's [Evolution SDK](https://www.npmjs.com/package/@evolution-sdk/evolution) — a pure-TypeScript Cardano serialization library with no WASM. It is bundled as a regular dependency; nothing extra to install.
 
+## Reference signers
+
+The client and facilitator schemes are signer-agnostic (e.g. a browser wallet can implement `ClientCardanoSigner` via CIP-30). For server-side keys, the package ships reference signers built on the Evolution SDK — `toClientCardanoSigner` builds, signs, and returns the payment transaction; `toFacilitatorCardanoSigner` performs chain lookups and submission.
+
+```typescript
+import { toClientCardanoSigner, toFacilitatorCardanoSigner } from "@x402/cardano";
+import { ExactCardanoScheme as ExactCardanoClient } from "@x402/cardano/exact/client";
+import { ExactCardanoScheme as ExactCardanoFacilitator } from "@x402/cardano/exact/facilitator";
+
+const provider = { blockfrost: { baseUrl: process.env.BLOCKFROST_PREPROD_URL!, projectId: process.env.BLOCKFROST_PROJECT_ID! } };
+
+// Client (payer)
+const clientSigner = toClientCardanoSigner({ mnemonic, network: "cardano:preprod", provider });
+client.register("cardano:*", new ExactCardanoClient(clientSigner));
+
+// Facilitator (verify + settle). `awaitConfirmation` reports `confirmed` instead of `mempool`.
+const facilitatorSigner = toFacilitatorCardanoSigner({ mnemonic, network: "cardano:preprod", provider, awaitConfirmation: true });
+facilitator.register("cardano:preprod", new ExactCardanoFacilitator(facilitatorSigner));
+```
+
+The facilitator signer also implements the optional `evaluateTransaction` dry-run described below. A Koios provider (`{ koios: { baseUrl, token? } }`) may be used instead of Blockfrost.
+
+## Testnet funds
+
+Get test ADA (tADA) for `cardano:preprod` or `cardano:preview` from the official
+[Cardano testnets faucet](https://docs.cardano.org/cardano-testnets/tools/faucet/). The **client**
+wallet must hold the asset it pays with and the **facilitator** wallet needs tADA to cover submission
+fees. `asset: "lovelace"` is fundable directly from the faucet; preprod **USDM** must be sourced
+separately, so use lovelace for quick live testing.
+
 ## Asset transfer methods
 
 Per spec, three methods can be selected via `requirements.extra.assetTransferMethod`:

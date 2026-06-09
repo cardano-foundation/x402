@@ -12,6 +12,8 @@ import { config } from "dotenv";
 import { x402Client, wrapFetchWithPayment, x402HTTPClient } from "@x402/fetch";
 import { toClientAvmSigner } from "@x402/avm";
 import { ExactAvmScheme } from "@x402/avm/exact/client";
+import { toClientCardanoSigner } from "@x402/cardano";
+import { ExactCardanoScheme } from "@x402/cardano/exact/client";
 import { ExactEvmScheme } from "@x402/evm/exact/client";
 import { UptoEvmScheme } from "@x402/evm/upto/client";
 import { ExactSvmScheme } from "@x402/svm/exact/client";
@@ -27,6 +29,10 @@ config();
 
 // Configuration - optional per network
 const avmPrivateKey = process.env.AVM_PRIVATE_KEY as string | undefined;
+const cardanoMnemonic = process.env.CARDANO_MNEMONIC as string | undefined;
+const cardanoNetwork = process.env.CARDANO_NETWORK || "cardano:preprod";
+const blockfrostBaseUrl = process.env.BLOCKFROST_PREPROD_URL;
+const blockfrostProjectId = process.env.BLOCKFROST_PROJECT_ID;
 const evmPrivateKey = process.env.EVM_PRIVATE_KEY as `0x${string}` | undefined;
 const svmPrivateKey = process.env.SVM_PRIVATE_KEY as string | undefined;
 const stellarPrivateKey = process.env.STELLAR_PRIVATE_KEY as string | undefined;
@@ -46,13 +52,14 @@ async function main(): Promise<void> {
   // Validate at least one private key is provided
   if (
     !avmPrivateKey &&
+    !cardanoMnemonic &&
     !evmPrivateKey &&
     !svmPrivateKey &&
     !stellarPrivateKey &&
     !(hederaAccountId && hederaPrivateKey)
   ) {
     console.error(
-      "❌ At least one of AVM_PRIVATE_KEY, EVM_PRIVATE_KEY, SVM_PRIVATE_KEY, STELLAR_PRIVATE_KEY, or HEDERA_ACCOUNT_ID + HEDERA_PRIVATE_KEY is required",
+      "❌ At least one of AVM_PRIVATE_KEY, CARDANO_MNEMONIC, EVM_PRIVATE_KEY, SVM_PRIVATE_KEY, STELLAR_PRIVATE_KEY, or HEDERA_ACCOUNT_ID + HEDERA_PRIVATE_KEY is required",
     );
     process.exit(1);
   }
@@ -65,6 +72,23 @@ async function main(): Promise<void> {
     const avmSigner = toClientAvmSigner(avmPrivateKey);
     client.register("algorand:*", new ExactAvmScheme(avmSigner));
     console.log(`Initialized AVM account: ${avmSigner.address}`);
+  }
+
+  // Register Cardano scheme if a mnemonic and Blockfrost connection are provided
+  if (cardanoMnemonic) {
+    if (!blockfrostBaseUrl || !blockfrostProjectId) {
+      console.error(
+        "❌ CARDANO_MNEMONIC requires BLOCKFROST_PREPROD_URL and BLOCKFROST_PROJECT_ID",
+      );
+      process.exit(1);
+    }
+    const cardanoSigner = toClientCardanoSigner({
+      mnemonic: cardanoMnemonic,
+      network: cardanoNetwork,
+      provider: { blockfrost: { baseUrl: blockfrostBaseUrl, projectId: blockfrostProjectId } },
+    });
+    client.register("cardano:*", new ExactCardanoScheme(cardanoSigner));
+    console.log(`Initialized Cardano signer on ${cardanoNetwork}`);
   }
 
   // Register EVM scheme if private key is provided

@@ -180,6 +180,13 @@
       "protocolFamily": "stellar"
     },
     {
+      "path": "/exact/cardano",
+      "method": "GET",
+      "description": "Protected endpoint requiring payment on Cardano network",
+      "requiresPayment": true,
+      "protocolFamily": "cardano"
+    },
+    {
       "path": "/health",
       "method": "GET",
       "description": "Health check endpoint",
@@ -204,6 +211,8 @@
       "APTOS_PAYEE_ADDRESS",
       "HEDERA_PAYEE_ADDRESS",
       "STELLAR_PAYEE_ADDRESS",
+      "CARDANO_PAYEE_ADDRESS",
+      "BLOCKFROST_PROJECT_ID",
       "EVM_RECEIVER_AUTHORIZER_PRIVATE_KEY"
     ]
   }
