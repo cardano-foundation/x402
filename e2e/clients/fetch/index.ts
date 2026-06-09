@@ -24,7 +24,7 @@ import { toClientCardanoSigner } from "@x402/cardano";
 import { ExactAvmScheme as ExactAvmClientScheme } from "@x402/avm/exact/client";
 import { toClientAvmSigner } from "@x402/avm";
 import { base58 } from "@scure/base";
-import { createKeyPairSignerFromBytes, generateKeyPairSigner } from "@solana/kit";
+import { createKeyPairSignerFromBytes } from "@solana/kit";
 import { x402Client, x402HTTPClient } from "@x402/core/client";
 
 config();
@@ -32,18 +32,10 @@ config();
 const baseURL = process.env.RESOURCE_SERVER_URL as string;
 const endpointPath = process.env.ENDPOINT_PATH as string;
 const url = `${baseURL}${endpointPath}`;
-// EVM/SVM are optional for single-family runs (e.g. --families=cardano). When
-// their keys are absent we use throwaway placeholder accounts so the client can
-// still start; their schemes register but are never selected unless an EVM/SVM
-// scenario actually runs (which requires real keys).
-const PLACEHOLDER_EVM_PRIVATE_KEY =
-  "0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80" as `0x${string}`;
-const evmAccount = privateKeyToAccount(
-  (process.env.EVM_PRIVATE_KEY || PLACEHOLDER_EVM_PRIVATE_KEY) as `0x${string}`,
+const evmAccount = privateKeyToAccount(process.env.EVM_PRIVATE_KEY as `0x${string}`);
+const svmSigner = await createKeyPairSignerFromBytes(
+  base58.decode(process.env.SVM_PRIVATE_KEY as string),
 );
-const svmSigner = process.env.SVM_PRIVATE_KEY
-  ? await createKeyPairSignerFromBytes(base58.decode(process.env.SVM_PRIVATE_KEY))
-  : await generateKeyPairSigner();
 
 const evmNetwork = process.env.EVM_NETWORK || "eip155:84532";
 const evmRpcUrl = process.env.EVM_RPC_URL;
