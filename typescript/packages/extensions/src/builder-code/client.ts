@@ -1,8 +1,7 @@
 /**
  * Client-side extension for the Builder Code Extension.
  *
- * Echoes the server's app code (`a`) and attaches the client's
- * service code (`s`) to the payment payload.
+ * Attaches the client's service code (`s`) to the payment payload.
  */
 
 import type { ClientExtension } from "@x402/core/client";
@@ -40,27 +39,18 @@ export class BuilderCodeClientExtension implements ClientExtension {
   }
 
   /**
-   * Echoes the server app code (`a`) and attaches this client's service code (`s`).
+   * Attaches this client's service code (`s`).
    *
    * @param payload - Payment payload to enrich
-   * @param paymentRequired - Server payment requirements (source of app code `a`)
+   * @param _ - Server payment requirements; core merges server extension data
    * @returns Payment payload with builder-code extension data
    */
-  async enrichPaymentPayload(
-    payload: PaymentPayload,
-    paymentRequired: PaymentRequired,
-  ): Promise<PaymentPayload> {
-    const serverExt = paymentRequired.extensions?.[BUILDER_CODE] as
-      | Record<string, unknown>
-      | undefined;
-    const info = serverExt?.info as Record<string, unknown> | undefined;
-    const a = typeof info?.a === "string" ? info.a : undefined;
-
+  async enrichPaymentPayload(payload: PaymentPayload, _: PaymentRequired): Promise<PaymentPayload> {
     return {
       ...payload,
       extensions: {
         ...payload.extensions,
-        [BUILDER_CODE]: { ...(a && { a }), s: this.serviceCode },
+        [BUILDER_CODE]: { info: { s: this.serviceCode } },
       },
     };
   }

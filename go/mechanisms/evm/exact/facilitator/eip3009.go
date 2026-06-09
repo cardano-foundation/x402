@@ -104,6 +104,12 @@ func (f *ExactEvmScheme) verifyEIP3009(
 		return nil, x402.NewVerifyError(ErrInvalidSignature, evmPayload.Authorization.From, fmt.Sprintf("invalid signature: %s", evmPayload.Signature))
 	}
 
+	if errReason, err := evm.ValidateAssetIsContract(ctx, f.signer, requirements.Asset); err != nil {
+		return nil, fmt.Errorf("asset contract check failed: %w", err)
+	} else if errReason != "" {
+		return nil, x402.NewVerifyError(errReason, evmPayload.Authorization.From, fmt.Sprintf("asset %s is not a deployed contract", requirements.Asset))
+	}
+
 	if simulate {
 		simulationSucceeded, err := SimulateEIP3009Transfer(
 			ctx,
@@ -140,6 +146,7 @@ func (f *ExactEvmScheme) settleEIP3009(
 	ctx context.Context,
 	payload types.PaymentPayload,
 	requirements types.PaymentRequirements,
+	fctx *x402.FacilitatorContext,
 ) (*x402.SettleResponse, error) {
 	network := x402.Network(payload.Accepted.Network)
 
@@ -191,7 +198,12 @@ func (f *ExactEvmScheme) settleEIP3009(
 		return nil, x402.NewSettleError(ErrInvalidPayload, verifyResp.Payer, network, "", err.Error())
 	}
 
-	txHash, err := ExecuteTransferWithAuthorization(ctx, f.signer, tokenAddress, parsedAuthorization, sigData)
+	dataSuffix, err := evm.ResolveDataSuffix(fctx, evm.DataSuffixContext{Payload: payload, Requirements: requirements})
+	if err != nil {
+		return nil, x402.NewSettleError(ErrInvalidPayload, verifyResp.Payer, network, "", err.Error())
+	}
+
+	txHash, err := ExecuteTransferWithAuthorization(ctx, f.signer, tokenAddress, parsedAuthorization, sigData, dataSuffix)
 	if err != nil {
 		return nil, x402.NewSettleError(parseEIP3009TransferError(err), verifyResp.Payer, network, "", err.Error())
 	}

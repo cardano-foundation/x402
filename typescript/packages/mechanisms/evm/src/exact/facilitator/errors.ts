@@ -5,6 +5,8 @@
  * go/mechanisms/evm/exact/facilitator/errors.go to maintain cross-SDK parity.
  */
 
+export const ErrAssetNotDeployedContract = "asset_not_deployed_contract";
+
 export const ErrInvalidScheme = "invalid_exact_evm_scheme";
 export const ErrNetworkMismatch = "invalid_exact_evm_network_mismatch";
 export const ErrMissingEip712Domain = "invalid_exact_evm_missing_eip712_domain";

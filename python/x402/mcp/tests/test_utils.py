@@ -71,6 +71,24 @@ def test_attach_payment_to_meta():
     assert "_meta" in result
     assert "x402/payment" in result["_meta"]
 
+    # Regression: the attached payment must be serialized with exclude_none (matching the HTTP
+    # encoder). Optional fields left as explicit nulls — e.g. ``resource``/``extensions`` here, or
+    # ``resource.mimeType`` on real payloads — are rejected as "paymentPayload is invalid" by
+    # strict facilitators and proxies that re-marshal _meta into a PAYMENT-SIGNATURE header.
+    attached = result["_meta"]["x402/payment"]
+
+    def _assert_no_nulls(obj):
+        if isinstance(obj, dict):
+            for k, v in obj.items():
+                assert v is not None, f"null leaked into payment meta at key {k!r}"
+                _assert_no_nulls(v)
+        elif isinstance(obj, list):
+            for v in obj:
+                _assert_no_nulls(v)
+
+    _assert_no_nulls(attached)
+    assert "resource" not in attached  # was None on this payload -> must be dropped
+
 
 def test_extract_payment_required_from_result_structured():
     """Test extraction from structuredContent."""

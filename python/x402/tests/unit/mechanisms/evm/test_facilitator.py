@@ -13,6 +13,7 @@ except ImportError:
 
 from x402.mechanisms.evm import ERC6492_MAGIC_VALUE, get_network_config
 from x402.mechanisms.evm.constants import (
+    ERR_ASSET_NOT_DEPLOYED_CONTRACT,
     ERR_AUTHORIZATION_VALUE_MISMATCH,
     ERR_FACTORY_NOT_ALLOWED,
     ERR_INSUFFICIENT_BALANCE,
@@ -188,6 +189,7 @@ class MockFacilitatorSigner:
         addresses: list[str] | None = None,
         typed_data_valid: bool = True,
         code: bytes = b"",
+        code_by_address: dict[str, bytes] | None = None,
         transfer_simulation_should_revert: bool = False,
         multicall_results: list[tuple[bool, bytes]] | None = None,
         deploy_tx_hash: str = "0x" + "12" * 32,
@@ -195,6 +197,12 @@ class MockFacilitatorSigner:
         self._addresses = addresses or [FACILITATOR]
         self.typed_data_valid = typed_data_valid
         self.code = code
+        # Default: token contract is always a deployed contract so the asset check passes.
+        self._code_by_address: dict[str, bytes] = {
+            TOKEN_ADDRESS.lower(): b"\x60",
+        }
+        if code_by_address:
+            self._code_by_address.update({k.lower(): v for k, v in code_by_address.items()})
         self.transfer_simulation_should_revert = transfer_simulation_should_revert
         self.multicall_results = multicall_results or []
         self.deploy_tx_hash = deploy_tx_hash
@@ -246,7 +254,7 @@ class MockFacilitatorSigner:
         return 8453
 
     def get_code(self, address: str) -> bytes:
-        return self.code
+        return self._code_by_address.get(address.lower(), self.code)
 
 
 class TestExactEvmSchemeConstructor:
@@ -481,6 +489,29 @@ class TestVerify:
 
         assert result.is_valid is False
         assert result.invalid_reason == ERR_INVALID_SIGNATURE
+
+    def test_rejects_eoa_asset(self):
+        # When the asset address has no bytecode (EOA), verify must reject before signature checks.
+        signer = MockFacilitatorSigner(
+            code_by_address={TOKEN_ADDRESS.lower(): b""},  # token = EOA
+        )
+        facilitator = ExactEvmFacilitatorScheme(signer)
+
+        result = facilitator.verify(make_payment_payload(), make_requirements())
+
+        assert result.is_valid is False
+        assert result.invalid_reason == ERR_ASSET_NOT_DEPLOYED_CONTRACT
+
+    def test_getcode_rpc_error_raises(self):
+        # An RPC error on get_code must propagate as an exception (internal error), not a 400.
+        class _RPCErrorSigner(MockFacilitatorSigner):
+            def get_code(self, address: str) -> bytes:
+                raise RuntimeError("rpc: connection refused")
+
+        facilitator = ExactEvmFacilitatorScheme(_RPCErrorSigner())
+
+        with pytest.raises(RuntimeError, match="rpc: connection refused"):
+            facilitator.verify(make_payment_payload(), make_requirements())
 
 
 class TestSettle:
