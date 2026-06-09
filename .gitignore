@@ -1,9 +1,12 @@
 .env
 .env.local
+.env~
+.env.local~
 node_modules/
 dist/
 .turbo/
 .next/
+next-env.d.ts
 proxy
 .env
 __pycache__/

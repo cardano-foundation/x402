@@ -426,6 +426,7 @@ export function paymentMiddlewareFromHTTPServer(
         reason: "handler_failed",
         responseStatus: reply.statusCode,
       });
+      reply.removeHeader(SETTLEMENT_OVERRIDES_HEADER);
       return effectivePayload;
     }
 
@@ -448,6 +449,7 @@ export function paymentMiddlewareFromHTTPServer(
 
       if (!settleResult.success) {
         const { response } = settleResult;
+        reply.removeHeader(SETTLEMENT_OVERRIDES_HEADER);
         for (const [key, value] of Object.entries(response.headers)) {
           reply.header(key, value);
         }
@@ -462,14 +464,17 @@ export function paymentMiddlewareFromHTTPServer(
       for (const [key, value] of Object.entries(settleResult.headers)) {
         reply.header(key, value);
       }
+      reply.removeHeader(SETTLEMENT_OVERRIDES_HEADER);
       return effectivePayload;
     } catch (error) {
       if (error instanceof FacilitatorResponseError) {
+        reply.removeHeader(SETTLEMENT_OVERRIDES_HEADER);
         reply.status(502);
         reply.type("application/json");
         return JSON.stringify({ error: error.message });
       }
       console.error(error);
+      reply.removeHeader(SETTLEMENT_OVERRIDES_HEADER);
       reply.status(402);
       reply.type("application/json");
       return JSON.stringify({});

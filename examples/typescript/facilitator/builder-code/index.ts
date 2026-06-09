@@ -24,12 +24,6 @@ if (!process.env.EVM_PRIVATE_KEY) {
   process.exit(1);
 }
 
-const facilitatorBuilderCode = process.env.BUILDER_CODE;
-if (!facilitatorBuilderCode) {
-  console.error("❌ BUILDER_CODE environment variable is required");
-  process.exit(1);
-}
-
 const evmAccount = privateKeyToAccount(
   process.env.EVM_PRIVATE_KEY as `0x${string}`,
 );
@@ -102,14 +96,11 @@ const facilitator = new x402Facilitator()
   })
   .registerExtension(
     new BuilderCodeFacilitatorExtension({
-      builderCode: facilitatorBuilderCode,
+      builderCode: process.env.FACILITATOR_BUILDER_CODE,
     }),
   );
 
-facilitator.register(
-  EVM_NETWORK,
-  new ExactEvmScheme(evmSigner, { deployERC4337WithEIP6492: true }),
-);
+facilitator.register(EVM_NETWORK, new ExactEvmScheme(evmSigner));
 
 const app = express();
 app.use(express.json());

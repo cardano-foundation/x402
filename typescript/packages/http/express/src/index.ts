@@ -288,6 +288,7 @@ export function paymentMiddlewareFromHTTPServer(
             reason: "handler_failed",
             responseStatus: res.statusCode,
           });
+          res.removeHeader(SETTLEMENT_OVERRIDES_HEADER);
           restoreResponseMethods();
           // Replay all buffered calls in order
           for (const [method, args] of bufferedCalls) {
@@ -356,6 +357,8 @@ export function paymentMiddlewareFromHTTPServer(
           return;
         } finally {
           restoreResponseMethods();
+
+          res.removeHeader(SETTLEMENT_OVERRIDES_HEADER);
 
           // Replay all buffered calls in order
           for (const [method, args] of bufferedCalls) {
