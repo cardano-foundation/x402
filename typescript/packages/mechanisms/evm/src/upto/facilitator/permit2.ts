@@ -22,6 +22,7 @@ import {
   x402UptoPermit2ProxyAddress,
 } from "../../constants";
 import {
+  ErrAssetNotDeployedContract,
   ErrPermit2AmountMismatch,
   ErrUptoSettlementExceedsAmount,
   ErrUptoFacilitatorMismatch,
@@ -102,6 +103,11 @@ export async function verifyUptoPermit2(
 
   const chainId = getEvmChainId(requirements.network);
   const tokenAddress = getAddress(requirements.asset);
+
+  const assetBytecode = await signer.getCode({ address: tokenAddress });
+  if (!assetBytecode || assetBytecode === "0x") {
+    return { isValid: false, invalidReason: ErrAssetNotDeployedContract, payer };
+  }
 
   if (
     getAddress(permit2Payload.permit2Authorization.spender) !==
