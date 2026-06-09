@@ -31,7 +31,7 @@ const buildRequirements = (overrides: Partial<PaymentRequirements> = {}): Paymen
 
 const stubSigner: ClientCardanoSigner = {
   getAddress: () => "addr1qxsomeaddress00",
-  signPaymentTransaction: () => ({
+  buildAndSignPaymentTransaction: () => ({
     transaction: "AAAA",
     nonce: `${TX_HASH}#0`,
   }),
@@ -88,7 +88,7 @@ describe("ExactCardanoScheme client", () => {
   it("rejects signer responses with invalid nonce", async () => {
     const badSigner: ClientCardanoSigner = {
       getAddress: () => "addr1q",
-      signPaymentTransaction: () => ({ transaction: "AA", nonce: "bad" }),
+      buildAndSignPaymentTransaction: () => ({ transaction: "AA", nonce: "bad" }),
     };
     const c = new ExactCardanoClient(badSigner);
     await expect(c.createPaymentPayload(2, buildRequirements())).rejects.toThrow(

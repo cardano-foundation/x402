@@ -21,17 +21,6 @@ import {
 import { parseAssetUnit, parseUtxoRef } from "./utils";
 
 /**
- * Configuration for the client-side signer.
- */
-export interface ClientCardanoConfig {
-  /**
-   * Optional custom RPC / chain query URL used by the client (e.g. a Blockfrost
-   * or Koios endpoint).
-   */
-  rpcUrl?: string;
-}
-
-/**
  * Provider connection used by the reference signers. Exactly one of
  * `blockfrost` or `koios` must be supplied. These map directly onto the
  * Evolution SDK provider configs.
@@ -131,7 +120,7 @@ export interface ClientCardanoSigner {
    * @param input - Payment building parameters.
    * @returns A promise resolving to the signed transaction and nonce.
    */
-  signPaymentTransaction(
+  buildAndSignPaymentTransaction(
     input: ClientCardanoSignInput,
   ): Promise<ClientCardanoSignResult> | ClientCardanoSignResult;
 }
@@ -284,9 +273,11 @@ export interface FacilitatorCardanoSigner {
   /**
    * Optional: ask a Cardano node / evaluation service to dry-run the signed
    * transaction. When implemented, the facilitator's `verify()` calls it after
-   * the spec's six rules have passed; a successful dry-run proves the
-   * signatures actually authorize the consumed inputs (the witness-count
-   * check alone only proves witness material is present).
+   * the spec's six rules have passed. This evaluates Plutus script execution
+   * units only (Ogmios evaluateTransaction / Blockfrost /utils/txs/evaluate);
+   * it does NOT validate vkey signatures and is a no-op for simple
+   * address-to-address payments. vkey-signature authorization is enforced by
+   * the node at submit time (settle), per the eUTXO model.
    *
    * Implementations should throw on any rejection. The thrown error is
    * surfaced as `invalid_message` on the verify response.
@@ -354,7 +345,9 @@ export function toClientCardanoSigner(config: ClientCardanoSignerConfig): Client
       return address;
     },
 
-    async signPaymentTransaction(input: ClientCardanoSignInput): Promise<ClientCardanoSignResult> {
+    async buildAndSignPaymentTransaction(
+      input: ClientCardanoSignInput,
+    ): Promise<ClientCardanoSignResult> {
       if (input.network !== config.network) {
         throw new Error(
           `Signer configured for ${config.network} but asked to pay on ${input.network}`,
@@ -377,6 +370,8 @@ export function toClientCardanoSigner(config: ClientCardanoSignerConfig): Client
 
       const signBuilder = await client
         .newTx()
+        // .collectFrom() with a specific UTXO ensures the nonce appears as an input (rule 5).
+        // Additional UTXOs from the wallet may be auto-selected as needed to satisfy the output and fees.
         .collectFrom({ inputs: [nonceUtxo] })
         .payToAddress({ address: Address.fromBech32(input.payTo), assets: outputAssets })
         .setValidity({ to: ttlMs })
@@ -424,9 +419,10 @@ export interface FacilitatorCardanoSignerConfig {
    */
   accountIndex?: number;
   /**
-   * When `true`, `submitTransaction` awaits on-chain confirmation before
-   * reporting `status: "confirmed"`. When `false` (default) it returns
-   * `status: "mempool"` immediately after broadcast.
+   * When `true` (default), `submitTransaction` awaits on-chain confirmation
+   * before reporting `status: "confirmed"`. Set to `false` to return
+   * `status: "mempool"` immediately after broadcast — note the facilitator
+   * scheme rejects mempool-only settlements unless `acceptMempool` is enabled.
    */
   awaitConfirmation?: boolean;
 }
@@ -502,11 +498,11 @@ export function toFacilitatorCardanoSigner(
       );
       const hash = await client.submitTx(tx);
       const txHash = Buffer.from(hash.hash).toString("hex").toLowerCase();
-      if (config.awaitConfirmation) {
-        await client.awaitTx(hash);
-        return { txHash, status: "confirmed" };
+      if (config.awaitConfirmation === false) {
+        return { txHash, status: "mempool" };
       }
-      return { txHash, status: "mempool" };
+      await client.awaitTx(hash);
+      return { txHash, status: "confirmed" };
     },
 
     async waitForConfirmation(txHash: string, network: string): Promise<void> {

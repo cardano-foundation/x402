@@ -36,14 +36,8 @@ const APTOS_NETWORK = (process.env.APTOS_NETWORK || "aptos:2") as `${string}:${s
 const HEDERA_NETWORK = (process.env.HEDERA_NETWORK || "hedera:testnet") as `${string}:${string}`;
 const STELLAR_NETWORK = (process.env.STELLAR_NETWORK || "stellar:testnet") as `${string}:${string}`;
 const CARDANO_NETWORK = (process.env.CARDANO_NETWORK || "cardano:preprod") as `${string}:${string}`;
-// EVM/SVM payees are optional (a single-family run such as --families=cardano
-// can omit them); unconfigured ones fall back to a placeholder address so their
-// routes still register but are never exercised. At least one real payee is
-// required (checked below).
-const EVM_PAYEE_ADDRESS = (process.env.EVM_PAYEE_ADDRESS ||
-  "0x0000000000000000000000000000000000000001") as `0x${string}`;
-const SVM_PAYEE_ADDRESS = (process.env.SVM_PAYEE_ADDRESS ||
-  "11111111111111111111111111111111") as string;
+const EVM_PAYEE_ADDRESS = process.env.EVM_PAYEE_ADDRESS as `0x${string}`;
+const SVM_PAYEE_ADDRESS = process.env.SVM_PAYEE_ADDRESS as string;
 const EVM_PERMIT2_ASSET = process.env.EVM_PERMIT2_ASSET as `0x${string}`;
 const AVM_PAYEE_ADDRESS = process.env.AVM_PAYEE_ADDRESS as string;
 const APTOS_PAYEE_ADDRESS = process.env.APTOS_PAYEE_ADDRESS as string;
@@ -54,23 +48,14 @@ const HEDERA_ASSET = process.env.HEDERA_ASSET ?? "0.0.0"; // 0.0.0 = HBAR or 0.0
 const HEDERA_AMOUNT = process.env.HEDERA_AMOUNT ?? "100000"; // price in smallest units (tinybars or token decimals), defaults to 0.001 HBAR or 0.1 USDC
 const facilitatorUrl = process.env.FACILITATOR_URL;
 
-if (
-  !process.env.EVM_PAYEE_ADDRESS &&
-  !process.env.SVM_PAYEE_ADDRESS &&
-  !AVM_PAYEE_ADDRESS &&
-  !APTOS_PAYEE_ADDRESS &&
-  !HEDERA_PAYEE_ADDRESS &&
-  !STELLAR_PAYEE_ADDRESS &&
-  !CARDANO_PAYEE_ADDRESS
-) {
-  console.error("❌ At least one *_PAYEE_ADDRESS environment variable must be set");
+if (!EVM_PAYEE_ADDRESS) {
+  console.error("❌ EVM_PAYEE_ADDRESS environment variable is required");
   process.exit(1);
 }
-if (!process.env.EVM_PAYEE_ADDRESS) {
-  console.warn("⚠️  EVM_PAYEE_ADDRESS not set — using a placeholder (EVM endpoints will not work)");
-}
-if (!process.env.SVM_PAYEE_ADDRESS) {
-  console.warn("⚠️  SVM_PAYEE_ADDRESS not set — using a placeholder (SVM endpoints will not work)");
+
+if (!SVM_PAYEE_ADDRESS) {
+  console.error("❌ SVM_PAYEE_ADDRESS environment variable is required");
+  process.exit(1);
 }
 
 if (!facilitatorUrl) {

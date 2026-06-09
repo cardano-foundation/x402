@@ -65,6 +65,10 @@ export interface ExactCardanoFacilitatorConfig {
  * Performs all checks listed in the "Facilitator Verification Rules" section
  * of `specs/schemes/exact/scheme_exact_cardano.md` (rules 1-6) before
  * accepting a payment. Settlement re-runs verification before submitting.
+ *
+ * The duplicate-settlement cache is in-process only; across multiple
+ * facilitator instances the authoritative replay guard is the on-chain UTXO
+ * spend (rule 5), which makes the consumed nonce UTXO fail re-verification.
  */
 export class ExactCardanoScheme implements SchemeNetworkFacilitator {
   readonly scheme = SCHEME_EXACT;
@@ -189,10 +193,12 @@ export class ExactCardanoScheme implements SchemeNetworkFacilitator {
 
       // SECURITY: refuse unsigned transactions in verify() so /verify cannot
       // return a false-positive that would let callers grant access on an
-      // unpaid request. The witness-count check is a fast structural guard;
-      // signers SHOULD also implement `evaluateTransaction` (called below)
-      // for full cryptographic authorization checks via a Cardano node
-      // dry-run.
+      // unpaid request. This witness-count check is structural only: it proves
+      // witness material is PRESENT, not that the signatures are valid. vkey
+      // signatures are not cryptographically validated here — that gate is the
+      // node's acceptance at submit time (settle). Per the eUTXO model,
+      // authorization is confirmed by settlement, so callers MUST grant access
+      // on confirmed settlement, never on verify() alone.
       if (decoded.vkeyWitnessCount === 0 && decoded.scriptWitnessCount === 0) {
         return { isValid: false, invalidReason: ERR_TRANSACTION_UNSIGNED, payer: "" };
       }
@@ -282,10 +288,13 @@ export class ExactCardanoScheme implements SchemeNetworkFacilitator {
           if (!methodCheck.ok) {
             return { isValid: false, invalidReason: methodCheck.reason, payer };
           }
-          // Optional final guard: full cryptographic authorization check via a
-          // Cardano node dry-run. Skipped when the signer does not implement
-          // `evaluateTransaction`; in that case verify() is best-effort and
-          // settle() will still surface an invalid-signature error at submit.
+          // Optional Plutus-script dry-run. `evaluateTransaction` computes
+          // script execution units (Ogmios evaluateTransaction / Blockfrost
+          // /utils/txs/evaluate); it does NOT validate vkey signatures. It only
+          // adds a guard for script-mode payments, so it is a no-op for the
+          // simple address-to-address transfers this base class accepts.
+          // Skipped when the signer does not implement it; either way vkey
+          // signatures are enforced only by the node at submit time (settle).
           if (typeof this.signer.evaluateTransaction === "function") {
             try {
               await this.signer.evaluateTransaction(
@@ -311,8 +320,12 @@ export class ExactCardanoScheme implements SchemeNetworkFacilitator {
       if (!assetFoundForRecipient) {
         return { isValid: false, invalidReason: ERR_ASSET_MISMATCH, payer };
       }
-      void bestAvailable;
-      return { isValid: false, invalidReason: ERR_AMOUNT_INSUFFICIENT, payer };
+      return {
+        isValid: false,
+        invalidReason: ERR_AMOUNT_INSUFFICIENT,
+        invalidMessage: `output to ${requirements.payTo} pays ${bestAvailable}, requires ${requestedAmount}`,
+        payer,
+      };
     } catch (error) {
       return {
         isValid: false,
@@ -373,6 +386,7 @@ export class ExactCardanoScheme implements SchemeNetworkFacilitator {
           errorReason: ERR_SETTLEMENT_NOT_CONFIRMED,
           transaction: submission.txHash,
           network: payload.accepted.network,
+          payer: verifyResult.payer,
           extensions: { status: submission.status },
         };
       }
@@ -381,6 +395,7 @@ export class ExactCardanoScheme implements SchemeNetworkFacilitator {
         success: true,
         transaction: submission.txHash,
         network: payload.accepted.network,
+        payer: verifyResult.payer,
         extensions: { status: submission.status },
       };
     } catch {
@@ -442,10 +457,6 @@ export class ExactCardanoScheme implements SchemeNetworkFacilitator {
     return { ok: false, reason: ERR_UNSUPPORTED_SCHEME };
   }
 
-  /**
-   *
-   * @param key
-   */
   /**
    * Atomically claim a cache key for an in-flight or completed settlement.
    * Synchronous so concurrent settle() calls cannot all race past the check.

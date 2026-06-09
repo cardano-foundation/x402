@@ -67,7 +67,7 @@ export function stubFacilitatorSigner(
 export function stubClientSigner(): ClientCardanoSigner {
   return {
     getAddress: () => PAYER_ADDRESS,
-    signPaymentTransaction: async input => {
+    buildAndSignPaymentTransaction: async input => {
       const built = await buildSignedTx({
         payTo: input.payTo,
         asset: input.asset,
