@@ -14,6 +14,7 @@ import { toFacilitatorCardanoSigner } from "@x402/cardano";
 import { ExactCardanoScheme } from "@x402/cardano/exact/facilitator";
 import { x402Facilitator } from "@x402/core/facilitator";
 import {
+  Network,
   PaymentPayload,
   PaymentRequirements,
   SettleResponse,
@@ -52,7 +53,7 @@ const PORT = process.env.PORT || "4022";
 // Configuration - optional per network (alphabetic order)
 const avmPrivateKey = process.env.AVM_PRIVATE_KEY as string | undefined;
 const cardanoMnemonic = process.env.CARDANO_MNEMONIC as string | undefined;
-const cardanoNetwork = process.env.CARDANO_NETWORK || "cardano:preprod";
+const cardanoNetwork = (process.env.CARDANO_NETWORK || "cardano:preprod") as Network;
 const blockfrostBaseUrl = process.env.BLOCKFROST_PREPROD_URL;
 const blockfrostProjectId = process.env.BLOCKFROST_PROJECT_ID;
 const evmPrivateKey = process.env.EVM_PRIVATE_KEY as `0x${string}` | undefined;
