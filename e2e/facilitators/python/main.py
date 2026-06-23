@@ -31,7 +31,7 @@ from pydantic import BaseModel
 from solders.keypair import Keypair
 
 from x402 import x402Facilitator
-from datetime import UTC, datetime
+from datetime import datetime, timezone
 
 from x402.extensions.bazaar import DiscoveryResource, extract_discovery_info
 from x402.extensions.eip2612_gas_sponsoring import EIP2612_GAS_SPONSORING
@@ -156,9 +156,7 @@ class Erc20ApprovalSigner:
                         "value": deficit,
                         "gas": 21000,
                         "gasPrice": w3.eth.gas_price,
-                        "nonce": w3.eth.get_transaction_count(
-                            self._signer._account.address
-                        ),
+                        "nonce": self._signer._reserve_nonce(),
                         "chainId": w3.eth.chain_id,
                     }
                     signed_fund = self._signer._account.sign_transaction(fund_tx)
@@ -228,7 +226,7 @@ def _handle_after_verify(ctx: Any) -> None:
                         if hasattr(ctx.requirements, "model_dump")
                         else ctx.requirements
                     ],
-                    last_updated=datetime.now(UTC).isoformat().replace("+00:00", "Z"),
+                    last_updated=datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
                     description=discovered.description,
                     mime_type=discovered.mime_type,
                     service_name=discovered.service_name,

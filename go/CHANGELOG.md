@@ -1,3 +1,22 @@
+## v2.16.0 - 2026-06-19
+### Added
+- Add Go sign-in-with-x server and client support, including SIWX storage, auth hooks, EVM EIP-191 signing and verification, HTTP auth retry, TS-compatible profile, weather, and joke examples, and interoperability fixes for SIWE empty statements, net/http 402 JSON responses, and TS server payment payload extension echo validation ([#2485](https://github.com/x402-foundation/x402/pull/2485)) - Thanks [@wnjoon](https://github.com/wnjoon)!
+- Adds SIWX support for undeployed EIP-6492 and SVM ([#2669](https://github.com/x402-foundation/x402/pull/2669)) - Thanks [@phdargen](https://github.com/phdargen)!
+### Fixed
+- Added a dynamicInfoFields capability so an extension can mark certain info fields (nonces, timestamps) as regenerated per PaymentRequired response. Those fields are then excluded from the client-echo validatio (extension_echo_mismatch), while all other fields stay strictly compared. ([#2653](https://github.com/x402-foundation/x402/pull/2653)) - Thanks [@phdargen](https://github.com/phdargen)!
+
+## v2.15.0 - 2026-06-12
+### Added
+- Add Mezo mainnet (chain ID 31612) support with mUSD as the default stablecoin ([#2590](https://github.com/x402-foundation/x402/pull/2590)) - Thanks [@ryanRfox](https://github.com/ryanRfox)!
+- Add XDC Network mainnet (chain ID 50) and Apothem testnet (chain ID 51) support with USDC as the default stablecoin ([#2597](https://github.com/x402-foundation/x402/pull/2597)) - Thanks [@AnilChinchawale](https://github.com/AnilChinchawale)!
+- Core and EVM plumbing for the ERC-8021 builder-code extension. The client now deep-merges extensions while preserving server-declared fields and re-merges them after client enrichment; the resource server validates client-echoed extension info and rejects mismatches with extension_echo_mismatch. The FacilitatorEvmSigner.WriteContract method gains a dataSuffix parameter, and the base evm package adds data-suffix helpers (ResolveDataSuffix, AppendDataSuffix) plus the BuilderCodeFacilitatorExtension interface, threaded through all EVM settle paths (exact EIP-3009 incl. V1, permit2/EIP-2612, upto, and batch-settlement) so a registered facilitator extension can append an ERC-8021 calldata suffix to settlement transactions. ([#2575](https://github.com/x402-foundation/x402/pull/2575)) - Thanks [@phdargen](https://github.com/phdargen)!
+- builder-code extension now supports multiple service codes (`s`). NewBuilderCodeClientExtension accepts one or more codes (variadic), BuilderCodeExtensionData.S is now a []string, and the facilitator/CBOR encode and parse paths keep every valid entry so layered clients (e.g. an MCP middleware) can attribute multiple participants onchain. ([#2606](https://github.com/x402-foundation/x402/pull/2606)) - Thanks [@phdargen](https://github.com/phdargen)!
+### Changed
+- Set EVM and batch-settlement authorization validAfter to 0, use maxTimeoutSeconds for validBefore/deadlines, and raise the default resource server maxTimeoutSeconds from 60 to 300 to reduce onchain timing failures when payloads are queued or block timestamps lag. ([#2601](https://github.com/x402-foundation/x402/pull/2601)) - Thanks [@phdargen](https://github.com/phdargen)!
+### Fixed
+- EVM facilitator verify now rejects payments whose asset address has no bytecode (EOA). Calling any function on an EOA via eth_call silently returns empty data without reverting, causing on-chain simulation to pass and the subsequent settlement to land as a no-op with no Transfer event emitted. The fix calls eth_getCode on the asset address early in verifyEIP3009, VerifyPermit2, and VerifyUptoPermit2; any address with no bytecode is rejected with asset_not_deployed_contract. ([#2554](https://github.com/x402-foundation/x402/pull/2554)) - Thanks [@CarsonRoscoe](https://github.com/CarsonRoscoe)!
+- Cache SVM mint metadata in exact clients to avoid repeated mint account RPC lookups. ([#2456](https://github.com/x402-foundation/x402/pull/2456)) - Thanks [@wnjoon](https://github.com/wnjoon)!
+
 ## v2.14.0 - 2026-05-29
 ### Fixed
 - Update module path to `github.com/x402-foundation/x402/go/v2` so consumers can resolve tagged releases (e.g. `go get github.com/x402-foundation/x402/go/v2@latest`) instead of pseudo-versions.

@@ -8,8 +8,11 @@ import { BatchSettlementEvmScheme } from "@x402/evm/batch-settlement/server";
 import { ExactSvmScheme } from "@x402/svm/exact/server";
 import { ExactAptosScheme } from "@x402/aptos/exact/server";
 import { ExactHederaScheme } from "@x402/hedera/exact/server";
+import { KEETA_TESTNET_CAIP2 } from "@x402/keeta";
+import { ExactKeetaScheme } from "@x402/keeta/exact/server";
 import { ExactStellarScheme } from "@x402/stellar/exact/server";
 import { ExactCardanoScheme } from "@x402/cardano/exact/server";
+import { ExactTvmScheme } from "@x402/tvm/exact/server";
 import { bazaarResourceServerExtension, declareDiscoveryExtension } from "@x402/extensions/bazaar";
 import {
   declareEip2612GasSponsoringExtension,
@@ -28,22 +31,27 @@ dotenv.config();
  */
 
 const PORT = process.env.PORT || "4021";
-const AVM_NETWORK = (process.env.AVM_NETWORK || "algorand:SGO1GKSzyE7IEPItTxCByw9x8FmnrCDexi9/cOUJOiI=") as `${string}:${string}`;
+const AVM_NETWORK = (process.env.AVM_NETWORK ||
+  "algorand:SGO1GKSzyE7IEPItTxCByw9x8FmnrCDexi9/cOUJOiI=") as `${string}:${string}`;
 const EVM_NETWORK = (process.env.EVM_NETWORK || "eip155:84532") as `${string}:${string}`;
 const SVM_NETWORK = (process.env.SVM_NETWORK ||
   "solana:EtWTRABZaYq6iMfeYKouRu166VU2xqa1") as `${string}:${string}`;
 const APTOS_NETWORK = (process.env.APTOS_NETWORK || "aptos:2") as `${string}:${string}`;
 const HEDERA_NETWORK = (process.env.HEDERA_NETWORK || "hedera:testnet") as `${string}:${string}`;
+const KEETA_NETWORK = (process.env.KEETA_NETWORK || KEETA_TESTNET_CAIP2) as `${string}:${string}`;
 const STELLAR_NETWORK = (process.env.STELLAR_NETWORK || "stellar:testnet") as `${string}:${string}`;
 const CARDANO_NETWORK = (process.env.CARDANO_NETWORK || "cardano:preprod") as `${string}:${string}`;
+const TVM_NETWORK = (process.env.TVM_NETWORK || "tvm:-3") as `${string}:${string}`;
 const EVM_PAYEE_ADDRESS = process.env.EVM_PAYEE_ADDRESS as `0x${string}`;
 const SVM_PAYEE_ADDRESS = process.env.SVM_PAYEE_ADDRESS as string;
 const EVM_PERMIT2_ASSET = process.env.EVM_PERMIT2_ASSET as `0x${string}`;
 const AVM_PAYEE_ADDRESS = process.env.AVM_PAYEE_ADDRESS as string;
 const APTOS_PAYEE_ADDRESS = process.env.APTOS_PAYEE_ADDRESS as string;
 const HEDERA_PAYEE_ADDRESS = process.env.HEDERA_PAYEE_ADDRESS as string | undefined;
+const KEETA_PAYEE_ADDRESS = process.env.KEETA_PAYEE_ADDRESS as string | undefined;
 const STELLAR_PAYEE_ADDRESS = process.env.STELLAR_PAYEE_ADDRESS as string | undefined;
 const CARDANO_PAYEE_ADDRESS = process.env.CARDANO_PAYEE_ADDRESS as string | undefined;
+const TVM_PAYEE_ADDRESS = process.env.TVM_PAYEE_ADDRESS as string | undefined;
 const HEDERA_ASSET = process.env.HEDERA_ASSET ?? "0.0.0"; // 0.0.0 = HBAR or 0.0.429274 for USDC testnet
 const HEDERA_AMOUNT = process.env.HEDERA_AMOUNT ?? "100000"; // price in smallest units (tinybars or token decimals), defaults to 0.001 HBAR or 0.1 USDC
 const facilitatorUrl = process.env.FACILITATOR_URL;
@@ -104,11 +112,17 @@ if (APTOS_PAYEE_ADDRESS) {
 if (HEDERA_PAYEE_ADDRESS) {
   server.register("hedera:*", new ExactHederaScheme());
 }
+if (KEETA_PAYEE_ADDRESS) {
+  server.register("keeta:*", new ExactKeetaScheme());
+}
 if (STELLAR_PAYEE_ADDRESS) {
   server.register("stellar:*", new ExactStellarScheme());
 }
 if (CARDANO_PAYEE_ADDRESS) {
   server.register("cardano:*", new ExactCardanoScheme());
+}
+if (TVM_PAYEE_ADDRESS) {
+  server.register("tvm:*", new ExactTvmScheme());
 }
 
 // Register Bazaar discovery extension
@@ -162,6 +176,20 @@ app.get("/exact/hedera", (req, res, next) => {
 });
 
 /**
+ * Pre- middleware guard for optional Keeta endpoint
+ * Returns 501 Not Implemented if Keeta is not configured
+ */
+app.get("/exact/keeta", (req, res, next) => {
+  if (!KEETA_PAYEE_ADDRESS) {
+    return res.status(501).json({
+      error: "Keeta payments not configured",
+      message: "KEETA_PAYEE_ADDRESS environment variable is not set",
+    });
+  }
+  next();
+});
+
+/**
  * Pre-middleware guard for optional Stellar endpoint
  * Returns 501 Not Implemented if Stellar is not configured
  */
@@ -190,6 +218,20 @@ app.use("/exact/cardano", (req, res, next) => {
 });
 
 /**
+ * Pre-middleware guard for optional TVM endpoint
+ * Returns 501 Not Implemented if TVM is not configured
+ */
+app.use("/exact/tvm", (req, res, next) => {
+  if (!TVM_PAYEE_ADDRESS) {
+    return res.status(501).json({
+      error: "TVM payments not configured",
+      message: "TVM_PAYEE_ADDRESS environment variable is not set",
+    });
+  }
+  next();
+});
+
+/**
  * Configure x402 payment middleware using builder pattern
  *
  * This middleware protects endpoints with $0.001 USDC payment requirements
@@ -201,32 +243,32 @@ app.use(
       // Route-specific payment configuration
       ...(AVM_PAYEE_ADDRESS
         ? {
-          "GET /exact/avm": {
-            accepts: {
-              payTo: AVM_PAYEE_ADDRESS,
-              scheme: "exact",
-              price: "$0.001",
-              network: AVM_NETWORK,
-            },
-            extensions: {
-              ...declareDiscoveryExtension({
-                output: {
-                  example: {
-                    message: "Protected endpoint accessed successfully",
-                    timestamp: "2024-01-01T00:00:00Z",
-                  },
-                  schema: {
-                    properties: {
-                      message: { type: "string" },
-                      timestamp: { type: "string" },
+            "GET /exact/avm": {
+              accepts: {
+                payTo: AVM_PAYEE_ADDRESS,
+                scheme: "exact",
+                price: "$0.001",
+                network: AVM_NETWORK,
+              },
+              extensions: {
+                ...declareDiscoveryExtension({
+                  output: {
+                    example: {
+                      message: "Protected endpoint accessed successfully",
+                      timestamp: "2024-01-01T00:00:00Z",
                     },
-                    required: ["message", "timestamp"],
+                    schema: {
+                      properties: {
+                        message: { type: "string" },
+                        timestamp: { type: "string" },
+                      },
+                      required: ["message", "timestamp"],
+                    },
                   },
-                },
-              }),
+                }),
+              },
             },
-          },
-        }
+          }
         : {}),
       "GET /batch-settlement/evm/eip3009": {
         accepts: {
@@ -333,32 +375,32 @@ app.use(
       },
       ...(APTOS_PAYEE_ADDRESS
         ? {
-          "GET /exact/aptos": {
-            accepts: {
-              payTo: APTOS_PAYEE_ADDRESS,
-              scheme: "exact",
-              price: "$0.001",
-              network: APTOS_NETWORK,
-            },
-            extensions: {
-              ...declareDiscoveryExtension({
-                output: {
-                  example: {
-                    message: "Protected endpoint accessed successfully",
-                    timestamp: "2024-01-01T00:00:00Z",
-                  },
-                  schema: {
-                    properties: {
-                      message: { type: "string" },
-                      timestamp: { type: "string" },
+            "GET /exact/aptos": {
+              accepts: {
+                payTo: APTOS_PAYEE_ADDRESS,
+                scheme: "exact",
+                price: "$0.001",
+                network: APTOS_NETWORK,
+              },
+              extensions: {
+                ...declareDiscoveryExtension({
+                  output: {
+                    example: {
+                      message: "Protected endpoint accessed successfully",
+                      timestamp: "2024-01-01T00:00:00Z",
                     },
-                    required: ["message", "timestamp"],
+                    schema: {
+                      properties: {
+                        message: { type: "string" },
+                        timestamp: { type: "string" },
+                      },
+                      required: ["message", "timestamp"],
+                    },
                   },
-                },
-              }),
+                }),
+              },
             },
-          },
-        }
+          }
         : {}),
       ...(HEDERA_PAYEE_ADDRESS
         ? {
@@ -377,6 +419,35 @@ app.use(
                   output: {
                     example: {
                       message: "Protected Hedera endpoint accessed successfully",
+                      timestamp: "2024-01-01T00:00:00Z",
+                    },
+                    schema: {
+                      properties: {
+                        message: { type: "string" },
+                        timestamp: { type: "string" },
+                      },
+                      required: ["message", "timestamp"],
+                    },
+                  },
+                }),
+              },
+            },
+          }
+        : {}),
+      ...(KEETA_PAYEE_ADDRESS
+        ? {
+            "GET /exact/keeta": {
+              accepts: {
+                payTo: KEETA_PAYEE_ADDRESS,
+                scheme: "exact",
+                price: "$0.001",
+                network: KEETA_NETWORK,
+              },
+              extensions: {
+                ...declareDiscoveryExtension({
+                  output: {
+                    example: {
+                      message: "Protected Keeta endpoint accessed successfully",
                       timestamp: "2024-01-01T00:00:00Z",
                     },
                     schema: {
@@ -536,64 +607,93 @@ app.use(
       },
       ...(STELLAR_PAYEE_ADDRESS
         ? {
-          "GET /exact/stellar": {
-            accepts: {
-              payTo: STELLAR_PAYEE_ADDRESS!,
-              scheme: "exact",
-              price: "$0.001",
-              network: STELLAR_NETWORK,
-            },
-            extensions: {
-              ...declareDiscoveryExtension({
-                output: {
-                  example: {
-                    message: "Protected Stellar endpoint accessed successfully",
-                    timestamp: "2024-01-01T00:00:00Z",
-                  },
-                  schema: {
-                    properties: {
-                      message: { type: "string" },
-                      timestamp: { type: "string" },
+            "GET /exact/stellar": {
+              accepts: {
+                payTo: STELLAR_PAYEE_ADDRESS!,
+                scheme: "exact",
+                price: "$0.001",
+                network: STELLAR_NETWORK,
+              },
+              extensions: {
+                ...declareDiscoveryExtension({
+                  output: {
+                    example: {
+                      message: "Protected Stellar endpoint accessed successfully",
+                      timestamp: "2024-01-01T00:00:00Z",
                     },
-                    required: ["message", "timestamp"],
+                    schema: {
+                      properties: {
+                        message: { type: "string" },
+                        timestamp: { type: "string" },
+                      },
+                      required: ["message", "timestamp"],
+                    },
                   },
-                },
-              }),
+                }),
+              },
             },
-          },
-        }
+          }
+        : {}),
+      ...(TVM_PAYEE_ADDRESS
+        ? {
+            "GET /exact/tvm": {
+              accepts: {
+                payTo: TVM_PAYEE_ADDRESS,
+                scheme: "exact",
+                price: "$0.001",
+                network: TVM_NETWORK,
+              },
+              extensions: {
+                ...declareDiscoveryExtension({
+                  output: {
+                    example: {
+                      message: "Protected TVM endpoint accessed successfully",
+                      timestamp: "2024-01-01T00:00:00Z",
+                    },
+                    schema: {
+                      properties: {
+                        message: { type: "string" },
+                        timestamp: { type: "string" },
+                      },
+                      required: ["message", "timestamp"],
+                    },
+                  },
+                }),
+              },
+            },
+          }
         : {}),
       ...(CARDANO_PAYEE_ADDRESS
         ? {
-          "GET /exact/cardano": {
-            accepts: {
-              payTo: CARDANO_PAYEE_ADDRESS!,
-              scheme: "exact",
-              // Pay in lovelace (native tADA) so the e2e is fundable directly
-              // from the Cardano testnet faucet; preprod USDM is not faucet-
-              // available. 2 ADA is comfortably above the min-UTXO threshold.
-              price: { amount: "2000000", asset: "lovelace" },
-              network: CARDANO_NETWORK,
-            },
-            extensions: {
-              ...declareDiscoveryExtension({
-                output: {
-                  example: {
-                    message: "Protected Cardano endpoint accessed successfully",
-                    timestamp: "2024-01-01T00:00:00Z",
-                  },
-                  schema: {
-                    properties: {
-                      message: { type: "string" },
-                      timestamp: { type: "string" },
+            "GET /exact/cardano": {
+              accepts: {
+                payTo: CARDANO_PAYEE_ADDRESS!,
+                scheme: "exact",
+                // Pay in lovelace (native tADA) so the e2e is fundable directly
+                // from the Cardano testnet faucet; preprod USDM is not faucet-
+                // available. 2 ADA is comfortably above the min-UTXO threshold.
+                price: { amount: "2000000", asset: "lovelace" },
+                network: CARDANO_NETWORK,
+              },
+              extensions: {
+                ...declareDiscoveryExtension({
+                  output: {
+                    example: {
+                      message: "Protected Cardano endpoint accessed successfully",
+                      timestamp: "2024-01-01T00:00:00Z",
                     },
-                    required: ["message", "timestamp"],
+                    schema: {
+                      properties: {
+                        message: { type: "string" },
+                        timestamp: { type: "string" },
+                      },
+                      required: ["message", "timestamp"],
+                    },
                   },
-                },
-              }),
+                }),
+              },
             },
-          },
-        }
+          }
         : {}),
     },
     server, // Pass pre-configured server instance
@@ -704,6 +804,20 @@ app.get("/exact/hedera", (req, res) => {
 });
 
 /**
+ * Protected Keeta endpoint - requires payment to access
+ *
+ * This endpoint demonstrates a resource protected by x402 payment middleware for Keeta.
+ * Clients must provide a valid payment signature to access this endpoint.
+ * Note: 501 check is handled by pre-middleware guard above.
+ */
+app.get("/exact/keeta", (req, res) => {
+  res.json({
+    message: "Protected Keeta endpoint accessed successfully",
+    timestamp: new Date().toISOString(),
+  });
+});
+
+/**
  * Protected Permit2 ERC-20 endpoint - requires payment via Permit2 flow with ERC-20 approval
  *
  * This endpoint demonstrates the ERC-20 approval gas sponsoring flow for tokens
@@ -805,6 +919,22 @@ if (CARDANO_PAYEE_ADDRESS) {
 }
 
 /**
+ * Protected TVM endpoint - requires payment to access
+ *
+ * This endpoint demonstrates a resource protected by x402 payment middleware for TVM.
+ * Clients must provide a valid payment signature to access this endpoint.
+ * Note: 501 check is handled by pre-middleware guard above.
+ */
+if (TVM_PAYEE_ADDRESS) {
+  app.get("/exact/tvm", (req, res) => {
+    res.json({
+      message: "Protected TVM endpoint accessed successfully",
+      timestamp: new Date().toISOString(),
+    });
+  });
+}
+
+/**
  * Health check endpoint - no payment required
  *
  * Used to verify the server is running and responsive.
@@ -847,13 +977,16 @@ app.listen(parseInt(PORT), () => {
 ║  Hedera Network: ${HEDERA_NETWORK}                     ║
 ║  Stellar Network: ${STELLAR_NETWORK}║
 ║  Cardano Network: ${CARDANO_NETWORK}║
+║  TVM Network: ${TVM_NETWORK}║
 ║  AVM Payee:    ${AVM_PAYEE_ADDRESS || "(not configured)"}
 ║  EVM Payee:    ${EVM_PAYEE_ADDRESS}                    ║
 ║  SVM Payee:    ${SVM_PAYEE_ADDRESS}                    ║
 ║  Aptos Payee:  ${APTOS_PAYEE_ADDRESS || "(not configured)"}
 ║  Hedera Payee: ${HEDERA_PAYEE_ADDRESS || "(not configured)"}
+║  Keeta Payee:  ${KEETA_PAYEE_ADDRESS || "(not configured)"}
 ║  Stellar Payee: ${STELLAR_PAYEE_ADDRESS || "(not configured)"}
 ║  Cardano Payee: ${CARDANO_PAYEE_ADDRESS || "(not configured)"}
+║  TVM Payee: ${TVM_PAYEE_ADDRESS || "(not configured)"}
 ║                                                        ║
 ║  Endpoints:                                            ║
 ║  • GET  /exact/avm                            (AVM)           ║
@@ -868,8 +1001,10 @@ app.listen(parseInt(PORT), () => {
 ║  • GET  /exact/svm                            (SVM)           ║
 ║  • GET  /exact/aptos                          (Aptos)         ║
 ║  • GET  /exact/hedera                         (Hedera)        ║
+║  • GET  /exact/keeta                           (Keeta)        ║
 ║  • GET  /exact/stellar                        (Stellar)       ║
 ║  • GET  /exact/cardano                        (Cardano)       ║
+║  • GET  /exact/tvm                            (TVM)           ║
 ║  • GET  /health                (no payment required)       ║
 ║  • POST /close                 (shutdown server)           ║
 ╚════════════════════════════════════════════════════════╝

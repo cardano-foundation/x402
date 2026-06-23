@@ -372,6 +372,95 @@ describe("UptoEvmScheme (Facilitator)", () => {
     });
   });
 
+  describe("settle-time verification convention (spec §Phase 4)", () => {
+    // These tests verify the settle-time verification convention documented in
+    // specs/schemes/upto/scheme_upto_evm.md §Phase 4 "Settle-Time Verification".
+    //
+    // The wire shape for a partial settlement has:
+    //   paymentRequirements.amount = actual metered amount (e.g. 1858)
+    //   permit2Authorization.permitted.amount = authorized ceiling (e.g. 20000)
+    //
+    // The facilitator MUST verify the signature against permitted.amount (the
+    // ceiling), NOT requirements.amount (the metered actual). Enforcing
+    // requirements.amount === permitted.amount at settle time breaks all partial
+    // settlements. See: https://github.com/x402-foundation/x402/issues/2437
+
+    it("should verify signature against permitted.amount, not requirements.amount", async () => {
+      const ceiling = "20000";
+      const metered = "1858";
+
+      const p2 = makePermit2Payload();
+      p2.permit2Authorization.permitted.amount = ceiling;
+      const payload = makePayload(p2);
+      const requirements = makeRequirements({ amount: metered });
+
+      const result = await settleUptoPermit2(mockSigner, payload, requirements, p2);
+
+      expect(result.success).toBe(true);
+
+      // Verify that verifyTypedData was called with the ceiling amount,
+      // not the metered amount — this is the swap convention.
+      const verifyCall = (mockSigner.verifyTypedData as ReturnType<typeof vi.fn>).mock.calls[0][0];
+      expect(verifyCall.message.permitted.amount).toBe(BigInt(ceiling));
+    });
+
+    it("should transfer the metered amount on-chain, not the ceiling", async () => {
+      const ceiling = "20000";
+      const metered = "1858";
+
+      const p2 = makePermit2Payload();
+      p2.permit2Authorization.permitted.amount = ceiling;
+      const payload = makePayload(p2);
+      const requirements = makeRequirements({ amount: metered });
+
+      const result = await settleUptoPermit2(mockSigner, payload, requirements, p2);
+
+      expect(result.success).toBe(true);
+      expect(result.amount).toBe(metered);
+
+      const writeCall = (mockSigner.writeContract as ReturnType<typeof vi.fn>).mock.calls[0][0];
+      expect(writeCall.args[1]).toBe(BigInt(metered));
+    });
+
+    it("should succeed across a range of partial settlement ratios", async () => {
+      const ceiling = "1000000";
+      const testAmounts = ["1", "500000", "999999", "1000000"];
+
+      for (const metered of testAmounts) {
+        vi.clearAllMocks();
+        mockSigner.readContract = vi.fn().mockResolvedValue(BigInt("999999999999999999"));
+        mockSigner.verifyTypedData = vi.fn().mockResolvedValue(true);
+        mockSigner.writeContract = vi.fn().mockResolvedValue("0xtxhash1234" as `0x${string}`);
+        mockSigner.waitForTransactionReceipt = vi.fn().mockResolvedValue({ status: "success" });
+
+        const p2 = makePermit2Payload();
+        p2.permit2Authorization.permitted.amount = ceiling;
+        const payload = makePayload(p2);
+        const requirements = makeRequirements({ amount: metered });
+
+        const result = await settleUptoPermit2(mockSigner, payload, requirements, p2);
+
+        expect(result.success).toBe(true);
+        expect(result.amount).toBe(metered);
+      }
+    });
+
+    it("should reject when metered amount exceeds ceiling", async () => {
+      const ceiling = "20000";
+      const metered = "20001";
+
+      const p2 = makePermit2Payload();
+      p2.permit2Authorization.permitted.amount = ceiling;
+      const payload = makePayload(p2);
+      const requirements = makeRequirements({ amount: metered });
+
+      const result = await settleUptoPermit2(mockSigner, payload, requirements, p2);
+
+      expect(result.success).toBe(false);
+      expect(result.errorReason).toBe(ErrUptoSettlementExceedsAmount);
+    });
+  });
+
   describe("settle error mapping", () => {
     it("should map Permit2612AmountMismatch revert", async () => {
       mockSigner.writeContract = vi

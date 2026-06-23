@@ -14,10 +14,11 @@ x402 uses [CAIP-2](https://chainagnostic.org/CAIPs/caip-2) standard network iden
 - **Stellar**: `stellar:<network>` (`pubnet` or `testnet`)
 - **Aptos**: `aptos:<chainId>` (e.g., `aptos:1` for mainnet)
 - **Hedera**: `hedera:<network>` (`mainnet` or `testnet`)
+- **Keeta**: `keeta:<networkId>` (e.g., `keeta:21378` for mainnet)
 
 ## Token Support
 
-x402 supports tokens on EVM, Solana, TON, Stellar, Aptos, and Hedera networks:
+x402 supports tokens on EVM, Solana, TON, Stellar, Aptos, Hedera, and Keeta networks:
 
 | Ecosystem | Supported Tokens | Transfer Method |
 |-----------|------------------|-----------------|
@@ -27,6 +28,7 @@ x402 supports tokens on EVM, Solana, TON, Stellar, Aptos, and Hedera networks:
 | **Stellar** | Any Soroban token implementing SEP-41 | `transfer(from, to, amount)` |
 | **Aptos** | Any fungible asset | `primary_fungible_store::transfer` |
 | **Hedera** | HBAR or any HTS fungible token | Hedera Transfer Transaction |
+| **Keeta** | Any Keeta token | `SEND` operation |
 
 Facilitators support **networks**, not specific tokens — any compatible token works on any facilitator that supports that network.
 
@@ -95,12 +97,15 @@ When you use `"$0.01"` syntax, x402 needs to know which stablecoin to use. The f
 | Stable | `eip155:988` | `0x779Ded0c9e1022225f8E0630b35a9b54bE713736` | USDT0 | 6 | EIP-3009 |
 | Stable Testnet | `eip155:2201` | `0x78Cf24370174180738C5B8E352B6D14c83a6c9A9` | USDT0 | 6 | EIP-3009 |
 | MegaETH | `eip155:4326` | `0xFAfDdbb3FC7688494971a79cc65DCa3EF82079E7` | MegaUSD | 18 | Permit2 + EIP-2612 |
+| Mezo | `eip155:31612` | `0xdD468A1DDc392dcdbEf6db6e34E89AA338F9F186` | Mezo USD | 18 | Permit2 + EIP-2612 |
 | Mezo Testnet | `eip155:31611` | `0x118917a40FAf1CD7a13dB0Ef56C86De7973Ac503` | Mezo USD | 18 | Permit2 + EIP-2612 |
 | Radius | `eip155:723487` | `0x33ad9e4BD16B69B5BFdED37D8B5D9fF9aba014Fb` | Stable Coin | 6 | Permit2 + EIP-2612 |
 | Radius Testnet | `eip155:72344` | `0x33ad9e4BD16B69B5BFdED37D8B5D9fF9aba014Fb` | Stable Coin | 6 | Permit2 + EIP-2612 |
 | ADI Chain | `eip155:36900` | `0x9cb8142aEBBcdc60AF7c97Af897A67A8f3CA71C2` | USDC.e | 6 | EIP-3009 |
 | HPP | `eip155:190415` | `0x401eCb1D350407f13ba348573E5630B83638E30D` | Bridged USDC | 6 | EIP-3009 |
 | HPP Sepolia | `eip155:181228` | `0x401eCb1D350407f13ba348573E5630B83638E30D` | Bridged USDC | 6 | EIP-3009 |
+| XDC Network | `eip155:50` | `0xfA2958CB79b0491CC627c1557F441eF849Ca8eb1` | USDC | 6 | EIP-3009 |
+| XDC Apothem Testnet | `eip155:51` | `0xb5AB69F7bBada22B28e79C8FFAECe55eF1c771D4` | USDC | 6 | EIP-3009 |
 
 
 
@@ -147,6 +152,13 @@ When you use `"$0.01"` syntax, x402 needs to know which stablecoin to use. The f
 | Hedera Testnet | `hedera:testnet` | `0.0.429274` (USDC) | 6 |
 
 HBAR (native token) is also supported using asset ID `0.0.0`, with amounts in tinybars (1 HBAR = 10⁸ tinybars).
+
+### Keeta
+
+| Chain | CAIP-2 | Token Address | Decimals |
+|-------|--------|---------------|----------|
+| Keeta Mainnet | `keeta:21378` | `keeta_amnkge74xitii5dsobstldatv3irmyimujfjotftx7plaaaseam4bntb7wnna` (USDC) | 6 |
+| Keeta Testnet | `keeta:1413829460` | `keeta_apna75yhhvnv4ei7ape55hndk4yepno7a7i2mhtiwahiygixjcnmvswxhnmnk` (USDC) | 6 |
 
 ## Adding Support for New Networks
 
@@ -244,7 +256,7 @@ Network support in x402 depends on which facilitator you use. See [Facilitators]
 
 ### x402.org Facilitator
 
-* **Supports**: `eip155:84532` (Base Sepolia), `solana:EtWTRABZaYq6iMfeYKouRu166VU2xqa1` (Solana Devnet), `stellar:testnet` (Stellar Testnet), `aptos:2` (Aptos Testnet)
+* **Supports**: `eip155:84532` (Base Sepolia), `solana:EtWTRABZaYq6iMfeYKouRu166VU2xqa1` (Solana Devnet), `stellar:testnet` (Stellar Testnet), `aptos:2` (Aptos Testnet), `hedera:testnet` (Hedera Testnet)
 * **Notes**: Recommended for testing and development. This is the default facilitator in the x402 packages and requires no setup.
 
 ### Production Facilitators
@@ -255,7 +267,7 @@ Multiple production-ready facilitators are available supporting various networks
 
 | Facilitator Type | Networks Supported | Production Ready | Requirements |
 | ---------------- | ------------------ | ---------------- | ------------ |
-| x402.org (Default) | `eip155:84532`, `solana:EtWTRABZaYq6iMfeYKouRu166VU2xqa1`, `stellar:testnet`, `aptos:2` | Testnet only | None |
+| x402.org (Default) | `eip155:84532`, `solana:EtWTRABZaYq6iMfeYKouRu166VU2xqa1`, `stellar:testnet`, `aptos:2`, `hedera:testnet` | Testnet only | None |
 | [Production Facilitators](/dev-tools/facilitators) | Various (Base, Solana, Polygon, Avalanche, etc.) | Yes | Varies |
 | Self-hosted | Any network  | Yes | Technical setup |
 
@@ -280,7 +292,7 @@ Video Guide: [Adding EVM Chains to x402](https://x.com/jaycoolh/status/192085155
 
 Key takeaways:
 
-* **Any EVM chain** is supported via `eip155:<chainId>` — plus Solana, TON (TVM), Algorand, Stellar, Aptos, and Hedera
+* **Any EVM chain** is supported via `eip155:<chainId>` — plus Solana, TON (TVM), Algorand, Stellar, Aptos, Hedera, and Keeta
 * [Default assets](#default-assets-for-dollar-string-pricing) are a convenience for `"$0.01"` dollar-string pricing; explicit `TokenAmount` works on any chain
 * Any ERC-20 token works on any EVM facilitator (via EIP-3009 or Permit2)
 * CAIP-2 identifiers provide unambiguous cross-chain support

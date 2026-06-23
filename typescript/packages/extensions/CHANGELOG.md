@@ -1,5 +1,28 @@
 # @x402/extensions Changelog
 
+## 2.16.0
+
+### Minor Changes
+
+- [59ac597](https://github.com/x402-foundation/x402/commit/59ac597): Added a dynamicInfoFields capability so an extension can mark certain info fields (nonces, timestamps) as regenerated per PaymentRequired response. Those fields are then excluded from the client-echo validatio (extension_echo_mismatch), while all other fields stay strictly compared. Wired into the offer-receipt (["offers"]) and sign-in-with-x (["nonce", "issuedAt", "expirationTime"]) extensions. ([#2653](https://github.com/x402-foundation/x402/pull/2653)) - Thanks [@phdargen](https://github.com/phdargen)!
+- Updated dependencies [59ac597](https://github.com/x402-foundation/x402/commit/59ac597)
+  - @x402/core@2.16.0
+
+## 2.15.0
+
+### Minor Changes
+
+- [ae0bf9b](https://github.com/x402-foundation/x402/commit/ae0bf9b): builder-code: accept and encode multiple service codes (`s`). The client extension now accepts a string or an array of codes, and the facilitator/CBOR layers encode and parse every valid entry, so layered clients (e.g. an MCP middleware) can attribute multiple participants onchain. ([#2606](https://github.com/x402-foundation/x402/pull/2606)) - Thanks [@phdargen](https://github.com/phdargen)!
+- [6acb8fc](https://github.com/x402-foundation/x402/commit/6acb8fc): Implemented builder-code extension ([#2329](https://github.com/x402-foundation/x402/pull/2329)) - Thanks [@0xClouds](https://github.com/0xClouds) and [@pk-coinbase](https://github.com/pk-coinbase), [@phdargen](https://github.com/phdargen)!
+- Updated dependencies [bfa580e](https://github.com/x402-foundation/x402/commit/bfa580e)
+- Updated dependencies [3a60816](https://github.com/x402-foundation/x402/commit/3a60816)
+- Updated dependencies [7539e93](https://github.com/x402-foundation/x402/commit/7539e93)
+  - @x402/core@2.15.0
+
+### Patch Changes
+
+- [7539e93](https://github.com/x402-foundation/x402/commit/7539e93): Fixed client extension echo merging to preserve server-declared extension fields while adding client-provided extension data ([#2561](https://github.com/x402-foundation/x402/pull/2561)) - Thanks [@phdargen](https://github.com/phdargen)!
+
 ## 2.14.0
 
 ### Minor Changes

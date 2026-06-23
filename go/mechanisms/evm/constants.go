@@ -74,6 +74,7 @@ var (
 	ChainIDBaseSepolia   = big.NewInt(84532)
 	ChainIDMegaETH       = big.NewInt(4326)
 	ChainIDMonad         = big.NewInt(143)
+	ChainIDMezo          = big.NewInt(31612)
 	ChainIDMezoTestnet   = big.NewInt(31611)
 	ChainIDStable        = big.NewInt(988)
 	ChainIDStableTestnet = big.NewInt(2201)
@@ -85,6 +86,8 @@ var (
 	ChainIDADI           = big.NewInt(36900)
 	ChainIDHPP           = big.NewInt(190415)
 	ChainIDHPPSepolia    = big.NewInt(181228)
+	ChainIDXDC           = big.NewInt(50)
+	ChainIDXDCApothem    = big.NewInt(51)
 
 	// Network configurations
 	// See DEFAULT_ASSET.md for guidelines on adding new chains
@@ -138,6 +141,18 @@ var (
 				Name:     "USD Coin",
 				Version:  "2",
 				Decimals: DefaultDecimals,
+			},
+		},
+		// Mezo Mainnet (uses Permit2 instead of EIP-3009, supports EIP-2612)
+		"eip155:31612": {
+			ChainID: ChainIDMezo,
+			DefaultAsset: AssetInfo{
+				Address:             "0xdD468A1DDc392dcdbEf6db6e34E89AA338F9F186", // mUSD on Mezo
+				Name:                "Mezo USD",
+				Version:             "1",
+				Decimals:            18,
+				AssetTransferMethod: AssetTransferMethodPermit2,
+				SupportsEip2612:     true,
 			},
 		},
 		// Mezo Testnet (uses Permit2 instead of EIP-3009, supports EIP-2612)
@@ -252,6 +267,26 @@ var (
 			DefaultAsset: AssetInfo{
 				Address:  "0x401eCb1D350407f13ba348573E5630B83638E30D", // USDC.e (Bridged USDC) on HPP Sepolia
 				Name:     "Bridged USDC",
+				Version:  "2",
+				Decimals: DefaultDecimals,
+			},
+		},
+		// XDC Network Mainnet
+		"eip155:50": {
+			ChainID: ChainIDXDC,
+			DefaultAsset: AssetInfo{
+				Address:  "0xfA2958CB79b0491CC627c1557F441eF849Ca8eb1", // USDC (Bridged USDC Standard) on XDC Network
+				Name:     "USDC",
+				Version:  "2",
+				Decimals: DefaultDecimals,
+			},
+		},
+		// XDC Apothem Testnet
+		"eip155:51": {
+			ChainID: ChainIDXDCApothem,
+			DefaultAsset: AssetInfo{
+				Address:  "0xb5AB69F7bBada22B28e79C8FFAECe55eF1c771D4", // USDC (Bridged USDC Standard) on XDC Apothem
+				Name:     "USDC",
 				Version:  "2",
 				Decimals: DefaultDecimals,
 			},

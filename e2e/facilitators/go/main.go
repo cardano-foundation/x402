@@ -68,6 +68,9 @@ type realFacilitatorEvmSigner struct {
 	address    common.Address
 	client     *ethclient.Client
 	chainID    *big.Int
+	nonceMu    sync.Mutex
+	nextNonce  uint64
+	nonceInit  bool
 }
 
 func newRealFacilitatorEvmSigner(privateKeyHex string, rpcURL string) (*realFacilitatorEvmSigner, error) {
@@ -108,6 +111,26 @@ func (s *realFacilitatorEvmSigner) GetAddresses() []string {
 
 func (s *realFacilitatorEvmSigner) GetChainID(ctx context.Context) (*big.Int, error) {
 	return s.chainID, nil
+}
+
+func (s *realFacilitatorEvmSigner) reserveNonce(ctx context.Context) (uint64, error) {
+	s.nonceMu.Lock()
+	defer s.nonceMu.Unlock()
+
+	// Sync with chain so txs from outside this process (e.g. e2e harness
+	// fundClientForRevoke) are reflected before we reserve the next nonce.
+	pending, err := s.client.PendingNonceAt(ctx, s.address)
+	if err != nil {
+		return 0, fmt.Errorf("failed to get nonce: %w", err)
+	}
+	if !s.nonceInit || pending > s.nextNonce {
+		s.nextNonce = pending
+		s.nonceInit = true
+	}
+
+	nonce := s.nextNonce
+	s.nextNonce++
+	return nonce, nil
 }
 
 func (s *realFacilitatorEvmSigner) VerifyTypedData(
@@ -291,9 +314,9 @@ func (s *realFacilitatorEvmSigner) WriteContract(
 	data = evmmech.AppendDataSuffix(data, dataSuffix)
 
 	// Get nonce
-	nonce, err := s.client.PendingNonceAt(ctx, s.address)
+	nonce, err := s.reserveNonce(ctx)
 	if err != nil {
-		return "", fmt.Errorf("failed to get nonce: %w", err)
+		return "", err
 	}
 
 	// Get gas price
@@ -334,9 +357,9 @@ func (s *realFacilitatorEvmSigner) SendTransaction(
 	data []byte,
 ) (string, error) {
 	// Get nonce
-	nonce, err := s.client.PendingNonceAt(ctx, s.address)
+	nonce, err := s.reserveNonce(ctx)
 	if err != nil {
-		return "", fmt.Errorf("failed to get nonce: %w", err)
+		return "", err
 	}
 
 	// Get gas price
@@ -469,9 +492,9 @@ func (s *realFacilitatorEvmSigner) fundPayerGasIfNeeded(ctx context.Context, dec
 	deficit := new(big.Int).Sub(gasCost, payerBalance)
 	log.Printf("⛽ Funding payer %s with %s wei for gas", payerAddr.Hex(), deficit.String())
 
-	fundNonce, err := s.client.PendingNonceAt(ctx, s.address)
+	fundNonce, err := s.reserveNonce(ctx)
 	if err != nil {
-		return fmt.Errorf("failed to get funding nonce: %w", err)
+		return err
 	}
 	fundGasPrice, err := s.client.SuggestGasPrice(ctx)
 	if err != nil {

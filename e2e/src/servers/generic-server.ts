@@ -120,6 +120,10 @@ export class GenericServerProxy extends BaseProxy implements ServerProxy {
         ...(config.hederaAsset !== undefined ? { HEDERA_ASSET: config.hederaAsset } : {}),
         ...(config.hederaAmount !== undefined ? { HEDERA_AMOUNT: config.hederaAmount } : {}),
 
+        // Keeta network config
+        KEETA_NETWORK: config.networks.keeta.caip2,
+        KEETA_PAYEE_ADDRESS: config.keetaPayTo,
+
         // Stellar network config
         STELLAR_NETWORK: config.networks.stellar.caip2,
         STELLAR_RPC_URL: config.networks.stellar.rpcUrl,
@@ -265,7 +269,7 @@ export class GenericServerProxy extends BaseProxy implements ServerProxy {
 
 /**
  * Translates v2 CAIP-2 network format to v1 simple format for legacy servers
- * 
+ *
  * @param network - Network in CAIP-2 format (e.g., "eip155:84532")
  * @returns Network in v1 format (e.g., "base-sepolia")
  */

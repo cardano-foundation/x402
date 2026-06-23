@@ -13,6 +13,7 @@ pnpm install:all
 ```
 
 This will:
+
 1. Install TypeScript dependencies via `pnpm install`
 2. Run `install.sh` and `build.sh` for all clients, servers, and facilitators
 3. Handle nested directories (like `external-proxies/` and `local/`)
@@ -64,6 +65,7 @@ pnpm test --min
 ```
 
 Same interactive CLI, but with intelligent test minimization:
+
 - **90% fewer tests** compared to full mode
 - Each selected component is tested at least once across all variations
 - Skips redundant combinations that provide no additional coverage
@@ -79,8 +81,9 @@ pnpm test --min -v
 ```
 
 Add the `-v` flag to any command for verbose output:
+
 - Prints all facilitator logs
-- Prints all server logs  
+- Prints all server logs
 - Prints all client logs
 - Shows detailed information after each test scenario
 
@@ -117,6 +120,7 @@ CLIENT_SVM_PRIVATE_KEY=...          # Solana private key for client payments
 CLIENT_APTOS_PRIVATE_KEY=...        # Aptos private key for client payments (hex string)
 CLIENT_HEDERA_ACCOUNT_ID=0.0....    # Hedera account id for client payments
 CLIENT_HEDERA_PRIVATE_KEY=0x...     # Hedera ECDSA private key for client payments
+CLIENT_KEETA_MNEMONIC=...           # Keeta mnemonic for client payments
 CLIENT_STELLAR_PRIVATE_KEY=...      # Stellar private key for client payments
 CLIENT_TVM_PRIVATE_KEY=...          # TVM private key for client payments
 CLIENT_CARDANO_MNEMONIC=...         # Cardano wallet mnemonic (24 words) for client payments
@@ -126,6 +130,7 @@ SERVER_EVM_ADDRESS=0x...            # Where servers receive EVM payments
 SERVER_SVM_ADDRESS=...              # Where servers receive Solana payments
 SERVER_APTOS_ADDRESS=0x...          # Where servers receive Aptos payments
 SERVER_HEDERA_ADDRESS=0.0....       # Where servers receive Hedera payments
+SERVER_KEETA_ADDRESS=keeta_...      # Where servers receive Keeta payments
 SERVER_STELLAR_ADDRESS=...          # Where servers receive Stellar payments
 SERVER_TVM_ADDRESS=...              # Where servers receive TVM payments
 SERVER_CARDANO_ADDRESS=addr_test1... # Where servers receive Cardano payments
@@ -136,6 +141,7 @@ FACILITATOR_SVM_PRIVATE_KEY=...     # Solana private key for facilitator
 FACILITATOR_APTOS_PRIVATE_KEY=...   # Aptos private key for facilitator (hex string)
 FACILITATOR_HEDERA_ACCOUNT_ID=0.0... # Hedera fee payer account id for facilitator
 FACILITATOR_HEDERA_PRIVATE_KEY=0x... # Hedera ECDSA private key for facilitator
+FACILITATOR_KEETA_MNEMONIC=...      # Keeta mnemonic for facilitator
 FACILITATOR_STELLAR_PRIVATE_KEY=... # Stellar private key for facilitator
 FACILITATOR_TVM_PRIVATE_KEY=...     # TVM private key for facilitator
 FACILITATOR_CARDANO_MNEMONIC=...    # Cardano wallet mnemonic (24 words) for facilitator
@@ -197,6 +203,16 @@ The Cardano e2e endpoint is paid in **lovelace** (native tADA), so you only need
 - **Note:** the facilitator uses a highload-wallet-v3 account, so the facilitator's wallet address differs from your W5 address — fund the highload-v3 address, not the W5 one derived from the same key.
   <img width="228" height="228" alt="QR code for the testnet USDT transfer link" src="https://github.com/user-attachments/assets/da09ad03-388d-4960-88bf-afbacf4a7c65" />
 
+#### Keeta Testnet
+
+You need **three separate Keeta accounts** for e2e tests (client, server, facilitator):
+
+1. Go to [Keeta Testnet Wallet](https://wallet.test.keeta.com/) and follow the steps to create your wallet. Make sure to save your mnemonic (seed phrase) to keep access to your wallet. To get your Keeta address, click on "Receive" and copy the deposit address (starting with `keeta_`).
+2. Use the [Keeta Testnet Faucet](https://faucet.test.keeta.com/) to send Testnet KTA to your wallet.
+3. To get Testnet USDC on Keeta, go to the "Receive" page in the wallet, click on "Any token from Keeta Testnet", select "USDC from Base (Sepolia) Testnet" and copy the deposit address (starting with `0x`). Then go the [Circle Faucet](https://faucet.circle.com/), select Base network and enter your Base deposit address.
+
+> **Note:** The facilitator account only needs KTA (step 2). Client and server accounts need all three steps.
+
 ## Example Session
 
 ```bash
@@ -209,7 +225,7 @@ $ pnpm test --min
 ✔ Select servers › express, hono, legacy-express
 ✔ Select clients › axios, fetch, httpx
 ✔ Select extensions › bazaar
-✔ Select protocol families › EVM, SVM, Aptos, Hedera, Stellar, TVM
+✔ Select protocol families › EVM, SVM, Aptos, Hedera, Keeta, Stellar, TVM
 
 📊 Coverage-Based Minimization
 Total scenarios: 156

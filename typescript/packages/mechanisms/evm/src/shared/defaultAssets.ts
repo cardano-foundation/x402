@@ -97,6 +97,14 @@ export const DEFAULT_STABLECOINS: Record<string, ExactDefaultAssetInfo> = {
     version: "2",
     decimals: 6,
   }, // Arbitrum Sepolia USDC
+  "eip155:31612": {
+    address: "0xdD468A1DDc392dcdbEf6db6e34E89AA338F9F186",
+    name: "Mezo USD",
+    version: "1",
+    decimals: 18,
+    assetTransferMethod: "permit2",
+    supportsEip2612: true,
+  }, // Mezo mainnet mUSD (no EIP-3009, supports EIP-2612)
   "eip155:31611": {
     address: "0x118917a40FAF1CD7a13dB0Ef56C86De7973Ac503",
     name: "Mezo USD",
@@ -139,6 +147,18 @@ export const DEFAULT_STABLECOINS: Record<string, ExactDefaultAssetInfo> = {
     version: "2",
     decimals: 6,
   }, // HPP Sepolia USDC.e
+  "eip155:50": {
+    address: "0xfA2958CB79b0491CC627c1557F441eF849Ca8eb1",
+    name: "USDC",
+    version: "2",
+    decimals: 6,
+  }, // XDC Network mainnet USDC (Bridged USDC Standard, EIP-3009 supported)
+  "eip155:51": {
+    address: "0xb5AB69F7bBada22B28e79C8FFAECe55eF1c771D4",
+    name: "USDC",
+    version: "2",
+    decimals: 6,
+  }, // XDC Apothem testnet USDC (Bridged USDC Standard, EIP-3009 supported)
 };
 
 /**

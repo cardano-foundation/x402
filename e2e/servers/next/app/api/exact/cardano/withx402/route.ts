@@ -19,37 +19,34 @@ const handler = async (_: NextRequest) => {
  */
 export const GET = CARDANO_PAYEE_ADDRESS
   ? withX402(
-    handler,
-    {
-      accepts: {
-        payTo: CARDANO_PAYEE_ADDRESS,
-        scheme: "exact",
-        price: "$0.001",
-        network: CARDANO_NETWORK,
-      },
-      extensions: {
-        ...declareDiscoveryExtension({
-          output: {
-            example: {
-              message: "Protected Cardano endpoint accessed successfully (withX402)",
-              timestamp: "2024-01-01T00:00:00Z",
-            },
-            schema: {
-              properties: {
-                message: { type: "string" },
-                timestamp: { type: "string" },
+      handler,
+      {
+        accepts: {
+          payTo: CARDANO_PAYEE_ADDRESS,
+          scheme: "exact",
+          price: "$0.001",
+          network: CARDANO_NETWORK,
+        },
+        extensions: {
+          ...declareDiscoveryExtension({
+            output: {
+              example: {
+                message: "Protected Cardano endpoint accessed successfully (withX402)",
+                timestamp: "2024-01-01T00:00:00Z",
               },
-              required: ["message", "timestamp"],
+              schema: {
+                properties: {
+                  message: { type: "string" },
+                  timestamp: { type: "string" },
+                },
+                required: ["message", "timestamp"],
+              },
             },
-          },
-        }),
+          }),
+        },
       },
-    },
-    server,
-  )
+      server,
+    )
   : async () => {
-    return NextResponse.json(
-      { error: "Cardano not configured" },
-      { status: 503 },
-    );
-  };
+      return NextResponse.json({ error: "Cardano not configured" }, { status: 503 });
+    };
