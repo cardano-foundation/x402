@@ -354,7 +354,7 @@ Schema:
   "success": true, // true or false
   "network": "cardano:mainnet",
   "transaction": "2f9a7b3c..." // Transaction hash of the payment if successful
-  "extensions": {
+  "extra": {
     "status": "confirmed", // "confirmed" is the recommended value; "mempool" is permitted but strongly discouraged — see settlement warning above
   }
   // Optional error field in case of failure

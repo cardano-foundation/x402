@@ -387,7 +387,7 @@ export class ExactCardanoScheme implements SchemeNetworkFacilitator {
           transaction: submission.txHash,
           network: payload.accepted.network,
           payer: verifyResult.payer,
-          extensions: { status: submission.status },
+          extra: { status: submission.status },
         };
       }
 
@@ -396,7 +396,7 @@ export class ExactCardanoScheme implements SchemeNetworkFacilitator {
         transaction: submission.txHash,
         network: payload.accepted.network,
         payer: verifyResult.payer,
-        extensions: { status: submission.status },
+        extra: { status: submission.status },
       };
     } catch {
       // Submission threw (network error, deserialization error, etc.). Free
