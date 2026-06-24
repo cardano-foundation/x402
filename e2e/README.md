@@ -144,7 +144,7 @@ FACILITATOR_HEDERA_PRIVATE_KEY=0x... # Hedera ECDSA private key for facilitator
 FACILITATOR_KEETA_MNEMONIC=...      # Keeta mnemonic for facilitator
 FACILITATOR_STELLAR_PRIVATE_KEY=... # Stellar private key for facilitator
 FACILITATOR_TVM_PRIVATE_KEY=...     # TVM private key for facilitator
-FACILITATOR_CARDANO_MNEMONIC=...    # Cardano wallet mnemonic (24 words) for facilitator
+FACILITATOR_CARDANO_MNEMONIC=...    # Optional: the Cardano facilitator only broadcasts, so it runs provider-only without a mnemonic
 
 # TVM support
 TVM_PROVIDER=tonapi                 # Optional: toncenter (default) or tonapi
@@ -190,11 +190,11 @@ You need **three separate Stellar accounts** for e2e tests (client, server, faci
 
 The Cardano e2e endpoint is paid in **lovelace** (native tADA), so you only need test ADA — no stablecoin trustline or sourcing.
 
-1. Create a preprod wallet to obtain a **24-word mnemonic** and an `addr_test1...` address — either with a CIP-30 wallet (Eternl / Lace in **preprod** mode) or programmatically via `PrivateKey.generateMnemonic()` from `@evolution-sdk/evolution`. You need a **client** mnemonic (`CLIENT_CARDANO_MNEMONIC`) and a **facilitator** mnemonic (`FACILITATOR_CARDANO_MNEMONIC`); the server only needs an address (`SERVER_CARDANO_ADDRESS`) — the client's `addr_test1...` works.
+1. Create a preprod wallet to obtain a **24-word mnemonic** and an `addr_test1...` address — either with a CIP-30 wallet (Eternl / Lace in **preprod** mode) or programmatically via `PrivateKey.generateMnemonic()` from `@evolution-sdk/evolution`. You only need a **client** mnemonic (`CLIENT_CARDANO_MNEMONIC`); the server just needs an address (`SERVER_CARDANO_ADDRESS`) — the client's `addr_test1...` works. `FACILITATOR_CARDANO_MNEMONIC` is **optional**: the facilitator only broadcasts the client's signed transaction, so it runs provider-only when no mnemonic is set.
 2. Fund the **client** wallet with test ADA from the [Cardano testnets faucet](https://docs.cardano.org/cardano-testnets/tools/faucet/) (select **Preprod**); ~10 tADA is plenty. Only the client needs funds — it builds, signs, and pays the fee; the facilitator only broadcasts the transaction.
 3. Get a free **Blockfrost** preprod project id at [blockfrost.io](https://blockfrost.io/) and set `BLOCKFROST_PROJECT_ID` (and `BLOCKFROST_PREPROD_URL`).
 
-> **Note:** Cardano currently runs standalone only via the chain-agnostic apps — `--clients=fetch --servers=express --facilitators=typescript`. Other apps still require EVM+SVM credentials to start.
+> **Note:** Run Cardano standalone via the chain-agnostic apps and the `cardano` family filter: `pnpm test --clients=fetch --servers=express --facilitators=typescript --families=cardano`. Without `--families=cardano` the harness expands to every protocol family those apps support and requires all of their credentials (EVM, SVM, etc.).
 
 ##### TON testnet funding for TVM e2e and examples
 

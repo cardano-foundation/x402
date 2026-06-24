@@ -652,7 +652,6 @@ async function runTest() {
   const facilitatorKeetaMnemonic = process.env.FACILITATOR_KEETA_MNEMONIC;
   const facilitatorStellarPrivateKey = process.env.FACILITATOR_STELLAR_PRIVATE_KEY;
   const facilitatorTvmPrivateKey = process.env.FACILITATOR_TVM_PRIVATE_KEY;
-  const facilitatorCardanoMnemonic = process.env.FACILITATOR_CARDANO_MNEMONIC;
   const batchSettlementRecovery = envFlagDefaultTrue(process.env.BATCH_SETTLEMENT_RECOVERY);
 
   // Discover all servers, clients, and facilitators (always include legacy)
@@ -794,10 +793,6 @@ async function runTest() {
     cardano: [
       ['SERVER_CARDANO_ADDRESS', serverCardanoAddress],
       ['CLIENT_CARDANO_MNEMONIC', clientCardanoMnemonic],
-      ['FACILITATOR_CARDANO_MNEMONIC', facilitatorCardanoMnemonic],
-      // Blockfrost project id backs both the client (UTXO lookup) and the
-      // facilitator (UTXO/slot queries + submission); a cardano run cannot work
-      // without it, so fail fast here rather than at runtime.
       ['BLOCKFROST_PROJECT_ID', process.env.BLOCKFROST_PROJECT_ID],
     ],
   };
@@ -1518,6 +1513,7 @@ async function runTest() {
         const tn = nextTestNumber();
         const isEvm = scenario.protocolFamily === 'evm';
         const isAvm = scenario.protocolFamily === 'avm';
+        const isCardano = scenario.protocolFamily === 'cardano';
         const resourceKeys = getScenarioResourceKeys(scenario, evmResourceKeyContext);
 
         const runScenario = async (): Promise<DetailedTestResult> => {
@@ -1587,6 +1583,15 @@ async function runTest() {
             // sends from the same account (fundClientForRevoke). Without this,
             // the two can collide on the same nonce on load-balanced RPCs.
             await new Promise(resolve => setTimeout(resolve, 1500));
+          } else if (isCardano) {
+            // Pause between sequential Cardano tests, which all pay from the same
+            // client wallet. The settlement is already confirmed on-chain (the
+            // facilitator awaits confirmation), but Blockfrost's address-UTXO
+            // index lags the confirmed block by a few seconds. Without this pause
+            // the next payment fetches a stale UTXO set, reselects the just-spent
+            // input, and the node rejects it at submission (BadInputsUTxO). The
+            // delay lets the index catch up so the next tx picks the fresh change.
+            await new Promise(resolve => setTimeout(resolve, 20000));
           }
 
           return result;

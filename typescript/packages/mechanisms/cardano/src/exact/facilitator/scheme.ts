@@ -415,13 +415,17 @@ export class ExactCardanoScheme implements SchemeNetworkFacilitator {
         payer: verifyResult.payer,
         extra: { status: submission.status },
       };
-    } catch {
-      // Submission threw (network error, deserialization error, etc.). Free
-      // the claim so the caller can retry with a corrected payload.
+    } catch (cause) {
+      // Submission threw — a node rejection at submit (e.g. BadInputsUTxO when an
+      // input was already spent), an await-confirmation timeout, or a
+      // network/deserialization error. Surface the underlying reason via
+      // errorMessage so callers are not left with only the generic code, and
+      // free the claim so a legitimate retry can re-attempt.
       this.releaseClaim(cacheKey);
       return {
         success: false,
         errorReason: ERR_SETTLEMENT_FAILED,
+        errorMessage: cause instanceof Error ? cause.message : String(cause),
         transaction: "",
         network: payload.accepted.network,
       };

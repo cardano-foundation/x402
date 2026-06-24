@@ -257,11 +257,10 @@ if (process.env.STELLAR_PRIVATE_KEY) {
   console.info(`Stellar Facilitator account: ${stellarSigner.address}`);
 }
 
-// Initialize the Cardano signer from mnemonic + Blockfrost connection (optional)
 let cardanoSigner: ReturnType<typeof toFacilitatorCardanoSigner> | undefined;
-if (process.env.CARDANO_MNEMONIC) {
+if (process.env.BLOCKFROST_PROJECT_ID) {
   cardanoSigner = toFacilitatorCardanoSigner({
-    mnemonic: process.env.CARDANO_MNEMONIC as string,
+    mnemonic: process.env.CARDANO_MNEMONIC,
     network: CARDANO_NETWORK,
     provider: {
       blockfrost: {
@@ -272,7 +271,7 @@ if (process.env.CARDANO_MNEMONIC) {
     awaitConfirmation: true,
   });
   console.info(
-    `Cardano Facilitator account: ${cardanoSigner.getAddresses()[0]}`,
+    `Cardano Facilitator account: ${cardanoSigner.getAddresses()[0] ?? "(provider-only, no wallet)"}`,
   );
 }
 
@@ -359,9 +358,9 @@ const svmSigner = toFacilitatorSvmSigner(
 // Pass custom RPC URL if provided
 const aptosSigner = aptosAccount
   ? toFacilitatorAptosSigner(
-      aptosAccount,
-      APTOS_RPC_URL ? { defaultRpcUrl: APTOS_RPC_URL } : undefined,
-    )
+    aptosAccount,
+    APTOS_RPC_URL ? { defaultRpcUrl: APTOS_RPC_URL } : undefined,
+  )
   : undefined;
 
 const verifiedPayments = new Map<string, number>();
@@ -631,13 +630,13 @@ facilitator
       verifiedPayments.set(paymentHash, Date.now());
 
       // Hook 2: Extract and catalog bazaar discovery info
-        const discovered = extractDiscoveryInfo(
-          context.paymentPayload,
-          context.requirements,
-        );
-        if (discovered) {
-          const action =
-            "toolName" in discovered ? discovered.toolName : discovered.method;
+      const discovered = extractDiscoveryInfo(
+        context.paymentPayload,
+        context.requirements,
+      );
+      if (discovered) {
+        const action =
+          "toolName" in discovered ? discovered.toolName : discovered.method;
         if (!action) {
           return;
         }

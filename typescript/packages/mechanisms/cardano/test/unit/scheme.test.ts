@@ -264,6 +264,33 @@ describe("ExactCardanoScheme facilitator", () => {
     expect(settle.success).toBe(true);
     expect((settle.extra as { status?: string } | undefined)?.status).toBe("mempool");
   });
+
+  it("surfaces the underlying error message when submission throws", async () => {
+    const throwingSigner: FacilitatorCardanoSigner = {
+      ...stubFacilitatorSigner,
+      submitTransaction: async () => {
+        throw new Error("BadInputsUTxO (input already spent)");
+      },
+    };
+    class FakeOk extends ExactCardanoFacilitator {
+      override async verify() {
+        return { isValid: true, payer: "addr1qpayer00" };
+      }
+    }
+    const facilitator = new FakeOk(throwingSigner);
+    const reqs = buildRequirements();
+    const settle = await facilitator.settle(
+      {
+        x402Version: 2,
+        accepted: reqs,
+        payload: { transaction: "AAAA", nonce: `${TX_HASH}#0` },
+      },
+      reqs,
+    );
+    expect(settle.success).toBe(false);
+    expect(settle.errorReason).toBe("exact_cardano_settlement_failed");
+    expect(settle.errorMessage).toContain("BadInputsUTxO");
+  });
 });
 
 describe("ExactCardanoScheme server", () => {
