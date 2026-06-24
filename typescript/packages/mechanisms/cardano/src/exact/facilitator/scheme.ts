@@ -16,6 +16,7 @@ import {
   ERR_DUPLICATE_SETTLEMENT,
   ERR_INPUT_NOT_AVAILABLE,
   ERR_INVALID_PAYLOAD,
+  ERR_INVALID_SIGNATURE,
   ERR_NETWORK_ID_MISMATCH,
   ERR_NETWORK_MISMATCH,
   ERR_NONCE_INVALID,
@@ -192,17 +193,14 @@ export class ExactCardanoScheme implements SchemeNetworkFacilitator {
           payer: "",
         };
       }
-
       // SECURITY: refuse unsigned transactions in verify() so /verify cannot
       // return a false-positive that would let callers grant access on an
-      // unpaid request. This witness-count check is structural only: it proves
-      // witness material is PRESENT, not that the signatures are valid. vkey
-      // signatures are not cryptographically validated here — that gate is the
-      // node's acceptance at submit time (settle). Per the eUTXO model,
-      // authorization is confirmed by settlement, so callers MUST grant access
-      // on confirmed settlement, never on verify() alone.
+      // unpaid request.
       if (decoded.vkeyWitnessCount === 0 && decoded.scriptWitnessCount === 0) {
         return { isValid: false, invalidReason: ERR_TRANSACTION_UNSIGNED, payer: "" };
+      }
+      if (!decoded.signaturesValid) {
+        return { isValid: false, invalidReason: ERR_INVALID_SIGNATURE, payer: "" };
       }
 
       // Rule 6 (TTL upper bound) AND lower validity bound: when either is

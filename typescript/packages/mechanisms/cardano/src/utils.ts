@@ -1,4 +1,11 @@
-import { Address, Transaction, TransactionBody, TransactionHash } from "@evolution-sdk/evolution";
+import {
+  Address,
+  Ed25519Signature,
+  Transaction,
+  TransactionBody,
+  TransactionHash,
+  VKey,
+} from "@evolution-sdk/evolution";
 
 import { CARDANO_ASSET_REGEX, CARDANO_UTXO_REF_REGEX } from "./constants";
 import type { CardanoUtxoOutput, DecodedCardanoTransaction, ExactCardanoPayload } from "./types";
@@ -67,7 +74,9 @@ export function decodeCardanoTransaction(transactionBase64: string): DecodedCard
   // Hash the raw CBOR body bytes (blake2b-256). `extractBodyBytes` preserves
   // the exact on-wire encoding so the digest matches what the chain reports.
   const bodyBytes = Transaction.extractBodyBytes(txBytes);
-  const txHash = TransactionHash.toHex(TransactionBody.toHashFromBytes(bodyBytes));
+  const bodyHash = TransactionBody.toHashFromBytes(bodyBytes);
+  const txHash = TransactionHash.toHex(bodyHash);
+  const bodyHashBytes = TransactionHash.toBytes(bodyHash);
 
   const toHex = (bytes: Uint8Array): string => Buffer.from(bytes).toString("hex").toLowerCase();
 
@@ -99,6 +108,13 @@ export function decodeCardanoTransaction(transactionBase64: string): DecodedCard
     (ws.plutusV3Scripts?.length ?? 0) +
     (ws.redeemers ? ws.redeemers.size : 0);
 
+  // Cryptographically verify every vkey witness signs the body hash, so verify()
+  // can reject a transaction carrying a forged or stale signature that could
+  // never settle. Bootstrap (Byron) witnesses are out of scope for this scheme.
+  const signaturesValid = (ws.vkeyWitnesses ?? []).every(witness =>
+    VKey.verify(witness.vkey, bodyHashBytes, Ed25519Signature.toBytes(witness.signature)),
+  );
+
   return {
     txHash,
     networkId: tx.body.networkId,
@@ -108,5 +124,6 @@ export function decodeCardanoTransaction(transactionBase64: string): DecodedCard
     outputs,
     vkeyWitnessCount,
     scriptWitnessCount,
+    signaturesValid,
   };
 }

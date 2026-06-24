@@ -214,3 +214,5 @@ export const ERR_DUPLICATE_SETTLEMENT = "duplicate_settlement";
 export const ERR_SCRIPT_ADDRESS_MISMATCH = "invalid_exact_cardano_payload_script_address_mismatch";
 /** Error: transaction is not signed (no vkey/bootstrap witnesses present). */
 export const ERR_TRANSACTION_UNSIGNED = "invalid_exact_cardano_payload_unsigned";
+/** Error: a vkey witness signature is not valid over the transaction body. */
+export const ERR_INVALID_SIGNATURE = "invalid_exact_cardano_payload_invalid_signature";

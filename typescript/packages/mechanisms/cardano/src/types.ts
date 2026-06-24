@@ -214,6 +214,12 @@ export interface DecodedCardanoTransaction {
    */
   scriptWitnessCount: number;
   /**
+   * True when every vkey witness carries a valid Ed25519 signature over the
+   * transaction body hash. False signals a forged or stale signature that the
+   * chain would reject at submission.
+   */
+  signaturesValid: boolean;
+  /**
    * Index of the auxiliary data hash, if any (kept for parity with future
    * additions; unused today).
    */

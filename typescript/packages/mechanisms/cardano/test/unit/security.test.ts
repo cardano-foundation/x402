@@ -66,6 +66,7 @@ describe("Cardano facilitator security", () => {
       ],
       vkeyWitnessCount: 1,
       scriptWitnessCount: 0,
+      signaturesValid: true,
     });
 
     const facilitator = new CaptureFacilitator(stubSigner);
