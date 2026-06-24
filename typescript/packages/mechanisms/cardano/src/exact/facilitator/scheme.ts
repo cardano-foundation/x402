@@ -14,6 +14,7 @@ import {
   ERR_ASSET_MISMATCH,
   ERR_CHAIN_LOOKUP_FAILED,
   ERR_DUPLICATE_SETTLEMENT,
+  ERR_INPUT_NOT_AVAILABLE,
   ERR_INVALID_PAYLOAD,
   ERR_NETWORK_ID_MISMATCH,
   ERR_NETWORK_MISMATCH,
@@ -39,7 +40,7 @@ import type {
   DecodedCardanoTransaction,
   ExactCardanoPayload,
 } from "../../types";
-import type { FacilitatorCardanoSigner } from "../../signer";
+import type { CardanoUtxoSnapshot, FacilitatorCardanoSigner } from "../../signer";
 import { decodeCardanoPayload, decodeCardanoTransaction, parseUtxoRef } from "../../utils";
 import { scriptAddressMatches } from "./scriptAddress";
 
@@ -236,10 +237,15 @@ export class ExactCardanoScheme implements SchemeNetworkFacilitator {
         return { isValid: false, invalidReason: ERR_NONCE_NOT_IN_INPUTS, payer: "" };
       }
 
-      // Rule 5 (chain check): nonce UTXO MUST currently be unspent.
-      let nonceSnapshot;
+      // Rule 5 (chain check) + on-chain pre-check: EVERY transaction input MUST
+      // currently be unspent. A spent input — the nonce or any coin-selected
+      // input — guarantees the chain rejects the transaction at submission, so
+      // resolve them all here rather than only validating payload structure.
+      let inputSnapshots: CardanoUtxoSnapshot[];
       try {
-        nonceSnapshot = await this.signer.getUtxo(nonceLower, requirements.network);
+        inputSnapshots = await Promise.all(
+          decoded.inputs.map(ref => this.signer.getUtxo(ref, requirements.network)),
+        );
       } catch (cause) {
         return {
           isValid: false,
@@ -248,11 +254,19 @@ export class ExactCardanoScheme implements SchemeNetworkFacilitator {
           payer: "",
         };
       }
-      if (!nonceSnapshot.exists) {
+
+      const nonceSnapshot =
+        inputSnapshots[decoded.inputs.findIndex(ref => ref.toLowerCase() === nonceLower)];
+      if (!nonceSnapshot?.exists) {
         return { isValid: false, invalidReason: ERR_NONCE_NOT_ON_CHAIN, payer: "" };
       }
 
       const payer = nonceSnapshot.address ?? "";
+
+      // Any other input being spent means the transaction cannot settle.
+      if (inputSnapshots.some(snapshot => !snapshot.exists)) {
+        return { isValid: false, invalidReason: ERR_INPUT_NOT_AVAILABLE, payer };
+      }
 
       // Rules 2, 3, 4: at least one output MUST pay the requested amount of
       // the requested asset to the requested address. Lovelace is special-

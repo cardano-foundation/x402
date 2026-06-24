@@ -196,6 +196,8 @@ export const ERR_NONCE_INVALID = "invalid_exact_cardano_payload_nonce_invalid";
 export const ERR_NONCE_NOT_IN_INPUTS = "invalid_exact_cardano_payload_nonce_not_in_inputs";
 /** Error: nonce UTXO no longer exists on chain (already spent or never existed). */
 export const ERR_NONCE_NOT_ON_CHAIN = "invalid_exact_cardano_payload_nonce_not_on_chain";
+/** Error: a transaction input is no longer available (spent) — the tx would be rejected at submission. */
+export const ERR_INPUT_NOT_AVAILABLE = "invalid_exact_cardano_payload_input_not_available";
 /** Error: transaction TTL has already passed. */
 export const ERR_TTL_EXPIRED = "invalid_exact_cardano_payload_ttl_expired";
 /** Error: transaction's lower validity bound is in the future. */

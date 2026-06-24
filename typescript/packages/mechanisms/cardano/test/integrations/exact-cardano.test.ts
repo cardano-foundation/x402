@@ -15,6 +15,7 @@ import { ExactCardanoScheme as ExactCardanoFacilitator } from "../../src/exact/f
 import { ExactCardanoScheme as ExactCardanoServer } from "../../src/exact/server/scheme";
 import { toClientCardanoSigner, toFacilitatorCardanoSigner } from "../../src/signer";
 import { LOVELACE_ASSET, USDM_PREPROD_ASSET } from "../../src/constants";
+import { decodeCardanoTransaction } from "../../src/utils";
 import { buildSignedTx } from "../helpers/buildSignedTx";
 import {
   buildRequirements,
@@ -257,6 +258,46 @@ describe("Cardano Integration Tests (deterministic, offline)", () => {
       });
       const result = await facilitator.verify(payload, requirements);
       expect(result.isValid).toBe(true);
+    });
+
+    it("accepts a multi-input tx when every input is unspent, rejects when one is spent", async () => {
+      const secondRef = `${"b".repeat(64)}#0`;
+      // Small nonce funding + a second wallet UTXO forces coin selection to add
+      // a second input, so the transaction has more than just the nonce input.
+      const built = await buildSignedTx({
+        payTo: recipient,
+        asset: LOVELACE_ASSET,
+        amount: 2_000_000n,
+        nonceUtxoRef: NONCE_REF,
+        ttlSlot: TTL_SLOT,
+        network: NETWORK,
+        fundingLovelace: 1_000_000n,
+        secondInput: { ref: secondRef, lovelace: 5_000_000n },
+      });
+      expect(decodeCardanoTransaction(built.transaction).inputs).toHaveLength(2);
+
+      const payload: PaymentPayload = {
+        x402Version: 2,
+        accepted: buildRequirements(recipient, "2000000"),
+        payload: { transaction: built.transaction, nonce: built.nonce },
+      };
+      const requirements = buildRequirements(recipient, "2000000");
+
+      // All inputs unspent → valid.
+      const ok = await new ExactCardanoFacilitator(stubFacilitatorSigner()).verify(
+        payload,
+        requirements,
+      );
+      expect(ok.isValid).toBe(true);
+
+      // The coin-selected (non-nonce) input is already spent → rejected.
+      const spent = await new ExactCardanoFacilitator(
+        stubFacilitatorSigner({
+          getUtxo: async ref => ({ exists: !ref.startsWith("bbbb"), address: PAYER_ADDRESS }),
+        }),
+      ).verify(payload, requirements);
+      expect(spent.isValid).toBe(false);
+      expect(spent.invalidReason).toBe("invalid_exact_cardano_payload_input_not_available");
     });
   });
 
