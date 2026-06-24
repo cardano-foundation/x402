@@ -121,9 +121,7 @@ const AVM_RPC_URL = process.env.AVM_RPC_URL;
 const APTOS_RPC_URL = process.env.APTOS_RPC_URL;
 const HEDERA_NODE_URL = process.env.HEDERA_NODE_URL;
 const STELLAR_RPC_URL = process.env.STELLAR_RPC_URL;
-const TVM_PROVIDER = (
-  process.env.TVM_PROVIDER || TVM_PROVIDER_TONCENTER
-).toLowerCase();
+const TVM_PROVIDER = (process.env.TVM_PROVIDER || TVM_PROVIDER_TONCENTER).toLowerCase();
 
 // Map CAIP-2 network IDs to viem chains
 function getEvmChain(network: string): Chain {
@@ -242,14 +240,10 @@ if (process.env.HEDERA_ACCOUNT_ID && process.env.HEDERA_PRIVATE_KEY) {
 let keetaSigner: FacilitatorKeetaSigner | undefined;
 if (process.env.KEETA_FACILITATOR_MNEMONIC) {
   const keetaAccount = KeetaNet.lib.Account.fromSeed(
-    await KeetaNet.lib.Account.seedFromPassphrase(
-      process.env.KEETA_FACILITATOR_MNEMONIC,
-    ),
+    await KeetaNet.lib.Account.seedFromPassphrase(process.env.KEETA_FACILITATOR_MNEMONIC),
     0,
   );
-  console.info(
-    `Keeta Facilitator account: ${keetaAccount.publicKeyString.toString()}`,
-  );
+  console.info(`Keeta Facilitator account: ${keetaAccount.publicKeyString.toString()}`);
   keetaSigner = toFacilitatorKeetaSigner([keetaAccount]);
 }
 
@@ -546,10 +540,7 @@ if (hederaSigner) {
   );
 }
 if (keetaSigner) {
-  facilitator.register(
-    KEETA_NETWORK as Network,
-    new ExactKeetaScheme(keetaSigner, console),
-  );
+  facilitator.register(KEETA_NETWORK as Network, new ExactKeetaScheme(keetaSigner, console));
 }
 if (stellarSigner) {
   facilitator.register(
@@ -640,13 +631,13 @@ facilitator
       verifiedPayments.set(paymentHash, Date.now());
 
       // Hook 2: Extract and catalog bazaar discovery info
-      const discovered = extractDiscoveryInfo(
-        context.paymentPayload,
-        context.requirements,
-      );
-      if (discovered) {
-        const action =
-          "toolName" in discovered ? discovered.toolName : discovered.method;
+        const discovered = extractDiscoveryInfo(
+          context.paymentPayload,
+          context.requirements,
+        );
+        if (discovered) {
+          const action =
+            "toolName" in discovered ? discovered.toolName : discovered.method;
         if (!action) {
           return;
         }
@@ -885,9 +876,7 @@ app.get("/health", (req, res) => {
     avmNetwork: avmSigner ? AVM_NETWORK : "(not configured)",
     aptosNetwork: aptosAccount ? APTOS_NETWORK : "(not configured)",
     hederaNetwork: hederaSigner ? HEDERA_NETWORK : "(not configured)",
-    keetaNetwork: process.env.KEETA_FACILITATOR_MNEMONIC
-      ? KEETA_NETWORK
-      : "(not configured)",
+    keetaNetwork: process.env.KEETA_FACILITATOR_MNEMONIC ? KEETA_NETWORK : "(not configured)",
     stellarNetwork: stellarSigner ? STELLAR_NETWORK : "(not configured)",
     cardanoNetwork: cardanoSigner ? CARDANO_NETWORK : "(not configured)",
     facilitator: "typescript",

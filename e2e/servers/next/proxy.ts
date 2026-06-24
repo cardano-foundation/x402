@@ -420,6 +420,64 @@ export const proxy = paymentProxy(
           },
         }
       : {}),
+    ...(STELLAR_PAYEE_ADDRESS
+      ? {
+          "/api/exact/stellar": {
+            accepts: {
+              payTo: STELLAR_PAYEE_ADDRESS,
+              scheme: "exact",
+              price: "$0.001",
+              network: STELLAR_NETWORK,
+            },
+            extensions: {
+              ...declareDiscoveryExtension({
+                output: {
+                  example: {
+                    message: "Protected endpoint accessed successfully",
+                    timestamp: "2024-01-01T00:00:00Z",
+                  },
+                  schema: {
+                    properties: {
+                      message: { type: "string" },
+                      timestamp: { type: "string" },
+                    },
+                    required: ["message", "timestamp"],
+                  },
+                },
+              }),
+            },
+          },
+        }
+      : {}),
+    ...(TVM_PAYEE_ADDRESS
+      ? {
+          "/api/exact/tvm": {
+            accepts: {
+              payTo: TVM_PAYEE_ADDRESS,
+              scheme: "exact",
+              price: "$0.001",
+              network: TVM_NETWORK,
+            },
+            extensions: {
+              ...declareDiscoveryExtension({
+                output: {
+                  example: {
+                    message: "Protected TVM endpoint accessed successfully",
+                    timestamp: "2024-01-01T00:00:00Z",
+                  },
+                  schema: {
+                    properties: {
+                      message: { type: "string" },
+                      timestamp: { type: "string" },
+                    },
+                    required: ["message", "timestamp"],
+                  },
+                },
+              }),
+            },
+          },
+        }
+      : {}),
     "/api/exact/evm/permit2/proxy": {
       accepts: {
         payTo: EVM_PAYEE_ADDRESS,
