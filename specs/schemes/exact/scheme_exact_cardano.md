@@ -370,6 +370,25 @@ The **facilitator** only broadcasts the already-signed transaction to the networ
 
 **Fee sponsorship** (the facilitator paying the fee on the client's behalf) is **not supported** by this scheme version. It is achievable on Cardano through collaborative, multi-party transaction building — the facilitator contributing an input to cover the fee and co-signing the transaction — but that requires a different, interactive construction flow than the client-builds-and-signs model specified here, and is left to a future extension.
 
+## Minimum UTXO Value (min-ada)
+
+Every Cardano transaction output must hold at least a minimum amount of ADA, proportional to the output's serialized size. The recipient output that carries the payment is subject to this rule, so the client must provide enough ADA for it. The ledger computes the per-output minimum (Babbage era onward, unchanged in Conway; see [CIP-55](https://cips.cardano.org/cip/CIP-0055)) as:
+
+```
+minUTxO(output) = (160 + |serialized_output|) * coinsPerUtxoByte
+```
+
+- `coinsPerUtxoByte` — a protocol parameter, currently **4310 lovelace/byte** on mainnet and the public testnets. It is governance-settable, so implementations MUST read it from live protocol parameters rather than hardcode it.
+- `160` — a constant overhead (20 words x 8 bytes) covering the transaction input and its entry in the UTXO map.
+- `|serialized_output|` — the CBOR byte length of the output (address, value, and any datum or script reference).
+
+Because the threshold is a function of output size, **there is no single fixed value**:
+
+- **Pure-lovelace payment** (`asset: "lovelace"`): the requested `amount` is itself the output coin and must satisfy the formula — in practice ~1 ADA (≈ 1,000,000 lovelace) for a minimal output. An `amount` below the minimum yields an unbalanceable transaction and MUST be rejected at build time.
+- **Native-asset payment** (e.g. USDM): the multi-asset entry (28-byte policy id + asset name + quantity) enlarges the output, raising the minimum to roughly **1.2–1.5 ADA**. This ADA is sent **in addition to** the token amount, is drawn from the client's inputs, and travels with the token until the recipient spends the output.
+
+The **client** funds this min-ada — it builds and signs the transaction (see [Transaction Fees](#transaction-fees)); the **facilitator** is uninvolved. Implementations SHOULD let the transaction builder derive the exact minimum from the protocol parameters fetched during construction, rather than assume a constant, so payments stay valid across protocol-parameter changes.
+
 ## Duplicate Settlement Mitigation (RECOMMENDED)
 
 ### Vulnerability
