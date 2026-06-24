@@ -51,6 +51,28 @@ const HEDERA_PAYEE_ADDRESS = process.env.HEDERA_PAYEE_ADDRESS as string | undefi
 const KEETA_PAYEE_ADDRESS = process.env.KEETA_PAYEE_ADDRESS as string | undefined;
 const STELLAR_PAYEE_ADDRESS = process.env.STELLAR_PAYEE_ADDRESS as string | undefined;
 const CARDANO_PAYEE_ADDRESS = process.env.CARDANO_PAYEE_ADDRESS as string | undefined;
+// Script (assetTransferMethod=script) fixture: a minimal always-succeeds Plutus
+// V3 validator and its enterprise (preprod/preview) script address. The
+// facilitator reconstructs this address from the script in `extra` and verifies
+// it equals payTo (see the cardano package's scriptAddress tests for derivation).
+const CARDANO_SCRIPT_CODE = "4d01000033222220051200120011";
+const CARDANO_SCRIPT_ADDRESS = "addr_test1wp8l7eylksmjas7ypzm0q35dwnjdxxvsfn0z0lflqzgs55stpd682";
+// Shared bazaar discovery extension reused by the Cardano method endpoints.
+const CARDANO_DISCOVERY = declareDiscoveryExtension({
+  output: {
+    example: {
+      message: "Protected Cardano endpoint accessed successfully",
+      timestamp: "2024-01-01T00:00:00Z",
+    },
+    schema: {
+      properties: {
+        message: { type: "string" },
+        timestamp: { type: "string" },
+      },
+      required: ["message", "timestamp"],
+    },
+  },
+});
 const TVM_PAYEE_ADDRESS = process.env.TVM_PAYEE_ADDRESS as string | undefined;
 const HEDERA_ASSET = process.env.HEDERA_ASSET ?? "0.0.0"; // 0.0.0 = HBAR or 0.0.429274 for USDC testnet
 const HEDERA_AMOUNT = process.env.HEDERA_AMOUNT ?? "100000"; // price in smallest units (tinybars or token decimals), defaults to 0.001 HBAR or 0.1 USDC
@@ -665,33 +687,55 @@ app.use(
         : {}),
       ...(CARDANO_PAYEE_ADDRESS
         ? {
-            "GET /exact/cardano": {
+            // One endpoint per Cardano assetTransferMethod. All pay in lovelace
+            // (native tADA) so the e2e is fundable from the testnet faucet;
+            // preprod USDM is not faucet-available. 2 ADA clears the min-UTXO.
+            "GET /exact/cardano/default": {
               accepts: {
                 payTo: CARDANO_PAYEE_ADDRESS!,
                 scheme: "exact",
-                // Pay in lovelace (native tADA) so the e2e is fundable directly
-                // from the Cardano testnet faucet; preprod USDM is not faucet-
-                // available. 2 ADA is comfortably above the min-UTXO threshold.
                 price: { amount: "2000000", asset: "lovelace" },
                 network: CARDANO_NETWORK,
+                extra: { assetTransferMethod: "default" },
               },
-              extensions: {
-                ...declareDiscoveryExtension({
-                  output: {
-                    example: {
-                      message: "Protected Cardano endpoint accessed successfully",
-                      timestamp: "2024-01-01T00:00:00Z",
-                    },
-                    schema: {
-                      properties: {
-                        message: { type: "string" },
-                        timestamp: { type: "string" },
-                      },
-                      required: ["message", "timestamp"],
-                    },
-                  },
-                }),
+              extensions: { ...CARDANO_DISCOVERY },
+            },
+            "GET /exact/cardano/masumi": {
+              accepts: {
+                payTo: CARDANO_PAYEE_ADDRESS!,
+                scheme: "exact",
+                price: { amount: "2000000", asset: "lovelace" },
+                network: CARDANO_NETWORK,
+                extra: {
+                  assetTransferMethod: "masumi",
+                  identifierFromPurchaser: "aabbaabb11221122aabb",
+                  sellerVkey: "deadbeef",
+                  paymentType: "Web3CardanoV1",
+                  blockchainIdentifier: "blockchain_identifier",
+                  payByTime: "1713626260",
+                  submitResultTime: "1713636260",
+                  unlockTime: "1713636260",
+                  externalDisputeUnlockTime: "1713636260",
+                  agentIdentifier: "agent_identifier",
+                  inputHash: "9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08",
+                },
               },
+              extensions: { ...CARDANO_DISCOVERY },
+            },
+            "GET /exact/cardano/script": {
+              accepts: {
+                // payTo is the script address the facilitator reconstructs from
+                // the script descriptor below and verifies it matches.
+                payTo: CARDANO_SCRIPT_ADDRESS,
+                scheme: "exact",
+                price: { amount: "2000000", asset: "lovelace" },
+                network: CARDANO_NETWORK,
+                extra: {
+                  assetTransferMethod: "script",
+                  script: { type: "plutusV3", code: CARDANO_SCRIPT_CODE },
+                },
+              },
+              extensions: { ...CARDANO_DISCOVERY },
             },
           }
         : {}),
@@ -910,12 +954,15 @@ if (STELLAR_PAYEE_ADDRESS) {
  * Note: 501 check is handled by pre-middleware guard above.
  */
 if (CARDANO_PAYEE_ADDRESS) {
-  app.get("/exact/cardano", (req, res) => {
-    res.json({
-      message: "Protected Cardano endpoint accessed successfully",
-      timestamp: new Date().toISOString(),
-    });
-  });
+  app.get(
+    ["/exact/cardano/default", "/exact/cardano/masumi", "/exact/cardano/script"],
+    (req, res) => {
+      res.json({
+        message: "Protected Cardano endpoint accessed successfully",
+        timestamp: new Date().toISOString(),
+      });
+    },
+  );
 }
 
 /**
@@ -1003,7 +1050,9 @@ app.listen(parseInt(PORT), () => {
 ║  • GET  /exact/hedera                         (Hedera)        ║
 ║  • GET  /exact/keeta                           (Keeta)        ║
 ║  • GET  /exact/stellar                        (Stellar)       ║
-║  • GET  /exact/cardano                        (Cardano)       ║
+║  • GET  /exact/cardano/default                (Cardano)       ║
+║  • GET  /exact/cardano/masumi                 (Cardano)       ║
+║  • GET  /exact/cardano/script                 (Cardano)       ║
 ║  • GET  /exact/tvm                            (TVM)           ║
 ║  • GET  /health                (no payment required)       ║
 ║  • POST /close                 (shutdown server)           ║

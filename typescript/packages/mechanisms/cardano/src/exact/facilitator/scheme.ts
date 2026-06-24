@@ -41,6 +41,7 @@ import type {
 } from "../../types";
 import type { FacilitatorCardanoSigner } from "../../signer";
 import { decodeCardanoPayload, decodeCardanoTransaction, parseUtxoRef } from "../../utils";
+import { scriptAddressMatches } from "./scriptAddress";
 
 /**
  * Optional configuration knobs for the Cardano facilitator scheme.
@@ -420,11 +421,10 @@ export class ExactCardanoScheme implements SchemeNetworkFacilitator {
    * - `masumi`: the spec does not require additional on-chain verification
    *   beyond the transfer itself; integrators wishing to enforce extra Masumi
    *   invariants can subclass and override this method.
-   * - `script`: the facilitator MUST reconstruct the script address from the
-   *   supplied script + parameters and confirm it equals `requirements.payTo`.
-   *   The base class cannot do this without a Cardano SDK that understands
-   *   the user's parameter encoding, so we REJECT script payments unless an
-   *   override has supplied the reconstruction logic.
+   * - `script`: the facilitator reconstructs the script credential from the
+   *   declared `script` (+ parameters) or `scriptHash` and confirms it equals
+   *   the script payment credential of `requirements.payTo`. A non-script
+   *   `payTo`, a missing descriptor, or a mismatch is rejected.
    *
    * @param extra - The accepted requirements' extra block.
    * @param payTo - The recipient address declared in the payment requirements.
@@ -437,7 +437,6 @@ export class ExactCardanoScheme implements SchemeNetworkFacilitator {
     payer: string,
   ): Promise<{ ok: true } | { ok: false; reason: string }> {
     void payer;
-    void payTo;
     const method =
       (extra as CardanoExtra | undefined)?.assetTransferMethod ?? ASSET_TRANSFER_METHOD_DEFAULT;
     if (method === ASSET_TRANSFER_METHOD_DEFAULT || method === ASSET_TRANSFER_METHOD_MASUMI) {
@@ -448,11 +447,13 @@ export class ExactCardanoScheme implements SchemeNetworkFacilitator {
       if (!scriptExtra.scriptHash && !scriptExtra.script) {
         return { ok: false, reason: ERR_SCRIPT_ADDRESS_MISMATCH };
       }
-      // SECURITY: per the spec, the facilitator must verify that applying the
-      // declared script + parameters yields exactly `payTo`. The base class
-      // cannot do this without an opinionated SDK, so we reject by default
-      // and require integrators to override this method.
-      return { ok: false, reason: ERR_SCRIPT_ADDRESS_MISMATCH };
+      // SECURITY: confirm payTo is the script address implied by the declared
+      // script + parameters (or scriptHash), so a server cannot redirect the
+      // payment to an address unrelated to the advertised script.
+      if (!scriptAddressMatches(scriptExtra, payTo)) {
+        return { ok: false, reason: ERR_SCRIPT_ADDRESS_MISMATCH };
+      }
+      return { ok: true };
     }
     return { ok: false, reason: ERR_UNSUPPORTED_SCHEME };
   }

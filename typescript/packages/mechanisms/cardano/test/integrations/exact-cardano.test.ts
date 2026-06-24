@@ -19,9 +19,11 @@ import { buildSignedTx } from "../helpers/buildSignedTx";
 import {
   buildRequirements,
   freshPreprodAddress,
+  MINIMAL_PLUTUS_V3,
   NETWORK,
   NONCE_REF,
   PAYER_ADDRESS,
+  scriptAddressFor,
   stubClientSigner,
   stubFacilitatorSigner,
   TTL_SLOT,
@@ -211,6 +213,50 @@ describe("Cardano Integration Tests (deterministic, offline)", () => {
       const result = await facilitator.verify(payload, buildRequirements(recipient, "1000000"));
       expect(result.isValid).toBe(false);
       expect(result.invalidReason).toBe("invalid_exact_cardano_payload_ttl_expired");
+    });
+
+    it("accepts a script payment to the reconstructed script address", async () => {
+      const facilitator = new ExactCardanoFacilitator(stubFacilitatorSigner());
+      const { address: scriptAddr } = scriptAddressFor(MINIMAL_PLUTUS_V3);
+      const payload = await fixturePayload(scriptAddr, 2_000_000n);
+      const requirements = buildRequirements(scriptAddr, "2000000", LOVELACE_ASSET, {
+        assetTransferMethod: "script",
+        script: { type: "plutusV3", code: MINIMAL_PLUTUS_V3 },
+      });
+      const result = await facilitator.verify(payload, requirements);
+      expect(result.isValid).toBe(true);
+    });
+
+    it("rejects a script payment whose payTo is not the declared script", async () => {
+      const facilitator = new ExactCardanoFacilitator(stubFacilitatorSigner());
+      const payload = await fixturePayload(recipient, 2_000_000n);
+      const requirements = buildRequirements(recipient, "2000000", LOVELACE_ASSET, {
+        assetTransferMethod: "script",
+        script: { type: "plutusV3", code: MINIMAL_PLUTUS_V3 },
+      });
+      const result = await facilitator.verify(payload, requirements);
+      expect(result.isValid).toBe(false);
+      expect(result.invalidReason).toBe("invalid_exact_cardano_payload_script_address_mismatch");
+    });
+
+    it("accepts a masumi payment (method-agnostic rules 1-6)", async () => {
+      const facilitator = new ExactCardanoFacilitator(stubFacilitatorSigner());
+      const payload = await fixturePayload(recipient, 2_000_000n);
+      const requirements = buildRequirements(recipient, "2000000", LOVELACE_ASSET, {
+        assetTransferMethod: "masumi",
+        identifierFromPurchaser: "aabbaabb11221122aabb",
+        sellerVkey: "deadbeef",
+        paymentType: "Web3CardanoV1",
+        blockchainIdentifier: "bid",
+        payByTime: "1713626260",
+        submitResultTime: "1713636260",
+        unlockTime: "1713636260",
+        externalDisputeUnlockTime: "1713636260",
+        agentIdentifier: "agent",
+        inputHash: "9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08",
+      });
+      const result = await facilitator.verify(payload, requirements);
+      expect(result.isValid).toBe(true);
     });
   });
 

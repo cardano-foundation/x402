@@ -177,9 +177,23 @@
       "protocolFamily": "stellar"
     },
     {
-      "path": "/exact/cardano",
+      "path": "/exact/cardano/default",
       "method": "GET",
-      "description": "Protected endpoint requiring payment on Cardano network",
+      "description": "Protected Cardano endpoint using the default address-to-address method",
+      "requiresPayment": true,
+      "protocolFamily": "cardano"
+    },
+    {
+      "path": "/exact/cardano/masumi",
+      "method": "GET",
+      "description": "Protected Cardano endpoint using the masumi assetTransferMethod",
+      "requiresPayment": true,
+      "protocolFamily": "cardano"
+    },
+    {
+      "path": "/exact/cardano/script",
+      "method": "GET",
+      "description": "Protected Cardano endpoint using the script assetTransferMethod",
       "requiresPayment": true,
       "protocolFamily": "cardano"
     },
