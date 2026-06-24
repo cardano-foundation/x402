@@ -402,10 +402,13 @@ export function toClientCardanoSigner(config: ClientCardanoSignerConfig): Client
  */
 export interface FacilitatorCardanoSignerConfig {
   /**
-   * BIP-39 mnemonic controlling the facilitator wallet (its address is exposed
-   * via `getAddresses` for the `/supported` response).
+   * Optional BIP-39 mnemonic. The facilitator only broadcasts the client's
+   * already-signed transaction (the client pays the network fee), so it needs no
+   * funds and no signing key. When supplied, its address is exposed via
+   * `getAddresses` for the `/supported` response; when omitted the facilitator
+   * runs provider-only and `getAddresses` returns an empty list.
    */
-  mnemonic: string;
+  mnemonic?: string;
   /**
    * The x402 network identifier (one of `CARDANO_NETWORKS`).
    */
@@ -438,20 +441,27 @@ export function toFacilitatorCardanoSigner(
   config: FacilitatorCardanoSignerConfig,
 ): FacilitatorCardanoSigner {
   const chain = resolveChain(config.network);
-  const mnemonic = normalizeMnemonic(config.mnemonic);
-  const client = withProvider(Client.make(chain), config.provider).withSeed({
-    mnemonic,
-    accountIndex: config.accountIndex,
-  });
+  const providerClient = withProvider(Client.make(chain), config.provider);
   const slotConfig = chain.slotConfig;
 
-  // Derive the facilitator address synchronously so getAddresses() needs no await.
-  const address = Address.toBech32(
-    addressFromSeed(mnemonic, {
-      accountIndex: config.accountIndex,
-      networkId: chain.id,
-    }).address,
-  );
+  // The facilitator only broadcasts the client's already-signed transaction and
+  // queries the chain — both are provider operations. A mnemonic is optional and
+  // used solely to expose an address via getAddresses() for the /supported
+  // response; without it the facilitator runs provider-only (no funds, no signer).
+  const mnemonic = config.mnemonic ? normalizeMnemonic(config.mnemonic) : undefined;
+  const client = mnemonic
+    ? providerClient.withSeed({ mnemonic, accountIndex: config.accountIndex })
+    : providerClient;
+  const addresses: readonly string[] = mnemonic
+    ? [
+        Address.toBech32(
+          addressFromSeed(mnemonic, {
+            accountIndex: config.accountIndex,
+            networkId: chain.id,
+          }).address,
+        ),
+      ]
+    : [];
 
   const assertNetwork = (network: string): void => {
     if (network !== config.network) {
@@ -461,7 +471,7 @@ export function toFacilitatorCardanoSigner(
 
   return {
     getAddresses(): readonly string[] {
-      return [address];
+      return addresses;
     },
 
     async getUtxo(ref: string, network: string): Promise<CardanoUtxoSnapshot> {

@@ -37,7 +37,11 @@ import { ExactEvmScheme } from "@x402/evm/exact/facilitator";
 import { UptoEvmScheme } from "@x402/evm/upto/facilitator";
 import { ExactEvmSchemeV1 } from "@x402/evm/exact/v1/facilitator";
 import { NETWORKS as EVM_V1_NETWORKS } from "@x402/evm/v1";
-import { BAZAAR, extractDiscoveryInfo, type DiscoveryResource } from "@x402/extensions/bazaar";
+import {
+  BAZAAR,
+  extractDiscoveryInfo,
+  type DiscoveryResource,
+} from "@x402/extensions/bazaar";
 import {
   EIP2612_GAS_SPONSORING,
   createErc20ApprovalGasSponsoringExtension,
@@ -60,9 +64,24 @@ import {
   createEd25519Signer,
   type FacilitatorStellarSigner,
 } from "@x402/stellar";
+import {
+  toFacilitatorKeetaSigner,
+  KEETA_TESTNET_CAIP2,
+  FacilitatorKeetaSigner,
+} from "@x402/keeta";
+import { ExactKeetaScheme } from "@x402/keeta/exact/facilitator";
 import { ExactStellarScheme } from "@x402/stellar/exact/facilitator";
 import { toFacilitatorCardanoSigner } from "@x402/cardano";
 import { ExactCardanoScheme } from "@x402/cardano/exact/facilitator";
+import {
+  HighloadV3Config,
+  toFacilitatorTvmSigner,
+  TVM_PROVIDER_TONAPI,
+  TVM_PROVIDER_TONCENTER,
+  type FacilitatorHighloadV3Signer,
+} from "@x402/tvm";
+import { ExactTvmScheme } from "@x402/tvm/exact/facilitator";
+import * as KeetaNet from "@keetanetwork/keetanet-client";
 import crypto from "crypto";
 import dotenv from "dotenv";
 import express from "express";
@@ -74,6 +93,7 @@ import {
   Chain,
   parseTransaction,
   recoverTransactionAddress,
+  type TransactionSerialized,
 } from "viem";
 import { privateKeyToAccount } from "viem/accounts";
 import { baseSepolia, base } from "viem/chains";
@@ -91,14 +111,19 @@ const AVM_NETWORK =
   process.env.AVM_NETWORK ||
   "algorand:SGO1GKSzyE7IEPItTxCByw9x8FmnrCDexi9/cOUJOiI=";
 const HEDERA_NETWORK = process.env.HEDERA_NETWORK || "hedera:testnet";
+const KEETA_NETWORK = process.env.KEETA_NETWORK || KEETA_TESTNET_CAIP2;
 const STELLAR_NETWORK = process.env.STELLAR_NETWORK || "stellar:testnet";
 const CARDANO_NETWORK = process.env.CARDANO_NETWORK || "cardano:preprod";
+const TVM_NETWORK = process.env.TVM_NETWORK || "tvm:-3";
 const EVM_RPC_URL = process.env.EVM_RPC_URL;
 const SVM_RPC_URL = process.env.SVM_RPC_URL;
 const AVM_RPC_URL = process.env.AVM_RPC_URL;
 const APTOS_RPC_URL = process.env.APTOS_RPC_URL;
 const HEDERA_NODE_URL = process.env.HEDERA_NODE_URL;
 const STELLAR_RPC_URL = process.env.STELLAR_RPC_URL;
+const TVM_PROVIDER = (
+  process.env.TVM_PROVIDER || TVM_PROVIDER_TONCENTER
+).toLowerCase();
 
 // Map CAIP-2 network IDs to viem chains
 function getEvmChain(network: string): Chain {
@@ -116,14 +141,17 @@ console.log(`🌐 SVM Network: ${SVM_NETWORK}`);
 console.log(`🌐 Aptos Network: ${APTOS_NETWORK}`);
 console.log(`🌐 AVM Network: ${AVM_NETWORK}`);
 console.log(`🌐 Hedera Network: ${HEDERA_NETWORK}`);
+console.log(`🌐 Keeta Network: ${KEETA_NETWORK}`);
 console.log(`🌐 Stellar Network: ${STELLAR_NETWORK}`);
 console.log(`🌐 Cardano Network: ${CARDANO_NETWORK}`);
+console.log(`🌐 TVM Network: ${TVM_NETWORK}`);
 if (EVM_RPC_URL) console.log(`🌐 EVM RPC URL: ${EVM_RPC_URL}`);
 if (SVM_RPC_URL) console.log(`🌐 SVM RPC URL: ${SVM_RPC_URL}`);
 if (AVM_RPC_URL) console.log(`🌐 AVM RPC URL: ${AVM_RPC_URL}`);
 if (APTOS_RPC_URL) console.log(`🌐 Aptos RPC URL: ${APTOS_RPC_URL}`);
 if (HEDERA_NODE_URL) console.log(`🌐 Hedera Node URL: ${HEDERA_NODE_URL}`);
 if (STELLAR_RPC_URL) console.log(`🌐 Stellar RPC URL: ${STELLAR_RPC_URL}`);
+console.log(`🌐 TVM Provider: ${TVM_PROVIDER}`);
 
 // Validate required environment variables
 if (!process.env.EVM_PRIVATE_KEY) {
@@ -145,7 +173,8 @@ console.info(`EVM Facilitator account: ${evmAccount.address}`);
 
 // Dedicated receiver authorizer for the batch-settlement scheme (falls back to EVM_PRIVATE_KEY)
 const receiverAuthorizerPrivateKey =
-  process.env.EVM_RECEIVER_AUTHORIZER_PRIVATE_KEY ?? process.env.EVM_PRIVATE_KEY;
+  process.env.EVM_RECEIVER_AUTHORIZER_PRIVATE_KEY ??
+  process.env.EVM_PRIVATE_KEY;
 const authorizerAccount = privateKeyToAccount(
   receiverAuthorizerPrivateKey as `0x${string}`,
 );
@@ -210,6 +239,20 @@ if (process.env.HEDERA_ACCOUNT_ID && process.env.HEDERA_PRIVATE_KEY) {
   console.info(`Hedera Facilitator account: ${hederaAccountId}`);
 }
 
+let keetaSigner: FacilitatorKeetaSigner | undefined;
+if (process.env.KEETA_FACILITATOR_MNEMONIC) {
+  const keetaAccount = KeetaNet.lib.Account.fromSeed(
+    await KeetaNet.lib.Account.seedFromPassphrase(
+      process.env.KEETA_FACILITATOR_MNEMONIC,
+    ),
+    0,
+  );
+  console.info(
+    `Keeta Facilitator account: ${keetaAccount.publicKeyString.toString()}`,
+  );
+  keetaSigner = toFacilitatorKeetaSigner([keetaAccount]);
+}
+
 // Initialize the Stellar signer from private key (optional)
 let stellarSigner: FacilitatorStellarSigner | undefined;
 if (process.env.STELLAR_PRIVATE_KEY) {
@@ -234,7 +277,32 @@ if (process.env.CARDANO_MNEMONIC) {
     },
     awaitConfirmation: true,
   });
-  console.info(`Cardano Facilitator account: ${cardanoSigner.getAddresses()[0]}`);
+  console.info(
+    `Cardano Facilitator account: ${cardanoSigner.getAddresses()[0]}`,
+  );
+}
+
+// Initialize the TVM highload signer from private key (optional)
+let tvmSigner: FacilitatorHighloadV3Signer | undefined;
+if (process.env.TVM_PRIVATE_KEY) {
+  const tvmConfig = HighloadV3Config.fromPrivateKey(
+    process.env.TVM_PRIVATE_KEY,
+    {
+      provider: TVM_PROVIDER,
+      apiKey:
+        TVM_PROVIDER === TVM_PROVIDER_TONAPI
+          ? process.env.TONAPI_API_KEY
+          : process.env.TONCENTER_API_KEY,
+      providerBaseUrl:
+        TVM_PROVIDER === TVM_PROVIDER_TONAPI
+          ? process.env.TONAPI_BASE_URL
+          : process.env.TONCENTER_BASE_URL,
+    },
+  );
+  tvmSigner = toFacilitatorTvmSigner({ [TVM_NETWORK]: tvmConfig });
+  console.info(
+    `TVM Facilitator account: ${tvmSigner.getAddressesForNetwork(TVM_NETWORK)[0]}`,
+  );
 }
 
 // Create a Viem client with both wallet and public capabilities
@@ -297,9 +365,9 @@ const svmSigner = toFacilitatorSvmSigner(
 // Pass custom RPC URL if provided
 const aptosSigner = aptosAccount
   ? toFacilitatorAptosSigner(
-    aptosAccount,
-    APTOS_RPC_URL ? { defaultRpcUrl: APTOS_RPC_URL } : undefined,
-  )
+      aptosAccount,
+      APTOS_RPC_URL ? { defaultRpcUrl: APTOS_RPC_URL } : undefined,
+    )
   : undefined;
 
 const verifiedPayments = new Map<string, number>();
@@ -334,7 +402,8 @@ function extractPayloadAction(paymentPayload: PaymentPayload): string {
 }
 
 // Minimal ABI fragment for reading channel state from the BatchSettlement contract
-const BATCH_SETTLEMENT_ADDRESS = "0x4020e07E964De72a79367828c9C6140fcaE00003" as const;
+const BATCH_SETTLEMENT_ADDRESS =
+  "0x4020e07E964De72a79367828c9C6140fcaE00003" as const;
 const channelsAbi = [
   {
     type: "function",
@@ -362,7 +431,11 @@ async function readChannelBalance(channelId: `0x${string}`): Promise<bigint> {
 async function waitForChannelDepositConfirmed(
   channelId: `0x${string}`,
   expectedMinBalance: bigint,
-  options: { initialDelayMs?: number; maxDelayMs?: number; timeoutMs?: number } = {},
+  options: {
+    initialDelayMs?: number;
+    maxDelayMs?: number;
+    timeoutMs?: number;
+  } = {},
 ): Promise<void> {
   const initialDelayMs = options.initialDelayMs ?? 250;
   const maxDelayMs = options.maxDelayMs ?? 4_000;
@@ -402,8 +475,12 @@ async function waitForChannelDepositConfirmed(
 async function waitForBatchSettlementDepositConfirmed(
   extra: Record<string, unknown> | undefined,
 ): Promise<void> {
-  const channelId = typeof extra?.channelId === "string" ? (extra.channelId as `0x${string}`) : undefined;
-  const balanceStr = typeof extra?.balance === "string" ? extra.balance : undefined;
+  const channelId =
+    typeof extra?.channelId === "string"
+      ? (extra.channelId as `0x${string}`)
+      : undefined;
+  const balanceStr =
+    typeof extra?.balance === "string" ? extra.balance : undefined;
 
   if (!channelId || !balanceStr) {
     console.warn(
@@ -416,7 +493,9 @@ async function waitForBatchSettlementDepositConfirmed(
   try {
     expectedMinBalance = BigInt(balanceStr);
   } catch {
-    console.warn(`⏳ deposit confirm: unparseable balance ${balanceStr}, skipping wait`);
+    console.warn(
+      `⏳ deposit confirm: unparseable balance ${balanceStr}, skipping wait`,
+    );
     return;
   }
 
@@ -466,6 +545,12 @@ if (hederaSigner) {
     new ExactHederaScheme(hederaSigner),
   );
 }
+if (keetaSigner) {
+  facilitator.register(
+    KEETA_NETWORK as Network,
+    new ExactKeetaScheme(keetaSigner, console),
+  );
+}
 if (stellarSigner) {
   facilitator.register(
     STELLAR_NETWORK as Network,
@@ -478,7 +563,9 @@ if (cardanoSigner) {
     new ExactCardanoScheme(cardanoSigner),
   );
 }
-
+if (tvmSigner) {
+  facilitator.register(TVM_NETWORK as Network, new ExactTvmScheme(tvmSigner));
+}
 
 const erc20ApprovalSigner = {
   ...evmSigner,
@@ -495,7 +582,7 @@ const erc20ApprovalSigner = {
         // Parse the raw tx to extract sender and gas params for potential gas funding
         const parsed = parseTransaction(tx);
         const payerAddress = await recoverTransactionAddress({
-          serializedTransaction: tx,
+          serializedTransaction: tx as TransactionSerialized,
         });
         const gas = parsed.gas ?? 70_000n;
         const maxFeePerGas = parsed.maxFeePerGas ?? 1_000_000_000n;
@@ -559,7 +646,7 @@ facilitator
       );
       if (discovered) {
         const action =
-          "method" in discovered ? discovered.method : discovered.toolName;
+          "toolName" in discovered ? discovered.toolName : discovered.method;
         if (!action) {
           return;
         }
@@ -798,6 +885,9 @@ app.get("/health", (req, res) => {
     avmNetwork: avmSigner ? AVM_NETWORK : "(not configured)",
     aptosNetwork: aptosAccount ? APTOS_NETWORK : "(not configured)",
     hederaNetwork: hederaSigner ? HEDERA_NETWORK : "(not configured)",
+    keetaNetwork: process.env.KEETA_FACILITATOR_MNEMONIC
+      ? KEETA_NETWORK
+      : "(not configured)",
     stellarNetwork: stellarSigner ? STELLAR_NETWORK : "(not configured)",
     cardanoNetwork: cardanoSigner ? CARDANO_NETWORK : "(not configured)",
     facilitator: "typescript",
@@ -816,13 +906,14 @@ app.post("/close", (req, res) => {
   console.log("Received shutdown request");
 
   // Give time for response to be sent
-  setTimeout(() => {
+  setTimeout(async () => {
+    await keetaSigner?.destroy();
     process.exit(0);
   }, 100);
 });
 
 // Start the server
-app.listen(parseInt(PORT), () => {
+let server = app.listen(parseInt(PORT), () => {
   console.log(`
 ╔════════════════════════════════════════════════════════╗
 ║           x402 TypeScript Facilitator                  ║
@@ -833,10 +924,12 @@ app.listen(parseInt(PORT), () => {
 ║  AVM Network:  ${AVM_NETWORK}                          ║
 ║  Aptos Network: ${APTOS_NETWORK}                       ║
 ║  Hedera Network: ${HEDERA_NETWORK}                     ║
+║  Keeta Network: ${KEETA_NETWORK}                       ║
 ║  EVM Address:  ${evmAccount.address}                   ║
 ║  AVM Address:  ${avmSigner ? avmSigner.getAddresses()[0] : "(not configured)"}
 ║  Aptos Address: ${aptosAccount ? aptosAccount.accountAddress.toStringLong().slice(0, 20) + "..." : "(not configured)"}
 ║  Hedera Address: ${process.env.HEDERA_ACCOUNT_ID || "(not configured)"} ║
+║  Keeta Address: ${keetaSigner?.getAddresses()[0] || "(not configured)"} ║
 ║  Stellar Address: ${stellarSigner ? stellarSigner.address : "(not configured)"} ║
 ║  Cardano Address: ${cardanoSigner ? cardanoSigner.getAddresses()[0] : "(not configured)"} ║
 ║  Extensions:   bazaar                                  ║
@@ -854,3 +947,14 @@ app.listen(parseInt(PORT), () => {
   // Log that facilitator is ready (needed for e2e test discovery)
   console.log("Facilitator listening");
 });
+
+if (keetaSigner) {
+  const shutdown = async () => {
+    server.close(async () => {
+      await keetaSigner.destroy();
+      process.exit(0);
+    });
+  };
+  process.on("SIGTERM", shutdown);
+  process.on("SIGINT", shutdown);
+}

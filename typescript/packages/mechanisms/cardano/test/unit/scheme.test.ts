@@ -262,7 +262,7 @@ describe("ExactCardanoScheme facilitator", () => {
       reqs,
     );
     expect(settle.success).toBe(true);
-    expect((settle.extensions as { status?: string } | undefined)?.status).toBe("mempool");
+    expect((settle.extra as { status?: string } | undefined)?.status).toBe("mempool");
   });
 });
 

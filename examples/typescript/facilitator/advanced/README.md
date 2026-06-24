@@ -10,7 +10,8 @@ Express.js facilitator service demonstrating advanced x402 patterns including al
 - SVM private key with Solana Devnet SOL for transaction fees
 - Stellar private key with testnet XLM for transaction fees (fund via [Stellar Laboratory](https://lab.stellar.org/account/create) ➡️ Generate keypair ➡️ Fund account with Friendbot)
 - Hedera account id + private key for Hedera testnet fees (optional)
-- Cardano wallet seed with preprod tADA for submission fees, funded via the [Cardano testnets faucet](https://docs.cardano.org/cardano-testnets/tools/faucet/) (optional)
+- Keeta mnemonic (seed phrase) and wallet with Testnet KTA for transaction fees (create wallet on [Keeta Testnet Wallet](https://wallet.test.keeta.com/) and fund via [Keeta Testnet Faucet](https://faucet.test.keeta.com/))
+- Cardano: a Blockfrost project id (preprod/preview) for chain queries and submission, plus an optional facilitator mnemonic — the facilitator only broadcasts the client's signed transaction, so it needs **no funds**
 
 ## Setup
 
@@ -22,14 +23,15 @@ cp .env-local .env
 
 and fill required environment variables:
 
-- `CARDANO_MNEMONIC` - Cardano wallet seed phrase for the fee-paying facilitator wallet (optional)
-- `CARDANO_NETWORK` - Cardano network (optional, defaults to `cardano:preprod`)
-- `BLOCKFROST_PREPROD_URL` / `BLOCKFROST_PROJECT_ID` - Blockfrost endpoint + project id (required when `CARDANO_MNEMONIC` is set)
 - `EVM_PRIVATE_KEY` - Ethereum private key
 - `SVM_PRIVATE_KEY` - Solana private key
 - `STELLAR_PRIVATE_KEY` - Stellar secret key (starts with `S`)
 - `HEDERA_ACCOUNT_ID` - Hedera account id for fee payer (optional)
 - `HEDERA_PRIVATE_KEY` - Hedera **ECDSA** private key (0x-prefixed or DER-encoded) for fee payer (optional)
+- `KEETA_MNEMONIC` - Keeta mnemonic
+- `CARDANO_MNEMONIC` - Cardano facilitator mnemonic (optional; only exposes an address — the facilitator needs no funds)
+- `CARDANO_NETWORK` - Cardano network (optional, defaults to `cardano:preprod`)
+- `BLOCKFROST_PROJECT_ID` / `BLOCKFROST_PREPROD_URL` - Blockfrost project id + endpoint (required for Cardano chain queries and submission)
 - `PORT` - Server port (optional, defaults to 4022)
 
 2. Install and build all packages from the typescript examples root:
@@ -75,6 +77,11 @@ Returns payment schemes and networks this facilitator supports.
     {
       "x402Version": 2,
       "scheme": "exact",
+      "network": "keeta:1413829460"
+    },
+    {
+      "x402Version": 2,
+      "scheme": "exact",
       "network": "solana:EtWTRABZaYq6iMfeYKouRu166VU2xqa1",
       "extra": {
         "feePayer": "..."
@@ -92,6 +99,7 @@ Returns payment schemes and networks this facilitator supports.
   "extensions": [],
   "signers": {
     "eip155": ["0x..."],
+    "keeta": ["keeta_..."],
     "solana": ["..."],
     "stellar": ["G..."]
   }
@@ -253,6 +261,8 @@ Networks use [CAIP-2](https://github.com/ChainAgnostic/CAIPs/blob/main/CAIPs/cai
 - `stellar:pubnet` — Stellar Mainnet
 - `hedera:testnet` — Hedera Testnet
 - `hedera:mainnet` — Hedera Mainnet
+- `keeta:1413829460` — Keeta Testnet
+- `keeta:21378` — Keeta Mainnet
+- `cardano:mainnet` — Cardano Mainnet
 - `cardano:preprod` — Cardano Preprod Testnet
 - `cardano:preview` — Cardano Preview Testnet
-- `cardano:mainnet` — Cardano Mainnet

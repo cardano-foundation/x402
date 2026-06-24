@@ -76,6 +76,12 @@ export interface BuildSignedTxParams {
   network?: string;
   /** Lovelace funding the nonce UTXO. Must cover output + fee. Defaults to 10 ADA. */
   fundingLovelace?: bigint;
+  /**
+   * Optional second wallet UTXO offered to coin selection, so the built tx has
+   * more than one input. Pair with a small `fundingLovelace` to force it to be
+   * selected. Lovelace-only.
+   */
+  secondInput?: { ref: string; lovelace: bigint };
 }
 
 /**
@@ -154,6 +160,22 @@ export async function buildSignedTx(params: BuildSignedTxParams): Promise<BuildS
     scriptRef: undefined,
   });
 
+  // Optional second wallet UTXO so coin selection can produce a multi-input tx.
+  const availableUtxos = [nonceUtxo];
+  if (params.secondInput) {
+    const [secondHash, secondIndexStr] = params.secondInput.ref.split("#");
+    availableUtxos.push(
+      new UTxO.UTxO({
+        transactionId: TransactionHash.fromHex(secondHash),
+        index: BigInt(secondIndexStr),
+        address,
+        assets: Assets.fromLovelace(params.secondInput.lovelace),
+        datumOption: undefined,
+        scriptRef: undefined,
+      }),
+    );
+  }
+
   const outputAssets = isLovelace
     ? Assets.fromLovelace(params.amount)
     : (() => {
@@ -167,7 +189,7 @@ export async function buildSignedTx(params: BuildSignedTxParams): Promise<BuildS
     .payToAddress({ address: Address.fromBech32(params.payTo), assets: outputAssets })
     .setValidity({ to: slotToValidityMs(params.ttlSlot, chain) })
     .build({
-      availableUtxos: [nonceUtxo],
+      availableUtxos,
       changeAddress: address,
       fullProtocolParameters: OFFLINE_PROTOCOL_PARAMETERS,
       autoMinUtxo: !isLovelace,

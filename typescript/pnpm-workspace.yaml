@@ -19,6 +19,7 @@ allowBuilds:
   keccak: true
   msgpackr-extract: true
   protobufjs: true
+  secp256k1: true
   sharp: true
   unrs-resolver: true
   utf-8-validate: true

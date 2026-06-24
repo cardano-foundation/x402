@@ -14,7 +14,9 @@ import {
   ERR_ASSET_MISMATCH,
   ERR_CHAIN_LOOKUP_FAILED,
   ERR_DUPLICATE_SETTLEMENT,
+  ERR_INPUT_NOT_AVAILABLE,
   ERR_INVALID_PAYLOAD,
+  ERR_INVALID_SIGNATURE,
   ERR_NETWORK_ID_MISMATCH,
   ERR_NETWORK_MISMATCH,
   ERR_NONCE_INVALID,
@@ -39,8 +41,9 @@ import type {
   DecodedCardanoTransaction,
   ExactCardanoPayload,
 } from "../../types";
-import type { FacilitatorCardanoSigner } from "../../signer";
+import type { CardanoUtxoSnapshot, FacilitatorCardanoSigner } from "../../signer";
 import { decodeCardanoPayload, decodeCardanoTransaction, parseUtxoRef } from "../../utils";
+import { scriptAddressMatches } from "./scriptAddress";
 
 /**
  * Optional configuration knobs for the Cardano facilitator scheme.
@@ -190,17 +193,14 @@ export class ExactCardanoScheme implements SchemeNetworkFacilitator {
           payer: "",
         };
       }
-
       // SECURITY: refuse unsigned transactions in verify() so /verify cannot
       // return a false-positive that would let callers grant access on an
-      // unpaid request. This witness-count check is structural only: it proves
-      // witness material is PRESENT, not that the signatures are valid. vkey
-      // signatures are not cryptographically validated here — that gate is the
-      // node's acceptance at submit time (settle). Per the eUTXO model,
-      // authorization is confirmed by settlement, so callers MUST grant access
-      // on confirmed settlement, never on verify() alone.
+      // unpaid request.
       if (decoded.vkeyWitnessCount === 0 && decoded.scriptWitnessCount === 0) {
         return { isValid: false, invalidReason: ERR_TRANSACTION_UNSIGNED, payer: "" };
+      }
+      if (!decoded.signaturesValid) {
+        return { isValid: false, invalidReason: ERR_INVALID_SIGNATURE, payer: "" };
       }
 
       // Rule 6 (TTL upper bound) AND lower validity bound: when either is
@@ -235,10 +235,15 @@ export class ExactCardanoScheme implements SchemeNetworkFacilitator {
         return { isValid: false, invalidReason: ERR_NONCE_NOT_IN_INPUTS, payer: "" };
       }
 
-      // Rule 5 (chain check): nonce UTXO MUST currently be unspent.
-      let nonceSnapshot;
+      // Rule 5 (chain check) + on-chain pre-check: EVERY transaction input MUST
+      // currently be unspent. A spent input — the nonce or any coin-selected
+      // input — guarantees the chain rejects the transaction at submission, so
+      // resolve them all here rather than only validating payload structure.
+      let inputSnapshots: CardanoUtxoSnapshot[];
       try {
-        nonceSnapshot = await this.signer.getUtxo(nonceLower, requirements.network);
+        inputSnapshots = await Promise.all(
+          decoded.inputs.map(ref => this.signer.getUtxo(ref, requirements.network)),
+        );
       } catch (cause) {
         return {
           isValid: false,
@@ -247,11 +252,19 @@ export class ExactCardanoScheme implements SchemeNetworkFacilitator {
           payer: "",
         };
       }
-      if (!nonceSnapshot.exists) {
+
+      const nonceSnapshot =
+        inputSnapshots[decoded.inputs.findIndex(ref => ref.toLowerCase() === nonceLower)];
+      if (!nonceSnapshot?.exists) {
         return { isValid: false, invalidReason: ERR_NONCE_NOT_ON_CHAIN, payer: "" };
       }
 
       const payer = nonceSnapshot.address ?? "";
+
+      // Any other input being spent means the transaction cannot settle.
+      if (inputSnapshots.some(snapshot => !snapshot.exists)) {
+        return { isValid: false, invalidReason: ERR_INPUT_NOT_AVAILABLE, payer };
+      }
 
       // Rules 2, 3, 4: at least one output MUST pay the requested amount of
       // the requested asset to the requested address. Lovelace is special-
@@ -387,7 +400,7 @@ export class ExactCardanoScheme implements SchemeNetworkFacilitator {
           transaction: submission.txHash,
           network: payload.accepted.network,
           payer: verifyResult.payer,
-          extensions: { status: submission.status },
+          extra: { status: submission.status },
         };
       }
 
@@ -396,7 +409,7 @@ export class ExactCardanoScheme implements SchemeNetworkFacilitator {
         transaction: submission.txHash,
         network: payload.accepted.network,
         payer: verifyResult.payer,
-        extensions: { status: submission.status },
+        extra: { status: submission.status },
       };
     } catch {
       // Submission threw (network error, deserialization error, etc.). Free
@@ -420,11 +433,10 @@ export class ExactCardanoScheme implements SchemeNetworkFacilitator {
    * - `masumi`: the spec does not require additional on-chain verification
    *   beyond the transfer itself; integrators wishing to enforce extra Masumi
    *   invariants can subclass and override this method.
-   * - `script`: the facilitator MUST reconstruct the script address from the
-   *   supplied script + parameters and confirm it equals `requirements.payTo`.
-   *   The base class cannot do this without a Cardano SDK that understands
-   *   the user's parameter encoding, so we REJECT script payments unless an
-   *   override has supplied the reconstruction logic.
+   * - `script`: the facilitator reconstructs the script credential from the
+   *   declared `script` (+ parameters) or `scriptHash` and confirms it equals
+   *   the script payment credential of `requirements.payTo`. A non-script
+   *   `payTo`, a missing descriptor, or a mismatch is rejected.
    *
    * @param extra - The accepted requirements' extra block.
    * @param payTo - The recipient address declared in the payment requirements.
@@ -437,7 +449,6 @@ export class ExactCardanoScheme implements SchemeNetworkFacilitator {
     payer: string,
   ): Promise<{ ok: true } | { ok: false; reason: string }> {
     void payer;
-    void payTo;
     const method =
       (extra as CardanoExtra | undefined)?.assetTransferMethod ?? ASSET_TRANSFER_METHOD_DEFAULT;
     if (method === ASSET_TRANSFER_METHOD_DEFAULT || method === ASSET_TRANSFER_METHOD_MASUMI) {
@@ -448,11 +459,13 @@ export class ExactCardanoScheme implements SchemeNetworkFacilitator {
       if (!scriptExtra.scriptHash && !scriptExtra.script) {
         return { ok: false, reason: ERR_SCRIPT_ADDRESS_MISMATCH };
       }
-      // SECURITY: per the spec, the facilitator must verify that applying the
-      // declared script + parameters yields exactly `payTo`. The base class
-      // cannot do this without an opinionated SDK, so we reject by default
-      // and require integrators to override this method.
-      return { ok: false, reason: ERR_SCRIPT_ADDRESS_MISMATCH };
+      // SECURITY: confirm payTo is the script address implied by the declared
+      // script + parameters (or scriptHash), so a server cannot redirect the
+      // payment to an address unrelated to the advertised script.
+      if (!scriptAddressMatches(scriptExtra, payTo)) {
+        return { ok: false, reason: ERR_SCRIPT_ADDRESS_MISMATCH };
+      }
+      return { ok: true };
     }
     return { ok: false, reason: ERR_UNSUPPORTED_SCHEME };
   }

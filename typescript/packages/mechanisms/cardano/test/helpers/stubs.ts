@@ -5,7 +5,15 @@
  * transactions (via {@link buildSignedTx}) but an in-memory chain layer, so the
  * full flow runs without funds or network access.
  */
-import { Address, Client, preprod, PrivateKey } from "@evolution-sdk/evolution";
+import {
+  Address,
+  Client,
+  EnterpriseAddress,
+  PlutusV3,
+  preprod,
+  PrivateKey,
+  ScriptHash,
+} from "@evolution-sdk/evolution";
 import type { Network, PaymentRequirements } from "@x402/core/types";
 
 import { CARDANO_PREPROD_CAIP2, LOVELACE_ASSET } from "../../src/constants";
@@ -87,12 +95,14 @@ export function stubClientSigner(): ClientCardanoSigner {
  * @param payTo - The recipient bech32 address.
  * @param amount - The amount in the asset's smallest unit.
  * @param asset - The asset unit (defaults to lovelace).
+ * @param extra - The requirements `extra` block (defaults to empty).
  * @returns The payment requirements.
  */
 export function buildRequirements(
   payTo: string,
   amount: string,
   asset: string = LOVELACE_ASSET,
+  extra: Record<string, unknown> = {},
 ): PaymentRequirements {
   return {
     scheme: "exact",
@@ -101,6 +111,33 @@ export function buildRequirements(
     amount,
     payTo,
     maxTimeoutSeconds: 600,
-    extra: {},
+    extra,
+  };
+}
+
+/** Minimal always-succeeds Plutus V3 script (raw flat-encoded bytes). */
+export const MINIMAL_PLUTUS_V3 = "4d01000033222220051200120011";
+
+/**
+ * Derives the enterprise script address + hash for a raw Plutus script, so
+ * tests can target a real script address without a network call.
+ *
+ * @param code - Raw flat-encoded Plutus script hex.
+ * @param networkId - 0 for testnets (default), 1 for mainnet.
+ * @returns The bech32 script address and its lowercase script hash hex.
+ */
+export function scriptAddressFor(
+  code: string,
+  networkId = 0,
+): { address: string; scriptHash: string } {
+  const script = new PlutusV3.PlutusV3({ bytes: Uint8Array.from(Buffer.from(code, "hex")) });
+  const hash = ScriptHash.fromScript(script);
+  const enterprise = new EnterpriseAddress.EnterpriseAddress({
+    networkId,
+    paymentCredential: hash,
+  });
+  return {
+    address: Address.toBech32(enterprise),
+    scriptHash: ScriptHash.toHex(hash).toLowerCase(),
   };
 }

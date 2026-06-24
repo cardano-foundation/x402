@@ -354,10 +354,40 @@ Schema:
   "success": true, // true or false
   "network": "cardano:mainnet",
   "transaction": "2f9a7b3c..." // Transaction hash of the payment if successful
-  "extensions": {
+  "extra": {
     "status": "confirmed", // "confirmed" is the recommended value; "mempool" is permitted but strongly discouraged — see settlement warning above
   }
   // Optional error field in case of failure
   "errorReason": "Utxo not found in utxo set" // Example error reason
 }
 ```
+
+## Transaction Fees
+
+The **client** constructs and signs the complete transaction (Protocol Flow step 3). The Cardano network fee is a field of the transaction body, balanced against the client's own inputs — so the **client pays the fee**, alongside the asset being transferred.
+
+The **facilitator** only broadcasts the already-signed transaction to the network. Broadcasting consumes none of the facilitator's funds, so a facilitator does **not** require a funded wallet — only a provider connection for UTXO/slot queries and transaction submission. A facilitator MAY expose an address (e.g. in the `/supported` response) for observability, but it is not used to pay or sign.
+
+**Fee sponsorship** (the facilitator paying the fee on the client's behalf) is **not supported** by this scheme version. It is achievable on Cardano through collaborative, multi-party transaction building — the facilitator contributing an input to cover the fee and co-signing the transaction — but that requires a different, interactive construction flow than the client-builds-and-signs model specified here, and is left to a future extension.
+
+## Duplicate Settlement Mitigation (RECOMMENDED)
+
+### Vulnerability
+
+A race condition exists in the settlement flow: if the same signed transaction is submitted to the facilitator's `/settle` endpoint multiple times before the first submission is confirmed on-chain, each call may return a successful response.
+
+Cardano's eUTXO model provides strong replay protection once a payment settles: the transaction consumes the `nonce` UTXO (Facilitator Verification Rule 5), so any later verification of a transaction that reuses that UTXO fails because the input no longer exists in the UTXO set. However, this guard only takes effect once the spend is observable on-chain. In the window between submission and confirmation, two concurrent `/settle` calls can each verify the nonce as still unspent and submit the same transaction. Cardano nodes deduplicate transactions by hash — a transaction already in the mempool or a recent block is not re-applied — so the second submission does not double-spend, but the facilitator may still return `success` to every caller. A malicious client can exploit this to obtain access to multiple resources while only paying once.
+
+### Recommended Mitigation
+
+Merchants and/or Facilitators SHOULD maintain a short-term, in-memory cache of transaction payloads that are currently being settled. Before proceeding with settlement, the merchant/facilitator checks whether the transaction has already been seen:
+
+1. After verification succeeds, derive a cache key from the transaction payload (e.g., the base64-encoded signed transaction string).
+2. If the key is already present in the cache, reject the settlement with a `"duplicate_settlement"` error.
+3. If the key is not present, insert it into the cache — atomically, before the first `await` on submission, so concurrent calls cannot both pass the check — and proceed with submission.
+4. Evict entries older than ~120 seconds. The on-chain nonce spend is the durable replay guard, so the cache only needs to cover the unconfirmed window; a transaction whose TTL has already passed can no longer land regardless.
+
+The claim SHOULD be released if submission fails with a transient error, so a legitimate retry can re-attempt; it SHOULD be retained on success (including `mempool`-only inclusion) so retries cannot rebroadcast the same transaction.
+
+This approach requires no external storage or long-lived state — only an in-process map with time-based eviction. It preserves the facilitator's otherwise stateless design while closing the duplicate settlement attack vector. Note that the cache is per-process: across multiple facilitator instances it does not deduplicate, but the on-chain nonce spend (Rule 5) remains the authoritative cross-instance replay guard.
+

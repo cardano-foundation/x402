@@ -18,14 +18,20 @@ import { ExactAptosScheme } from "@x402/aptos/exact/client";
 import { Account, Ed25519PrivateKey, PrivateKey, PrivateKeyVariants } from "@aptos-labs/ts-sdk";
 import { createClientHederaSigner, PrivateKey as HederaPrivateKey } from "@x402/hedera";
 import { ExactHederaScheme } from "@x402/hedera/exact/client";
+import { ExactKeetaScheme } from "@x402/keeta/exact/client";
+import { toClientKeetaSigner, KEETA_TESTNET_CAIP2, ClientKeetaSigner } from "@x402/keeta";
 import { ExactStellarScheme } from "@x402/stellar/exact/client";
 import { createEd25519Signer, type Ed25519Signer } from "@x402/stellar";
 import { ExactCardanoScheme } from "@x402/cardano/exact/client";
 import { toClientCardanoSigner } from "@x402/cardano";
+import { ExactTvmScheme } from "@x402/tvm/exact/client";
+import { toClientTvmSigner, TVM_PROVIDER_TONAPI, TVM_PROVIDER_TONCENTER } from "@x402/tvm";
 import { ExactAvmScheme as ExactAvmClientScheme } from "@x402/avm/exact/client";
 import { toClientAvmSigner } from "@x402/avm";
+import * as KeetaNet from "@keetanetwork/keetanet-client";
 import { base58 } from "@scure/base";
 import { createKeyPairSignerFromBytes } from "@solana/kit";
+import { keyPairFromSeed, type KeyPair } from "@ton/crypto";
 import { x402Client } from "@x402/core/client";
 
 config();
@@ -56,15 +62,34 @@ const evmSchemeOptions: ExactEvmSchemeOptions | undefined = process.env.EVM_RPC_
 const uptoSchemeOptions: UptoEvmSchemeOptions | undefined = process.env.EVM_RPC_URL
   ? { rpcUrl: process.env.EVM_RPC_URL }
   : undefined;
+const svmSchemeOptions = process.env.SVM_RPC_URL ? { rpcUrl: process.env.SVM_RPC_URL } : undefined;
+
+/**
+ * Parses the TVM private key accepted by e2e env fixtures.
+ *
+ * @param privateKey - Hex or base64 seed/secret key.
+ * @returns Key pair derived from the first 32 seed bytes.
+ */
+function parseTvmKeyPair(privateKey: string): KeyPair {
+  const value = privateKey.trim().replace(/^0x/, "");
+  let bytes: Buffer;
+  if (/^[0-9a-fA-F]+$/.test(value) && value.length % 2 === 0) {
+    bytes = Buffer.from(value, "hex");
+  } else {
+    bytes = Buffer.from(value, "base64");
+  }
+  if (bytes.length !== 32 && bytes.length !== 64) {
+    throw new Error("TVM_PRIVATE_KEY must be a 32-byte seed or 64-byte secret key");
+  }
+  return keyPairFromSeed(bytes.subarray(0, 32));
+}
 
 // Batch-settlement scheme uses a per-scenario salt (CHANNEL_SALT) so concurrent
 // e2e runs don't collide on the same on-chain channel id. An optional voucher
 // signer (EVM_VOUCHER_SIGNER_PRIVATE_KEY) exercises the alt-EOA voucher branch
 // while deposits keep using the main client signer.
 const channelSalt = process.env.CHANNEL_SALT as `0x${string}` | undefined;
-const voucherSignerKey = process.env.EVM_VOUCHER_SIGNER_PRIVATE_KEY as
-  | `0x${string}`
-  | undefined;
+const voucherSignerKey = process.env.EVM_VOUCHER_SIGNER_PRIVATE_KEY as `0x${string}` | undefined;
 const voucherSigner = voucherSignerKey
   ? toClientEvmSigner(privateKeyToAccount(voucherSignerKey), publicClient)
   : undefined;
@@ -98,6 +123,16 @@ if (process.env.HEDERA_ACCOUNT_ID && process.env.HEDERA_PRIVATE_KEY) {
   );
 }
 
+// Initialize Keeta signer if mnemonic is provided
+let keetaSigner: ClientKeetaSigner | undefined;
+if (process.env.KEETA_CLIENT_MNEMONIC) {
+  const keetaAccount = KeetaNet.lib.Account.fromSeed(
+    await KeetaNet.lib.Account.seedFromPassphrase(process.env.KEETA_CLIENT_MNEMONIC),
+    0,
+  );
+  keetaSigner = toClientKeetaSigner(keetaAccount);
+}
+
 // Initialize Stellar signer if key is provided
 let stellarSigner: Ed25519Signer | undefined;
 if (process.env.STELLAR_PRIVATE_KEY) {
@@ -125,20 +160,43 @@ if (process.env.AVM_PRIVATE_KEY) {
   avmSigner = toClientAvmSigner(process.env.AVM_PRIVATE_KEY);
 }
 
+const tvmNetwork = process.env.TVM_NETWORK || "tvm:-3";
+const tvmPrivateKey = process.env.TVM_PRIVATE_KEY;
+const tvmProvider = (process.env.TVM_PROVIDER || TVM_PROVIDER_TONCENTER).toLowerCase();
+const tvmScheme = tvmPrivateKey
+  ? new ExactTvmScheme(
+      toClientTvmSigner(parseTvmKeyPair(tvmPrivateKey), {
+        network: tvmNetwork,
+        provider: tvmProvider,
+        apiKey:
+          tvmProvider === TVM_PROVIDER_TONAPI
+            ? process.env.TONAPI_API_KEY
+            : process.env.TONCENTER_API_KEY,
+        providerBaseUrl:
+          tvmProvider === TVM_PROVIDER_TONAPI
+            ? process.env.TONAPI_BASE_URL
+            : process.env.TONCENTER_BASE_URL,
+      }),
+    )
+  : undefined;
+
 const client = new x402Client()
   .register("eip155:*", new ExactEvmScheme(evmSigner, evmSchemeOptions))
   .register("eip155:*", new UptoEvmClientScheme(evmSigner, uptoSchemeOptions))
   .register("eip155:*", batchSettlementScheme)
   .registerV1("base-sepolia", new ExactEvmSchemeV1(evmSigner))
   .registerV1("base", new ExactEvmSchemeV1(evmSigner))
-  .register("solana:*", new ExactSvmScheme(svmSigner))
-  .registerV1("solana-devnet", new ExactSvmSchemeV1(svmSigner))
-  .registerV1("solana", new ExactSvmSchemeV1(svmSigner));
+  .register("solana:*", new ExactSvmScheme(svmSigner, svmSchemeOptions))
+  .registerV1("solana-devnet", new ExactSvmSchemeV1(svmSigner, svmSchemeOptions))
+  .registerV1("solana", new ExactSvmSchemeV1(svmSigner, svmSchemeOptions));
 if (aptosAccount) {
   client.register("aptos:*", new ExactAptosScheme(aptosAccount));
 }
 if (hederaClientSigner) {
   client.register("hedera:*", new ExactHederaScheme(hederaClientSigner));
+}
+if (keetaSigner) {
+  client.register(KEETA_TESTNET_CAIP2, new ExactKeetaScheme(keetaSigner));
 }
 if (stellarSigner) {
   client.register("stellar:*", new ExactStellarScheme(stellarSigner));
@@ -148,6 +206,9 @@ if (cardanoSigner) {
 }
 if (avmSigner) {
   client.register("algorand:*", new ExactAvmClientScheme(avmSigner));
+}
+if (tvmScheme) {
+  client.register("tvm:*", tvmScheme);
 }
 
 const axiosWithPayment = wrapAxiosWithPayment(axios.create(), client);
@@ -167,9 +228,14 @@ interface RequestResult {
   success: boolean;
   data: unknown;
   status_code: number;
-  payment_response?: any;
+  payment_response?: unknown;
 }
 
+/**
+ * Issues a single paid request and returns the parsed result.
+ *
+ * @returns Structured result with response data and decoded payment-response.
+ */
 async function issueRequest(): Promise<RequestResult> {
   const response = await axiosWithPayment.get(url);
   const paymentResponseHeader =
@@ -188,6 +254,14 @@ async function issueRequest(): Promise<RequestResult> {
   };
 }
 
+/**
+ * Combines the multi-request batch-settlement phases into one e2e result.
+ *
+ * @param phase - Current batch-settlement scenario phase.
+ * @param results - Ordered request results included in the aggregate.
+ * @param details - Named request results for easier test assertions.
+ * @returns Aggregated e2e client result.
+ */
 function aggregateBatchResult(
   phase: "initial" | "recovery-refund" | "full",
   results: RequestResult[],
@@ -218,7 +292,9 @@ try {
   if (batchSettlementPhase === "initial") {
     const deposit = await issueRequest();
     const voucher = await issueRequest();
-    console.log(JSON.stringify(aggregateBatchResult("initial", [deposit, voucher], { deposit, voucher })));
+    console.log(
+      JSON.stringify(aggregateBatchResult("initial", [deposit, voucher], { deposit, voucher })),
+    );
     process.exit(0);
   }
 
@@ -252,7 +328,11 @@ try {
       status_code: 200,
       payment_response: refundSettle,
     };
-    console.log(JSON.stringify(aggregateBatchResult("full", [deposit, voucher, refund], { deposit, voucher, refund })));
+    console.log(
+      JSON.stringify(
+        aggregateBatchResult("full", [deposit, voucher, refund], { deposit, voucher, refund }),
+      ),
+    );
     process.exit(0);
   }
 

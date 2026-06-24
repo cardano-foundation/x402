@@ -10,5 +10,6 @@
  */
 export const NETWORK_DECIMALS: Record<string, number> = {
   "eip155:31611": 18,
+  "eip155:31612": 18,
   "eip155:4326": 18,
 };
