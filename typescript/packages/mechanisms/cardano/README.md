@@ -52,15 +52,16 @@ const facilitatorSigner = toFacilitatorCardanoSigner({ mnemonic, network: "carda
 facilitator.register("cardano:preprod", new ExactCardanoFacilitator(facilitatorSigner));
 ```
 
-The facilitator signer also implements the optional `evaluateTransaction` dry-run described below. A Koios provider (`{ koios: { baseUrl, token? } }`) may be used instead of Blockfrost.
+The facilitator only broadcasts the client's signed transaction, so its `mnemonic` is **optional** — omit it to run provider-only (no funds, no signer); when supplied it is used only to expose an address in the `/supported` response. The facilitator signer also implements the optional `evaluateTransaction` dry-run described below. A Koios provider (`{ koios: { baseUrl, token? } }`) may be used instead of Blockfrost.
 
 ## Testnet funds
 
 Get test ADA (tADA) for `cardano:preprod` or `cardano:preview` from the official
-[Cardano testnets faucet](https://docs.cardano.org/cardano-testnets/tools/faucet/). The **client**
-wallet must hold the asset it pays with and the **facilitator** wallet needs tADA to cover submission
-fees. `asset: "lovelace"` is fundable directly from the faucet; preprod **USDM** must be sourced
-separately, so use lovelace for quick live testing.
+[Cardano testnets faucet](https://docs.cardano.org/cardano-testnets/tools/faucet/). Only the
+**client** needs funds: it builds and signs the complete transaction, so its wallet must hold the
+asset it pays with plus a little ADA for the network fee. The **facilitator** only broadcasts that
+signed transaction — it pays no fee and needs no funds. `asset: "lovelace"` is fundable directly
+from the faucet; preprod **USDM** must be sourced separately, so use lovelace for quick live testing.
 
 ## Asset transfer methods
 

@@ -362,6 +362,14 @@ Schema:
 }
 ```
 
+## Transaction Fees
+
+The **client** constructs and signs the complete transaction (Protocol Flow step 3). The Cardano network fee is a field of the transaction body, balanced against the client's own inputs — so the **client pays the fee**, alongside the asset being transferred.
+
+The **facilitator** only broadcasts the already-signed transaction to the network. Broadcasting consumes none of the facilitator's funds, so a facilitator does **not** require a funded wallet — only a provider connection for UTXO/slot queries and transaction submission. A facilitator MAY expose an address (e.g. in the `/supported` response) for observability, but it is not used to pay or sign.
+
+**Fee sponsorship** (the facilitator paying the fee on the client's behalf) is **not supported** by this scheme version. It is achievable on Cardano through collaborative, multi-party transaction building — the facilitator contributing an input to cover the fee and co-signing the transaction — but that requires a different, interactive construction flow than the client-builds-and-signs model specified here, and is left to a future extension.
+
 ## Duplicate Settlement Mitigation (RECOMMENDED)
 
 ### Vulnerability

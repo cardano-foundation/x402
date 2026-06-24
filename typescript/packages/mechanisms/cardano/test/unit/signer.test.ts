@@ -35,4 +35,18 @@ describe("toFacilitatorCardanoSigner", () => {
       /configured for cardano:preprod/,
     );
   });
+
+  it("exposes one address with a mnemonic and none when run provider-only", () => {
+    const withWallet = makeSigner();
+    expect(withWallet.getAddresses()).toHaveLength(1);
+    expect(withWallet.getAddresses()[0]).toMatch(/^addr_test1/);
+
+    // The facilitator only broadcasts the client's signed transaction, so the
+    // mnemonic is optional; without it there is no address to expose.
+    const providerOnly = toFacilitatorCardanoSigner({
+      network: CARDANO_PREPROD_CAIP2,
+      provider: { blockfrost: { baseUrl: "http://offline.invalid" } },
+    });
+    expect(providerOnly.getAddresses()).toEqual([]);
+  });
 });
