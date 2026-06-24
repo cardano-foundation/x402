@@ -17,6 +17,7 @@ import {
   CARDANO_PREPROD_CAIP2,
   CARDANO_PREVIEW_CAIP2,
   LOVELACE_ASSET,
+  normalizeCardanoNetwork,
 } from "./constants";
 import { parseAssetUnit, parseUtxoRef } from "./utils";
 
@@ -36,7 +37,7 @@ export type CardanoProviderConfig =
  * @returns The matching Evolution SDK chain preset.
  */
 function resolveChain(network: string): Chain {
-  switch (network) {
+  switch (normalizeCardanoNetwork(network)) {
     case CARDANO_MAINNET_CAIP2:
       return mainnet;
     case CARDANO_PREPROD_CAIP2:
@@ -348,7 +349,7 @@ export function toClientCardanoSigner(config: ClientCardanoSignerConfig): Client
     async buildAndSignPaymentTransaction(
       input: ClientCardanoSignInput,
     ): Promise<ClientCardanoSignResult> {
-      if (input.network !== config.network) {
+      if (normalizeCardanoNetwork(input.network) !== normalizeCardanoNetwork(config.network)) {
         throw new Error(
           `Signer configured for ${config.network} but asked to pay on ${input.network}`,
         );
@@ -464,7 +465,7 @@ export function toFacilitatorCardanoSigner(
     : [];
 
   const assertNetwork = (network: string): void => {
-    if (network !== config.network) {
+    if (normalizeCardanoNetwork(network) !== normalizeCardanoNetwork(config.network)) {
       throw new Error(`Signer configured for ${config.network} but asked about ${network}`);
     }
   };

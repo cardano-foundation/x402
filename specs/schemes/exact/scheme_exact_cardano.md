@@ -11,6 +11,17 @@ It offers different assetTransferMethods to do x402 interactions:
 2. Using the **Masumi Smart Protocol**, which offers additional refund mechanics & decision logging mechanisms in a decentralised way.
 
 3. Performing payments to scripts using parameters that can be applied to scripts while transaction building.
+
+## Network Identifiers
+
+The canonical network identifiers for this scheme are `cardano:mainnet`, `cardano:preprod`, and `cardano:preview`. These are the only forms advertised in the `/supported` response.
+
+These ids are valid CAIP-2 *syntax* over the `cardano` namespace, which is **not** a registered ChainAgnostic (CASA) namespace — so no strictly "canonical CAIP-2" form exists for Cardano. The scheme deliberately uses human-readable names because:
+
+- The only standardized identifier is [CIP-34](https://cips.cardano.org/cip/CIP-0034)'s `cip34:NetworkId-NetworkMagic` form — `cip34:1-764824073` (mainnet), `cip34:0-1` (preprod), `cip34:0-2` (preview) — which disambiguates correctly but has poor developer/UX ergonomics.
+
+Clients and facilitators **SHOULD** accept the CIP-34 forms above as **input aliases** and normalize them to the canonical id before matching, settlement, and chain selection. A facilitator MUST treat a CIP-34 alias and its canonical id as the same network (e.g. an `accepted.network` of `cip34:1-764824073` matches a `requirements.network` of `cardano:mainnet`). The alias set is closed and fixed; no other forms are recognized.
+
 ## Protocol Flow
 
 ```mermaid

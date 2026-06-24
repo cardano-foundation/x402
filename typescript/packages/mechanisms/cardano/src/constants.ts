@@ -1,9 +1,15 @@
 /**
  * Network identifier for Cardano Mainnet.
  *
- * The x402 Cardano spec uses human-readable names ("cardano:mainnet") rather
- * than canonical CAIP-2 form ("cardano:1" or genesis-hash CAIP-2). Treat these
- * as x402-local network identifiers; do not "fix" them to canonical CAIP-2.
+ * `cardano:mainnet`/`cardano:preprod`/`cardano:preview` are the canonical,
+ * advertised x402 identifiers (good DX, and they disambiguate the two
+ * testnets). They are valid CAIP-2 syntax over the (unregistered) `cardano`
+ * namespace; no registered CASA `cardano` namespace exists, so `cardano:1`
+ * would be no more canonical — and it cannot distinguish preprod from preview,
+ * which share network id 0. The only standardized form is CIP-34's
+ * `cip34:NetworkId-NetworkMagic`, which has poor DX. We accept those CIP-34
+ * forms as input aliases (see {@link normalizeCardanoNetwork}) and normalize
+ * them to these canonical ids; `/supported` advertises only the canonical ids.
  */
 export const CARDANO_MAINNET_CAIP2 = "cardano:mainnet";
 
@@ -25,6 +31,37 @@ export const CARDANO_NETWORKS = [
   CARDANO_PREPROD_CAIP2,
   CARDANO_PREVIEW_CAIP2,
 ] as const;
+
+/**
+ * CIP-34 network identifiers (`cip34:NetworkId-NetworkMagic`). Accepted as
+ * input aliases for the canonical ids above. Network magics: mainnet =
+ * 764824073, preprod = 1, preview = 2.
+ */
+export const CARDANO_MAINNET_CIP34 = "cip34:1-764824073";
+export const CARDANO_PREPROD_CIP34 = "cip34:0-1";
+export const CARDANO_PREVIEW_CIP34 = "cip34:0-2";
+
+/**
+ * Maps each accepted CIP-34 alias to its canonical x402 Cardano network id.
+ */
+const CARDANO_NETWORK_ALIASES: Record<string, string> = {
+  [CARDANO_MAINNET_CIP34]: CARDANO_MAINNET_CAIP2,
+  [CARDANO_PREPROD_CIP34]: CARDANO_PREPROD_CAIP2,
+  [CARDANO_PREVIEW_CIP34]: CARDANO_PREVIEW_CAIP2,
+};
+
+/**
+ * Normalizes a network identifier to its canonical x402 Cardano form. Known
+ * CIP-34 aliases are folded to the canonical id; any other value (already
+ * canonical, or a non-Cardano network) is returned unchanged so existing
+ * rejection paths still apply.
+ *
+ * @param network - The network identifier to normalize.
+ * @returns The canonical Cardano network id, or the input unchanged.
+ */
+export function normalizeCardanoNetwork(network: string): string {
+  return CARDANO_NETWORK_ALIASES[network] ?? network;
+}
 
 /**
  * Cardano network ID encoded inside transaction bodies.
@@ -127,7 +164,7 @@ export const ASSET_TRANSFER_METHOD_SCRIPT = "script";
  * @returns The Cardano network ID (1 = mainnet, 0 = testnet).
  */
 export function getCardanoNetworkId(network: string): number {
-  switch (network) {
+  switch (normalizeCardanoNetwork(network)) {
     case CARDANO_MAINNET_CAIP2:
       return CARDANO_NETWORK_ID_MAINNET;
     case CARDANO_PREPROD_CAIP2:
@@ -146,7 +183,7 @@ export function getCardanoNetworkId(network: string): number {
  * @returns True if the network is a supported Cardano network.
  */
 export function isCardanoNetwork(network: string): boolean {
-  return (CARDANO_NETWORKS as readonly string[]).includes(network);
+  return (CARDANO_NETWORKS as readonly string[]).includes(normalizeCardanoNetwork(network));
 }
 
 /**
@@ -160,7 +197,7 @@ export function isCardanoNetwork(network: string): boolean {
  * @returns The default USDM asset unit string.
  */
 export function getDefaultUsdmAsset(network: string): string {
-  switch (network) {
+  switch (normalizeCardanoNetwork(network)) {
     case CARDANO_MAINNET_CAIP2:
       return USDM_MAINNET_ASSET;
     case CARDANO_PREPROD_CAIP2:

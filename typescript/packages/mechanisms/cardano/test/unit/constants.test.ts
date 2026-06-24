@@ -3,14 +3,18 @@ import {
   CARDANO_ADDRESS_REGEX,
   CARDANO_ASSET_REGEX,
   CARDANO_MAINNET_CAIP2,
+  CARDANO_MAINNET_CIP34,
   CARDANO_NETWORKS,
   CARDANO_PREPROD_CAIP2,
+  CARDANO_PREPROD_CIP34,
   CARDANO_PREVIEW_CAIP2,
+  CARDANO_PREVIEW_CIP34,
   CARDANO_UTXO_REF_REGEX,
   ERR_NETWORK_MISMATCH,
   getCardanoNetworkId,
   getDefaultUsdmAsset,
   isCardanoNetwork,
+  normalizeCardanoNetwork,
   SCHEME_EXACT,
   USDM_MAINNET_ASSET,
   USDM_MAINNET_POLICY_ID,
@@ -86,5 +90,43 @@ describe("Cardano Constants", () => {
 
   it("exposes a stable network mismatch error code", () => {
     expect(ERR_NETWORK_MISMATCH).toBe("network_mismatch");
+  });
+});
+
+describe("CIP-34 network aliases", () => {
+  it("declares the CIP-34 identifiers verbatim", () => {
+    expect(CARDANO_MAINNET_CIP34).toBe("cip34:1-764824073");
+    expect(CARDANO_PREPROD_CIP34).toBe("cip34:0-1");
+    expect(CARDANO_PREVIEW_CIP34).toBe("cip34:0-2");
+  });
+
+  it("normalizes CIP-34 aliases to the canonical id", () => {
+    expect(normalizeCardanoNetwork(CARDANO_MAINNET_CIP34)).toBe(CARDANO_MAINNET_CAIP2);
+    expect(normalizeCardanoNetwork(CARDANO_PREPROD_CIP34)).toBe(CARDANO_PREPROD_CAIP2);
+    expect(normalizeCardanoNetwork(CARDANO_PREVIEW_CIP34)).toBe(CARDANO_PREVIEW_CAIP2);
+  });
+
+  it("passes canonical and unknown networks through unchanged", () => {
+    expect(normalizeCardanoNetwork(CARDANO_MAINNET_CAIP2)).toBe(CARDANO_MAINNET_CAIP2);
+    expect(normalizeCardanoNetwork("ethereum:1")).toBe("ethereum:1");
+    expect(normalizeCardanoNetwork("cip34:9-9")).toBe("cip34:9-9");
+  });
+
+  it("accepts CIP-34 aliases via isCardanoNetwork but rejects unknown cip34 forms", () => {
+    expect(isCardanoNetwork(CARDANO_MAINNET_CIP34)).toBe(true);
+    expect(isCardanoNetwork(CARDANO_PREPROD_CIP34)).toBe(true);
+    expect(isCardanoNetwork(CARDANO_PREVIEW_CIP34)).toBe(true);
+    expect(isCardanoNetwork("cip34:9-9")).toBe(false);
+  });
+
+  it("maps CIP-34 aliases to the correct Cardano network id", () => {
+    expect(getCardanoNetworkId(CARDANO_MAINNET_CIP34)).toBe(1);
+    expect(getCardanoNetworkId(CARDANO_PREPROD_CIP34)).toBe(0);
+    expect(getCardanoNetworkId(CARDANO_PREVIEW_CIP34)).toBe(0);
+  });
+
+  it("resolves default USDM assets for CIP-34 aliases", () => {
+    expect(getDefaultUsdmAsset(CARDANO_MAINNET_CIP34)).toBe(USDM_MAINNET_ASSET);
+    expect(getDefaultUsdmAsset(CARDANO_PREPROD_CIP34)).toBe(USDM_PREPROD_ASSET);
   });
 });

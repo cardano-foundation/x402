@@ -1,7 +1,11 @@
 import { describe, expect, it } from "vitest";
 import { preprod, PrivateKey } from "@evolution-sdk/evolution";
 import { toFacilitatorCardanoSigner } from "../../src/signer";
-import { CARDANO_MAINNET_CAIP2, CARDANO_PREPROD_CAIP2 } from "../../src/constants";
+import {
+  CARDANO_MAINNET_CAIP2,
+  CARDANO_PREPROD_CAIP2,
+  CARDANO_PREPROD_CIP34,
+} from "../../src/constants";
 
 const makeSigner = (): ReturnType<typeof toFacilitatorCardanoSigner> =>
   toFacilitatorCardanoSigner({
@@ -24,6 +28,22 @@ describe("toFacilitatorCardanoSigner", () => {
     const drift = slot - expected;
     expect(drift >= -2n && drift <= 2n).toBe(true);
     expect(slot).toBeGreaterThan(sc.zeroSlot);
+  });
+
+  it("treats a CIP-34 alias and its canonical id as the same configured network", async () => {
+    // Configured with the CIP-34 form, queried with the canonical form: the
+    // normalize layer must accept it (slot is derived from the chain config,
+    // so no network call is made).
+    const aliasConfigured = toFacilitatorCardanoSigner({
+      network: CARDANO_PREPROD_CIP34,
+      provider: { blockfrost: { baseUrl: "http://offline.invalid" } },
+    });
+    await expect(aliasConfigured.getCurrentSlot(CARDANO_PREPROD_CAIP2)).resolves.toBeGreaterThan(
+      0n,
+    );
+
+    // The reverse direction: configured canonical, queried with the alias.
+    await expect(makeSigner().getCurrentSlot(CARDANO_PREPROD_CIP34)).resolves.toBeGreaterThan(0n);
   });
 
   it("rejects chain queries for a network it was not configured for", async () => {

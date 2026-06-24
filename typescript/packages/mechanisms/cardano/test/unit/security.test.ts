@@ -14,7 +14,11 @@ vi.mock("../../src/utils", async original => {
 
 import { decodeCardanoTransaction } from "../../src/utils";
 import { ExactCardanoScheme as ExactCardanoFacilitator } from "../../src/exact/facilitator/scheme";
-import { CARDANO_MAINNET_CAIP2, USDM_MAINNET_ASSET } from "../../src/constants";
+import {
+  CARDANO_MAINNET_CAIP2,
+  CARDANO_MAINNET_CIP34,
+  USDM_MAINNET_ASSET,
+} from "../../src/constants";
 import type { FacilitatorCardanoSigner } from "../../src/signer";
 import type { PaymentRequirements } from "@x402/core/types";
 
@@ -85,5 +89,37 @@ describe("Cardano facilitator security", () => {
       assetTransferMethod: "script",
       scriptHash: "deadbeef",
     });
+  });
+
+  it("treats a CIP-34 alias network as equal to its canonical id", async () => {
+    vi.mocked(decodeCardanoTransaction).mockReturnValueOnce({
+      txHash: "abc",
+      networkId: 1,
+      ttlSlot: undefined,
+      validityStartSlot: undefined,
+      inputs: [`${TX_HASH}#0`],
+      outputs: [
+        {
+          address: RECIPIENT,
+          coin: 0n,
+          assets: { [USDM_MAINNET_ASSET.toLowerCase()]: 10_000n },
+        },
+      ],
+      vkeyWitnessCount: 1,
+      scriptWitnessCount: 0,
+      signaturesValid: true,
+    });
+
+    const facilitator = new ExactCardanoFacilitator(stubSigner);
+    // Client echoes the CIP-34 form; the server requires the canonical id. The
+    // facilitator must normalize both and treat them as the same network.
+    const payload = {
+      x402Version: 2,
+      accepted: { ...buildRequirements(), network: CARDANO_MAINNET_CIP34 },
+      payload: { transaction: "AAAA", nonce: `${TX_HASH}#0` },
+    };
+    const result = await facilitator.verify(payload, buildRequirements());
+    expect(result.isValid).toBe(true);
+    expect(result.payer).toBe("addr1qpayer00");
   });
 });

@@ -33,6 +33,7 @@ import {
   ERR_VALIDITY_NOT_YET_VALID,
   getCardanoNetworkId,
   isCardanoNetwork,
+  normalizeCardanoNetwork,
   SCHEME_EXACT,
 } from "../../constants";
 import type {
@@ -145,7 +146,10 @@ export class ExactCardanoScheme implements SchemeNetworkFacilitator {
         return { isValid: false, invalidReason: ERR_UNSUPPORTED_SCHEME, payer: "" };
       }
 
-      if (payload.accepted.network !== requirements.network) {
+      if (
+        normalizeCardanoNetwork(payload.accepted.network) !==
+        normalizeCardanoNetwork(requirements.network)
+      ) {
         return { isValid: false, invalidReason: ERR_NETWORK_MISMATCH, payer: "" };
       }
 

@@ -18,7 +18,7 @@ The implementation registers the following x402 network identifiers, matching th
 | Preprod testnet | `cardano:preprod` | 0                  |
 | Preview testnet | `cardano:preview` | 0                  |
 
-These identifiers are deliberately human-readable and match the x402 Cardano spec; they are not canonical CAIP-2.
+These identifiers are deliberately human-readable and match the x402 Cardano spec; they are not canonical CAIP-2 (no registered `cardano` namespace exists). The CIP-34 forms `cip34:1-764824073` (mainnet), `cip34:0-1` (preprod), and `cip34:0-2` (preview) are accepted as input aliases and normalized to the canonical id above.
 
 ## Asset format
 
