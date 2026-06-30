@@ -82,7 +82,6 @@ export const SCHEME_EXACT = "exact";
  * USDM policy id on Cardano Mainnet.
  */
 export const USDM_MAINNET_POLICY_ID = "c48cbb3d5e57ed56e276bc45f99ab39abe94e6cd7ac39fb402da47ad";
-
 /**
  * USDM policy id on Cardano Preprod.
  */
@@ -95,7 +94,7 @@ export const USDM_PREPROD_POLICY_ID = "16a55b2a349361ff88c03788f93e1e966e5d68960
  * hex-encoded UTF-8 of `USDM` (0x5553444d).
  */
 export const USDM_ASSET_NAME_HEX = "0014df105553444d";
-
+export const USDM_ASSET_NAME_HEX_PREPROD = "0014df10745553444d";
 /**
  * Default USDM unit on Mainnet (`policyId.assetNameHex`).
  */
@@ -104,7 +103,7 @@ export const USDM_MAINNET_ASSET = `${USDM_MAINNET_POLICY_ID}.${USDM_ASSET_NAME_H
 /**
  * Default USDM unit on Preprod (`policyId.assetNameHex`).
  */
-export const USDM_PREPROD_ASSET = `${USDM_PREPROD_POLICY_ID}.${USDM_ASSET_NAME_HEX}`;
+export const USDM_PREPROD_ASSET = `${USDM_PREPROD_POLICY_ID}.${USDM_ASSET_NAME_HEX_PREPROD}`;
 
 /**
  * Default decimals for USDM (matches USDC).
