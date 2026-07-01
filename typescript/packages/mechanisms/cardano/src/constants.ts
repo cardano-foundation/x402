@@ -85,7 +85,7 @@ export const USDM_MAINNET_POLICY_ID = "c48cbb3d5e57ed56e276bc45f99ab39abe94e6cd7
 /**
  * USDM policy id on Cardano Preprod.
  */
-export const USDM_PREPROD_POLICY_ID = "16a55b2a349361ff88c03788f93e1e966e5d689605d044fef722ddde";
+export const USDM_PREPROD_POLICY_ID = "e675b46e4d2242c991a8932a99db3044e80515ae14b4c4ccf6b3f4c9";
 
 /**
  * USDM (333) reference asset name (hex of "(333) USDM").

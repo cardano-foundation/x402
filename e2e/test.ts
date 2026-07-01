@@ -608,6 +608,45 @@ function envFlagDefaultTrue(value: string | undefined): boolean {
   return !['0', 'false', 'no', 'off'].includes(value.toLowerCase());
 }
 
+/**
+ * Waits until Blockfrost's address-UTXO index reflects a just-settled Cardano
+ * transaction, so the next payment from the same wallet selects fresh UTXOs
+ * instead of an already-spent input. Polls the client address until a UTXO from
+ * `txHash` (the settlement's change output) appears. Best-effort: returns after
+ * `timeoutMs` even if not yet visible, so a Blockfrost hiccup never hard-fails
+ * the run.
+ */
+async function waitForCardanoWalletSettled(opts: {
+  addr: string;
+  txHash: string;
+  url: string;
+  projectId: string;
+  timeoutMs?: number;
+  intervalMs?: number;
+}): Promise<void> {
+  const { addr, txHash, url, projectId, timeoutMs = 60000, intervalMs = 3000 } = opts;
+  const deadline = Date.now() + timeoutMs;
+  verboseLog(`  ⏳ Waiting for Blockfrost to reflect settled tx ${txHash.slice(0, 12)}… on the wallet`);
+  while (Date.now() < deadline) {
+    try {
+      const res = await fetch(`${url}/addresses/${addr}/utxos`, {
+        headers: { project_id: projectId },
+      });
+      if (res.ok) {
+        const utxos = (await res.json()) as Array<{ tx_hash?: string }>;
+        if (Array.isArray(utxos) && utxos.some(u => u.tx_hash === txHash)) {
+          verboseLog(`  ✅ Wallet reflects settled tx ${txHash.slice(0, 12)}…; proceeding`);
+          return;
+        }
+      }
+    } catch {
+      // Transient Blockfrost/network error — keep polling until the deadline.
+    }
+    await new Promise(resolve => setTimeout(resolve, intervalMs));
+  }
+  verboseLog(`  ⚠️ Timed out waiting for Blockfrost to reflect ${txHash.slice(0, 12)}…; proceeding`);
+}
+
 async function runTest() {
   // Show help if requested
   if (parsedArgs.showHelp) {
@@ -1050,6 +1089,7 @@ async function runTest() {
     depositTransaction?: string;
     refundTransaction?: string;
     network?: string;
+    payer?: string;
   }
 
   let testResults: DetailedTestResult[] = [];
@@ -1386,6 +1426,7 @@ async function runTest() {
         error: result.error,
         transaction: result.payment_response?.transaction,
         network: result.payment_response?.network,
+        payer: result.payment_response?.payer,
       };
 
       if (result.success) {
@@ -1584,14 +1625,25 @@ async function runTest() {
             // the two can collide on the same nonce on load-balanced RPCs.
             await new Promise(resolve => setTimeout(resolve, 1500));
           } else if (isCardano) {
-            // Pause between sequential Cardano tests, which all pay from the same
-            // client wallet. The settlement is already confirmed on-chain (the
+            // All Cardano tests pay from the same client wallet, and the signer
+            // always selects utxos[0]. The settlement is confirmed on-chain (the
             // facilitator awaits confirmation), but Blockfrost's address-UTXO
-            // index lags the confirmed block by a few seconds. Without this pause
-            // the next payment fetches a stale UTXO set, reselects the just-spent
-            // input, and the node rejects it at submission (BadInputsUTxO). The
-            // delay lets the index catch up so the next tx picks the fresh change.
-            await new Promise(resolve => setTimeout(resolve, 20000));
+            // index lags the block, so a fixed pause can still let the next test
+            // reselect the just-spent input (BadInputsUTxO). Instead, wait
+            // deterministically until Blockfrost reflects this settlement on the
+            // wallet before the next payment.
+            const projectId = process.env.BLOCKFROST_PROJECT_ID;
+            if (result.transaction && result.payer && projectId) {
+              await waitForCardanoWalletSettled({
+                addr: result.payer,
+                txHash: result.transaction,
+                url: networks.cardano.rpcUrl,
+                projectId,
+              });
+            } else {
+              // No settled tx to wait on (e.g. the test failed) — short fallback pause.
+              await new Promise(resolve => setTimeout(resolve, 20000));
+            }
           }
 
           return result;

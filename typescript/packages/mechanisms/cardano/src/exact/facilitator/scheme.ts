@@ -64,6 +64,26 @@ export interface ExactCardanoFacilitatorConfig {
 }
 
 /**
+ * Joins an error and its nested `.cause` chain into a single message, so a
+ * settlement failure reports the real node/provider reason (e.g. `BadInputsUTxO`)
+ * instead of only a shallow wrapper like "Blockfrost submitTx failed". Total;
+ * never throws.
+ *
+ * @param error - The thrown value.
+ * @param maxDepth - Maximum `.cause` links to include.
+ * @returns The joined message chain.
+ */
+function describeErrorChain(error: unknown, maxDepth = 5): string {
+  const parts: string[] = [];
+  let current: unknown = error;
+  for (let depth = 0; current != null && depth < maxDepth; depth++) {
+    parts.push(current instanceof Error ? current.message : String(current));
+    current = (current as { cause?: unknown }).cause;
+  }
+  return parts.join(" | ");
+}
+
+/**
  * Cardano facilitator implementation for the Exact payment scheme.
  *
  * Performs all checks listed in the "Facilitator Verification Rules" section
@@ -425,7 +445,7 @@ export class ExactCardanoScheme implements SchemeNetworkFacilitator {
       return {
         success: false,
         errorReason: ERR_SETTLEMENT_FAILED,
-        errorMessage: cause instanceof Error ? cause.message : String(cause),
+        errorMessage: describeErrorChain(cause),
         transaction: "",
         network: payload.accepted.network,
       };
