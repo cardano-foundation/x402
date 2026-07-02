@@ -1,14 +1,32 @@
 import {
   Address,
+  Data,
   Ed25519Signature,
   Transaction,
   TransactionBody,
   TransactionHash,
+  TxOut,
   VKey,
 } from "@evolution-sdk/evolution";
 
-import { CARDANO_ASSET_REGEX, CARDANO_UTXO_REF_REGEX } from "./constants";
+import {
+  CARDANO_ASSET_REGEX,
+  CARDANO_MIN_UTXO_OVERHEAD_BYTES,
+  CARDANO_UTXO_REF_REGEX,
+} from "./constants";
 import type { CardanoUtxoOutput, DecodedCardanoTransaction, ExactCardanoPayload } from "./types";
+
+/**
+ * Protocol minimum lovelace for a transaction output of the given CBOR-serialized
+ * size: `(overhead + serializedSize) * coinsPerUtxoByte` (Babbage/Conway rule).
+ *
+ * @param serializedSize - Byte length of the CBOR-serialized output.
+ * @param coinsPerUtxoByte - The `coinsPerUtxoByte` protocol parameter.
+ * @returns The minimum lovelace the output must carry.
+ */
+export function minUtxoLovelace(serializedSize: number, coinsPerUtxoByte: bigint): bigint {
+  return BigInt(CARDANO_MIN_UTXO_OVERHEAD_BYTES + serializedSize) * coinsPerUtxoByte;
+}
 
 /**
  * Splits a Cardano asset unit (`policyId.assetNameHex`) into its components.
@@ -96,7 +114,13 @@ export function decodeCardanoTransaction(transactionBase64: string): DecodedCard
         }
       }
     }
-    return { address, coin: out.assets.lovelace, assets };
+    const datumOption = (out as { datumOption?: { _tag: string; data: Data.Data } }).datumOption;
+    const datum =
+      datumOption && datumOption._tag === "InlineDatum"
+        ? Data.toCBORHex(datumOption.data)
+        : undefined;
+    const serializedSize = TxOut.toCBORBytes(out).length;
+    return { address, coin: out.assets.lovelace, assets, datum, serializedSize };
   });
 
   const ws = tx.witnessSet;

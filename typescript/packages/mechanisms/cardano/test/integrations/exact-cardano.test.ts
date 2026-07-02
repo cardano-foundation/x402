@@ -16,6 +16,8 @@ import { ExactCardanoScheme as ExactCardanoFacilitator } from "../../src/exact/f
 import { ExactCardanoScheme as ExactCardanoServer } from "../../src/exact/server/scheme";
 import { toClientCardanoSigner, toFacilitatorCardanoSigner } from "../../src/signer";
 import { LOVELACE_ASSET, USDM_PREPROD_ASSET } from "../../src/constants";
+import { masumiContractAddress } from "../../src/exact/masumi/constants";
+import { buildMasumiLockDatum, inlineDatum } from "../../src/exact/masumi/datum";
 import { decodeCardanoTransaction } from "../../src/utils";
 import { buildSignedTx } from "../helpers/buildSignedTx";
 import {
@@ -156,7 +158,11 @@ describe("Cardano Integration Tests (deterministic, offline)", () => {
      * @param requirements - The requirements to verify the payload against.
      * @returns The payload and requirements pair.
      */
-    async function fixturePayload(payTo: string, amount: bigint): Promise<PaymentPayload> {
+    async function fixturePayload(
+      payTo: string,
+      amount: bigint,
+      datum?: ReturnType<typeof inlineDatum>,
+    ): Promise<PaymentPayload> {
       const built = await buildSignedTx({
         payTo,
         asset: LOVELACE_ASSET,
@@ -164,6 +170,7 @@ describe("Cardano Integration Tests (deterministic, offline)", () => {
         nonceUtxoRef: NONCE_REF,
         ttlSlot: TTL_SLOT,
         network: NETWORK,
+        ...(datum ? { datum } : {}),
       });
       return {
         x402Version: 2,
@@ -195,6 +202,27 @@ describe("Cardano Integration Tests (deterministic, offline)", () => {
       const result = await facilitator.verify(payload, buildRequirements(recipient, "1000000"));
       expect(result.isValid).toBe(false);
       expect(result.invalidReason).toBe("invalid_exact_cardano_payload_amount_insufficient");
+    });
+
+    it("rejects when the output is below the protocol min-UTXO", async () => {
+      // An absurdly large coinsPerUtxoByte pushes the min-UTXO far above the
+      // output's 1 ADA, exercising the min-UTXO comparison branch.
+      const facilitator = new ExactCardanoFacilitator(
+        stubFacilitatorSigner({ getCoinsPerUtxoByte: async () => 100_000n }),
+      );
+      const payload = await fixturePayload(recipient, 1_000_000n);
+      const result = await facilitator.verify(payload, buildRequirements(recipient, "1000000"));
+      expect(result.isValid).toBe(false);
+      expect(result.invalidReason).toBe("invalid_exact_cardano_payload_min_utxo_insufficient");
+    });
+
+    it("accepts an output that meets the protocol min-UTXO", async () => {
+      const facilitator = new ExactCardanoFacilitator(
+        stubFacilitatorSigner({ getCoinsPerUtxoByte: async () => 4310n }),
+      );
+      const payload = await fixturePayload(recipient, 2_000_000n);
+      const result = await facilitator.verify(payload, buildRequirements(recipient, "2000000"));
+      expect(result.isValid).toBe(true);
     });
 
     it("rejects when the nonce UTXO is already spent (rule 5)", async () => {
@@ -241,24 +269,51 @@ describe("Cardano Integration Tests (deterministic, offline)", () => {
       expect(result.invalidReason).toBe("invalid_exact_cardano_payload_script_address_mismatch");
     });
 
-    it("accepts a masumi payment (method-agnostic rules 1-6)", async () => {
-      const facilitator = new ExactCardanoFacilitator(stubFacilitatorSigner());
-      const payload = await fixturePayload(recipient, 2_000_000n);
-      const requirements = buildRequirements(recipient, "2000000", LOVELACE_ASSET, {
+    it("accepts a masumi lock into the escrow with a valid FundsLocked datum", async () => {
+      // The datum buyer must equal the payer the facilitator resolves from the
+      // nonce input, so return a real (parseable) buyer address from getUtxo.
+      const buyer = await freshPreprodAddress();
+      const facilitator = new ExactCardanoFacilitator(
+        stubFacilitatorSigner({ getUtxo: async () => ({ exists: true, address: buyer }) }),
+      );
+      const escrow = masumiContractAddress(NETWORK);
+      const datum = inlineDatum(
+        buildMasumiLockDatum({
+          buyerAddress: buyer,
+          sellerAddress: recipient,
+          referenceKey: "aa".repeat(32),
+          referenceSignature: "bb".repeat(32),
+          sellerNonce: "cc".repeat(32),
+          buyerNonce: "dd".repeat(32),
+          agentIdentifier: "ee".repeat(16),
+          collateralReturnLovelace: 0n,
+          inputHash: "",
+          payByTime: 1_000n,
+          submitResultTime: 2_000n,
+          unlockTime: 3_000n,
+          externalDisputeUnlockTime: 4_000n,
+        }),
+      );
+      const payload = await fixturePayload(escrow, 5_000_000n, datum);
+      const requirements = buildRequirements(escrow, "5000000", LOVELACE_ASSET, {
         assetTransferMethod: "masumi",
-        identifierFromPurchaser: "aabbaabb11221122aabb",
-        sellerVkey: "deadbeef",
-        paymentType: "Web3CardanoV1",
-        blockchainIdentifier: "bid",
-        payByTime: "1713626260",
-        submitResultTime: "1713636260",
-        unlockTime: "1713636260",
-        externalDisputeUnlockTime: "1713636260",
-        agentIdentifier: "agent",
-        inputHash: "9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08",
+        contractAddress: escrow,
+        sellerAddress: recipient,
       });
       const result = await facilitator.verify(payload, requirements);
       expect(result.isValid).toBe(true);
+    });
+
+    it("rejects a masumi payment whose payTo is not the declared escrow address", async () => {
+      const facilitator = new ExactCardanoFacilitator(stubFacilitatorSigner());
+      const payload = await fixturePayload(recipient, 5_000_000n);
+      const requirements = buildRequirements(recipient, "5000000", LOVELACE_ASSET, {
+        assetTransferMethod: "masumi",
+        contractAddress: masumiContractAddress(NETWORK),
+        sellerAddress: recipient,
+      });
+      const result = await facilitator.verify(payload, requirements);
+      expect(result.isValid).toBe(false);
     });
 
     it("accepts a multi-input tx when every input is unspent, rejects when one is spent", async () => {

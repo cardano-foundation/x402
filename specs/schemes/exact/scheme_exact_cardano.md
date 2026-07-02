@@ -139,7 +139,7 @@ When the Resource Server requires payment via **Masumi**, the buyer locks the pa
 
 **Scope:** x402 covers only the **lock** step — the escrow's initial `FundsLocked` state. Result submission, seller withdrawal, buyer refund, and dispute resolution all happen later, in **separate transactions** governed by the contract and the Masumi Payment Service, and are out of scope for this scheme. A successful `/settle` for Masumi therefore means **"funds are locked in escrow", not "payment delivered"**: the resource server grants access on the lock and trusts the Masumi lifecycle to release funds to the agent.
 
-The `referenceKey`, `referenceSignature`, nonces, and `agentIdentifier` originate off-chain — the buyer first creates a purchase with the Masumi Payment Service (for an agent registered in the Masumi Registry), which returns these binding identifiers. They are stored in the datum but not validated on-chain; the Masumi service uses them to track the payment.
+The `referenceKey`, `referenceSignature`, nonces, `agentIdentifier`, and the four time bounds originate off-chain — the buyer first creates a purchase with the Masumi Payment Service (for an agent registered in the Masumi Registry), which returns these binding identifiers. They are stored in the datum and, although the on-chain validator does not verify most of them, the Masumi service uses them to match the locked UTxO to the purchase. The resource server therefore **MUST** provide them in `extra` (they are required); the client MUST NOT invent or randomize them, since a value that does not match the purchase yields an escrow the Masumi service cannot settle. Only `inputHash` (defaults to empty) and `collateralReturnLovelace` (defaults to 0) are optional.
 
 ```js
 {
@@ -160,7 +160,8 @@ The `referenceKey`, `referenceSignature`, nonces, and `agentIdentifier` originat
       "maxTimeoutSeconds": 600, // Has to be set to a higher amount of time because of the Cardano Network speed
       "extra": {
         "assetTransferMethod": "masumi",
-        "paymentType": "Web3CardanoV1",          // Masumi API discriminator (off-chain only)
+        "paymentType": "Web3CardanoV2",          // Masumi PaymentSourceType — selects the contract generation (v2 = vested_pay)
+        "contractAddress": "addr_test1w...",      // optional; escrow address for this deployment (defaults to Masumi's canonical address). MUST equal payTo
         "sellerAddress": "addr_test1q...",        // datum `seller` (full, key-credential address)
         "sellerReturnAddress": "addr_test1q...",  // optional; datum `seller_return_address`
         "buyerReturnAddress": "addr_test1q...",   // optional; datum `buyer_return_address`
@@ -211,7 +212,7 @@ Because the `vested_pay` validator only runs on spend (never on the lock itself)
 - `pay_by_time ≤ submit_result_time ≤ unlock_time ≤ external_dispute_unlock_time`, and the transaction's validity upper bound ≤ `pay_by_time`.
 - `reference_signature` is at least 16 bytes; `collateral_return_lovelace ≥ 0`; `result_hash` is empty; `state` is `FundsLocked`.
 
-The escrow script address is derived from the Masumi deployment's validator parameters (`required_admins_multi_sig`, `admin_vks`, `cooldown_period`); a facilitator MUST verify that `payTo` equals the known Masumi escrow address for the network before accepting a Masumi payment.
+The escrow script address is deployment-specific: the validator parameters (`required_admins_multi_sig`, `admin_vks`, `cooldown_period`) are baked into the script hash, so a different parameterization (e.g. a self-hosted Masumi) yields a different address, and the hash alone cannot be checked against the un-applied blueprint. The resource server therefore declares its deployment's escrow address in `extra.contractAddress` (from the purchase); when omitted it defaults to Masumi's canonical address for the network. A facilitator MUST verify that `payTo` equals that declared escrow address before accepting a Masumi payment — this binds the lock to the specific escrow the purchase expects, since a look-alike `vested_pay` with different admins is a different trust domain.
 
 #### Script assetTransferMethod Schema
 
@@ -319,7 +320,7 @@ Expanded Schema based on assetTransferMethods:
     "maxTimeoutSeconds": 600,
       "extra": {
         "assetTransferMethod": "masumi",
-        "paymentType": "Web3CardanoV1",
+        "paymentType": "Web3CardanoV2",
         "sellerAddress": "addr_test1q...",
         "referenceKey": "<hex>",
         "referenceSignature": "<hex>",
@@ -394,9 +395,11 @@ A facilitator MUST enforce all of the following rules before accepting a payment
 
 6. **TTL / Expiry Check**: The transaction's TTL (time-to-live slot) MUST not have already passed at the time of verification. The facilitator MUST reject transactions whose TTL is in the past. The TTL SHOULD be consistent with `PaymentRequirements.maxTimeoutSeconds`.
 
+7. **Minimum UTXO Check**: The output paying `payTo` SHOULD carry at least the protocol minimum lovelace for its serialized size, `(160 + |serialized_output|) * coinsPerUtxoByte` (see [Minimum UTXO Value](#minimum-utxo-value-min-ada)). An output below this minimum yields a transaction the node rejects at submission, so the facilitator SHOULD reject it during `verify()` rather than let `settle()` fail. Because `coinsPerUtxoByte` is governance-settable, the facilitator MUST read it from live protocol parameters. A facilitator without access to live protocol parameters MAY skip this check and rely on the node to reject an undersized output at submission.
+
 **Masumi assetTransferMethod — additional rules.** When `requirements.extra.assetTransferMethod` is `masumi`, the facilitator MUST additionally enforce (rule 2's "recipient" is the escrow output paying `payTo`):
 
-- `payTo` equals the known **Masumi escrow (`vested_pay`) script address** for the network.
+- `payTo` equals the deployment's **Masumi escrow (`vested_pay`) script address** — `extra.contractAddress` when present, else Masumi's canonical address for the network.
 - The output paying `payTo` carries an **inline datum** that decodes to the lock datum, with `state == FundsLocked` and `result_hash` empty.
 - `buyer` equals the transaction's payer and `seller` equals `extra.sellerAddress`; both are **public-key** credential addresses.
 - `reference_key`, `reference_signature`, `seller_nonce`, `buyer_nonce`, `agent_identifier`, `input_hash`, `collateral_return_lovelace`, and the four time bounds in the datum match the corresponding `extra` values.

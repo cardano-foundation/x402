@@ -12,6 +12,7 @@ import { KEETA_TESTNET_CAIP2 } from "@x402/keeta";
 import { ExactKeetaScheme } from "@x402/keeta/exact/server";
 import { ExactStellarScheme } from "@x402/stellar/exact/server";
 import { ExactCardanoScheme } from "@x402/cardano/exact/server";
+import { masumiContractAddress } from "@x402/cardano";
 import { ExactTvmScheme } from "@x402/tvm/exact/server";
 import { bazaarResourceServerExtension, declareDiscoveryExtension } from "@x402/extensions/bazaar";
 import {
@@ -265,32 +266,32 @@ app.use(
       // Route-specific payment configuration
       ...(AVM_PAYEE_ADDRESS
         ? {
-            "GET /exact/avm": {
-              accepts: {
-                payTo: AVM_PAYEE_ADDRESS,
-                scheme: "exact",
-                price: "$0.001",
-                network: AVM_NETWORK,
-              },
-              extensions: {
-                ...declareDiscoveryExtension({
-                  output: {
-                    example: {
-                      message: "Protected endpoint accessed successfully",
-                      timestamp: "2024-01-01T00:00:00Z",
-                    },
-                    schema: {
-                      properties: {
-                        message: { type: "string" },
-                        timestamp: { type: "string" },
-                      },
-                      required: ["message", "timestamp"],
-                    },
-                  },
-                }),
-              },
+          "GET /exact/avm": {
+            accepts: {
+              payTo: AVM_PAYEE_ADDRESS,
+              scheme: "exact",
+              price: "$0.001",
+              network: AVM_NETWORK,
             },
-          }
+            extensions: {
+              ...declareDiscoveryExtension({
+                output: {
+                  example: {
+                    message: "Protected endpoint accessed successfully",
+                    timestamp: "2024-01-01T00:00:00Z",
+                  },
+                  schema: {
+                    properties: {
+                      message: { type: "string" },
+                      timestamp: { type: "string" },
+                    },
+                    required: ["message", "timestamp"],
+                  },
+                },
+              }),
+            },
+          },
+        }
         : {}),
       "GET /batch-settlement/evm/eip3009": {
         accepts: {
@@ -397,93 +398,93 @@ app.use(
       },
       ...(APTOS_PAYEE_ADDRESS
         ? {
-            "GET /exact/aptos": {
-              accepts: {
-                payTo: APTOS_PAYEE_ADDRESS,
-                scheme: "exact",
-                price: "$0.001",
-                network: APTOS_NETWORK,
-              },
-              extensions: {
-                ...declareDiscoveryExtension({
-                  output: {
-                    example: {
-                      message: "Protected endpoint accessed successfully",
-                      timestamp: "2024-01-01T00:00:00Z",
-                    },
-                    schema: {
-                      properties: {
-                        message: { type: "string" },
-                        timestamp: { type: "string" },
-                      },
-                      required: ["message", "timestamp"],
-                    },
-                  },
-                }),
-              },
+          "GET /exact/aptos": {
+            accepts: {
+              payTo: APTOS_PAYEE_ADDRESS,
+              scheme: "exact",
+              price: "$0.001",
+              network: APTOS_NETWORK,
             },
-          }
+            extensions: {
+              ...declareDiscoveryExtension({
+                output: {
+                  example: {
+                    message: "Protected endpoint accessed successfully",
+                    timestamp: "2024-01-01T00:00:00Z",
+                  },
+                  schema: {
+                    properties: {
+                      message: { type: "string" },
+                      timestamp: { type: "string" },
+                    },
+                    required: ["message", "timestamp"],
+                  },
+                },
+              }),
+            },
+          },
+        }
         : {}),
       ...(HEDERA_PAYEE_ADDRESS
         ? {
-            "GET /exact/hedera": {
-              accepts: {
-                payTo: HEDERA_PAYEE_ADDRESS,
-                scheme: "exact",
-                price: {
-                  amount: HEDERA_AMOUNT,
-                  asset: HEDERA_ASSET,
-                },
-                network: HEDERA_NETWORK,
+          "GET /exact/hedera": {
+            accepts: {
+              payTo: HEDERA_PAYEE_ADDRESS,
+              scheme: "exact",
+              price: {
+                amount: HEDERA_AMOUNT,
+                asset: HEDERA_ASSET,
               },
-              extensions: {
-                ...declareDiscoveryExtension({
-                  output: {
-                    example: {
-                      message: "Protected Hedera endpoint accessed successfully",
-                      timestamp: "2024-01-01T00:00:00Z",
-                    },
-                    schema: {
-                      properties: {
-                        message: { type: "string" },
-                        timestamp: { type: "string" },
-                      },
-                      required: ["message", "timestamp"],
-                    },
-                  },
-                }),
-              },
+              network: HEDERA_NETWORK,
             },
-          }
+            extensions: {
+              ...declareDiscoveryExtension({
+                output: {
+                  example: {
+                    message: "Protected Hedera endpoint accessed successfully",
+                    timestamp: "2024-01-01T00:00:00Z",
+                  },
+                  schema: {
+                    properties: {
+                      message: { type: "string" },
+                      timestamp: { type: "string" },
+                    },
+                    required: ["message", "timestamp"],
+                  },
+                },
+              }),
+            },
+          },
+        }
         : {}),
       ...(KEETA_PAYEE_ADDRESS
         ? {
-            "GET /exact/keeta": {
-              accepts: {
-                payTo: KEETA_PAYEE_ADDRESS,
-                scheme: "exact",
-                price: "$0.001",
-                network: KEETA_NETWORK,
-              },
-              extensions: {
-                ...declareDiscoveryExtension({
-                  output: {
-                    example: {
-                      message: "Protected Keeta endpoint accessed successfully",
-                      timestamp: "2024-01-01T00:00:00Z",
-                    },
-                    schema: {
-                      properties: {
-                        message: { type: "string" },
-                        timestamp: { type: "string" },
-                      },
-                      required: ["message", "timestamp"],
-                    },
-                  },
-                }),
-              },
+          "GET /exact/keeta": {
+            accepts: {
+              payTo: KEETA_PAYEE_ADDRESS,
+              scheme: "exact",
+              price: "$0.001",
+              network: KEETA_NETWORK,
             },
-          }
+            extensions: {
+              ...declareDiscoveryExtension({
+                output: {
+                  example: {
+                    message: "Protected Keeta endpoint accessed successfully",
+                    timestamp: "2024-01-01T00:00:00Z",
+                  },
+                  schema: {
+                    properties: {
+                      message: { type: "string" },
+                      timestamp: { type: "string" },
+                    },
+                    required: ["message", "timestamp"],
+                  },
+                },
+              }),
+            },
+          },
+        }
         : {}),
       // Permit2 endpoint for ERC-20 approval gas sponsoring (no EIP-2612)
       "GET /exact/evm/permit2-erc20ApprovalGasSponsoring": {
@@ -629,115 +630,123 @@ app.use(
       },
       ...(STELLAR_PAYEE_ADDRESS
         ? {
-            "GET /exact/stellar": {
-              accepts: {
-                payTo: STELLAR_PAYEE_ADDRESS!,
-                scheme: "exact",
-                price: "$0.001",
-                network: STELLAR_NETWORK,
-              },
-              extensions: {
-                ...declareDiscoveryExtension({
-                  output: {
-                    example: {
-                      message: "Protected Stellar endpoint accessed successfully",
-                      timestamp: "2024-01-01T00:00:00Z",
-                    },
-                    schema: {
-                      properties: {
-                        message: { type: "string" },
-                        timestamp: { type: "string" },
-                      },
-                      required: ["message", "timestamp"],
-                    },
-                  },
-                }),
-              },
+          "GET /exact/stellar": {
+            accepts: {
+              payTo: STELLAR_PAYEE_ADDRESS!,
+              scheme: "exact",
+              price: "$0.001",
+              network: STELLAR_NETWORK,
             },
-          }
+            extensions: {
+              ...declareDiscoveryExtension({
+                output: {
+                  example: {
+                    message: "Protected Stellar endpoint accessed successfully",
+                    timestamp: "2024-01-01T00:00:00Z",
+                  },
+                  schema: {
+                    properties: {
+                      message: { type: "string" },
+                      timestamp: { type: "string" },
+                    },
+                    required: ["message", "timestamp"],
+                  },
+                },
+              }),
+            },
+          },
+        }
         : {}),
       ...(TVM_PAYEE_ADDRESS
         ? {
-            "GET /exact/tvm": {
-              accepts: {
-                payTo: TVM_PAYEE_ADDRESS,
-                scheme: "exact",
-                price: "$0.001",
-                network: TVM_NETWORK,
-              },
-              extensions: {
-                ...declareDiscoveryExtension({
-                  output: {
-                    example: {
-                      message: "Protected TVM endpoint accessed successfully",
-                      timestamp: "2024-01-01T00:00:00Z",
-                    },
-                    schema: {
-                      properties: {
-                        message: { type: "string" },
-                        timestamp: { type: "string" },
-                      },
-                      required: ["message", "timestamp"],
-                    },
-                  },
-                }),
-              },
+          "GET /exact/tvm": {
+            accepts: {
+              payTo: TVM_PAYEE_ADDRESS,
+              scheme: "exact",
+              price: "$0.001",
+              network: TVM_NETWORK,
             },
-          }
+            extensions: {
+              ...declareDiscoveryExtension({
+                output: {
+                  example: {
+                    message: "Protected TVM endpoint accessed successfully",
+                    timestamp: "2024-01-01T00:00:00Z",
+                  },
+                  schema: {
+                    properties: {
+                      message: { type: "string" },
+                      timestamp: { type: "string" },
+                    },
+                    required: ["message", "timestamp"],
+                  },
+                },
+              }),
+            },
+          },
+        }
         : {}),
       ...(CARDANO_PAYEE_ADDRESS
         ? {
-            // One endpoint per Cardano assetTransferMethod. All pay in lovelace
-            // (native tADA) so the e2e is fundable from the testnet faucet;
-            // preprod USDM is not faucet-available. 2 ADA clears the min-UTXO.
-            "GET /exact/cardano/default": {
-              accepts: {
-                payTo: CARDANO_PAYEE_ADDRESS!,
-                scheme: "exact",
-                price: { amount: "2000000", asset: "lovelace" },
-                network: CARDANO_NETWORK,
-                extra: { assetTransferMethod: "default" },
-              },
-              extensions: { ...CARDANO_DISCOVERY },
+          // One endpoint per Cardano assetTransferMethod; all pay lovelace
+          // (tADA) so the e2e is faucet-fundable (preprod USDM is not).
+          "GET /exact/cardano/default": {
+            accepts: {
+              payTo: CARDANO_PAYEE_ADDRESS!,
+              scheme: "exact",
+              price: { amount: "2000000", asset: "lovelace" },
+              network: CARDANO_NETWORK,
+              extra: { assetTransferMethod: "default" },
             },
-            "GET /exact/cardano/masumi": {
-              accepts: {
-                payTo: CARDANO_PAYEE_ADDRESS!,
-                scheme: "exact",
-                price: { amount: "2000000", asset: "lovelace" },
-                network: CARDANO_NETWORK,
-                extra: {
-                  assetTransferMethod: "masumi",
-                  identifierFromPurchaser: "aabbaabb11221122aabb",
-                  sellerVkey: "deadbeef",
-                  paymentType: "Web3CardanoV1",
-                  blockchainIdentifier: "blockchain_identifier",
-                  payByTime: "1713626260",
-                  submitResultTime: "1713636260",
-                  unlockTime: "1713636260",
-                  externalDisputeUnlockTime: "1713636260",
-                  agentIdentifier: "agent_identifier",
-                  inputHash: "9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08",
-                },
+            extensions: { ...CARDANO_DISCOVERY },
+          },
+          "GET /exact/cardano/masumi": {
+            accepts: {
+              // Locks ADA into the vested_pay escrow (Web3CardanoV2): payTo is
+              // the escrow script address, seller is the payee.
+              payTo: masumiContractAddress(CARDANO_NETWORK),
+              scheme: "exact",
+              price: { amount: "5000000", asset: "lovelace" },
+              network: CARDANO_NETWORK,
+              extra: {
+                assetTransferMethod: "masumi",
+                paymentType: "Web3CardanoV2",
+                // Escrow address for this deployment (must equal payTo).
+                contractAddress: masumiContractAddress(CARDANO_NETWORK),
+                sellerAddress: CARDANO_PAYEE_ADDRESS!,
+                agentIdentifier: "deadbeefdeadbeefdeadbeefdeadbeef",
+                inputHash: "9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08",
+                collateralReturnLovelace: "0",
+                // Purchase-bound identifiers; real values come from the Masumi
+                // purchase. Fixed placeholders keep the e2e lock deterministic.
+                referenceKey: "aa".repeat(32),
+                referenceSignature: "bb".repeat(64),
+                sellerNonce: "cc".repeat(32),
+                identifierFromPurchaser: "dd".repeat(32),
+                payByTime: "1713626260000",
+                submitResultTime: "1713636260000",
+                unlockTime: "1713646260000",
+                externalDisputeUnlockTime: "1713656260000",
               },
-              extensions: { ...CARDANO_DISCOVERY },
             },
-            "GET /exact/cardano/script": {
-              accepts: {
-                // payTo is the script address the facilitator reconstructs from
-                // the script descriptor below and verifies it matches.
-                payTo: CARDANO_SCRIPT_ADDRESS,
-                scheme: "exact",
-                price: { amount: "2000000", asset: "lovelace" },
-                network: CARDANO_NETWORK,
-                extra: {
-                  assetTransferMethod: "script",
-                  script: { type: "plutusV3", code: CARDANO_SCRIPT_CODE },
-                },
+            extensions: { ...CARDANO_DISCOVERY },
+          },
+          "GET /exact/cardano/script": {
+            accepts: {
+              // payTo is the script address the facilitator reconstructs from
+              // the script descriptor below and verifies it matches.
+              payTo: CARDANO_SCRIPT_ADDRESS,
+              scheme: "exact",
+              price: { amount: "2000000", asset: "lovelace" },
+              network: CARDANO_NETWORK,
+              extra: {
+                assetTransferMethod: "script",
+                script: { type: "plutusV3", code: CARDANO_SCRIPT_CODE },
               },
-              extensions: { ...CARDANO_DISCOVERY },
             },
-          }
+            extensions: { ...CARDANO_DISCOVERY },
+          },
+        }
         : {}),
     },
     server, // Pass pre-configured server instance

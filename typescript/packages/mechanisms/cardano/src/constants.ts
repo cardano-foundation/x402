@@ -119,6 +119,13 @@ export const USDM_DEFAULT_DECIMALS = 6;
 export const LOVELACE_ASSET = "lovelace";
 
 /**
+ * Constant overhead (bytes) in the Babbage/Conway min-UTXO formula
+ * `(160 + |serialized_output|) * coinsPerUtxoByte` — 20 words x 8 bytes for the
+ * transaction input and its UTXO-map entry.
+ */
+export const CARDANO_MIN_UTXO_OVERHEAD_BYTES = 160;
+
+/**
  * Cardano asset unit regex.
  *
  * Accepts either the literal `"lovelace"` (native ADA) or a
@@ -252,3 +259,14 @@ export const ERR_SCRIPT_ADDRESS_MISMATCH = "invalid_exact_cardano_payload_script
 export const ERR_TRANSACTION_UNSIGNED = "invalid_exact_cardano_payload_unsigned";
 /** Error: a vkey witness signature is not valid over the transaction body. */
 export const ERR_INVALID_SIGNATURE = "invalid_exact_cardano_payload_invalid_signature";
+/** Error: the recipient output's lovelace is below the protocol min-UTXO. */
+export const ERR_MIN_UTXO_INSUFFICIENT = "invalid_exact_cardano_payload_min_utxo_insufficient";
+/** Error: masumi payTo is not the known Masumi escrow address for the network. */
+export const ERR_MASUMI_CONTRACT_MISMATCH =
+  "invalid_exact_cardano_payload_masumi_contract_mismatch";
+/** Error: the masumi escrow output carries no inline datum. */
+export const ERR_MASUMI_DATUM_MISSING = "invalid_exact_cardano_payload_masumi_datum_missing";
+/** Error: the masumi lock datum does not match the requirements' extra fields. */
+export const ERR_MASUMI_DATUM_MISMATCH = "invalid_exact_cardano_payload_masumi_datum_mismatch";
+/** Error: the masumi lock datum is structurally invalid or violates lock invariants. */
+export const ERR_MASUMI_DATUM_INVALID = "invalid_exact_cardano_payload_masumi_datum_invalid";

@@ -1,6 +1,12 @@
 // Exact scheme exports
 export * from "./exact";
 
+// Masumi escrow (vested_pay) support
+export * from "./exact/masumi/constants";
+export * from "./exact/masumi/datum";
+export { buildMasumiLockInline } from "./exact/masumi/lock";
+export { verifyMasumiLock } from "./exact/masumi/verify";
+
 // Types
 export * from "./types";
 

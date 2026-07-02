@@ -35,9 +35,17 @@ export interface CardanoExtraDefault {
 }
 
 /**
- * `extra` shape for the Masumi assetTransferMethod (Masumi smart protocol).
+ * `extra` shape for the Masumi assetTransferMethod — the fields needed to build
+ * the Masumi `vested_pay` escrow lock datum. Field semantics follow the spec
+ * section "Masumi assetTransferMethod Schema"; each maps to a datum field.
  *
- * Field semantics follow the spec section "Masumi assetTransferMethod Schema".
+ * The identifier and time-bound fields are **required**: in x402 the resource
+ * server obtains them from the Masumi purchase and MUST supply them here. They
+ * bind the locked UTxO to the purchase off-chain — the client must not invent
+ * them (a wrong/random value produces an escrow the Masumi Payment Service
+ * cannot match to the purchase). Only fields with a contract-defined default
+ * (`inputHash` → empty, `collateralReturnLovelace` → 0) and the optional return
+ * addresses are optional.
  */
 export interface CardanoExtraMasumi {
   /**
@@ -49,45 +57,68 @@ export interface CardanoExtraMasumi {
    */
   assetTransferMethod: "masumi";
   /**
-   * Identifier supplied by the purchaser (Masumi flow).
+   * Masumi `PaymentSourceType` — selects the contract generation
+   * (`Web3CardanoV2` = the `vested_pay` payment-v2 escrow).
+   */
+  paymentType?: string;
+  /**
+   * Escrow (`vested_pay`) script address for this Masumi deployment, from the
+   * purchase. **Required** and must equal `payTo`: a script address is
+   * deployment-specific (its parameters are baked into the hash), so it cannot
+   * be safely defaulted — locking to a wrong escrow silently strands the funds.
+   * For Masumi's canonical deployment, {@link masumiContractAddress} computes it.
+   */
+  contractAddress: string;
+  /**
+   * Full seller address (public-key credential); datum `seller`.
+   */
+  sellerAddress: string;
+  /**
+   * Optional payout destination; datum `seller_return_address`.
+   */
+  sellerReturnAddress?: string;
+  /**
+   * Optional payout destination; datum `buyer_return_address`.
+   */
+  buyerReturnAddress?: string;
+  /**
+   * datum `reference_key` (hex) — from the Masumi purchase.
+   */
+  referenceKey: string;
+  /**
+   * datum `reference_signature` (hex; >= 16 bytes) — from the Masumi purchase.
+   */
+  referenceSignature: string;
+  /**
+   * datum `buyer_nonce` (hex) — from the Masumi purchase.
    */
   identifierFromPurchaser: string;
   /**
-   * Verification key of the seller (Masumi flow).
+   * datum `seller_nonce` (hex) — from the Masumi purchase.
    */
-  sellerVkey: string;
+  sellerNonce: string;
   /**
-   * Masumi payment type discriminator (e.g. "Web3CardanoV1").
-   */
-  paymentType: string;
-  /**
-   * Blockchain-side identifier for this purchase.
-   */
-  blockchainIdentifier: string;
-  /**
-   * Unix timestamp (seconds) by which payment must be made.
-   */
-  payByTime: string;
-  /**
-   * Unix timestamp (seconds) by which the seller must submit the result.
-   */
-  submitResultTime: string;
-  /**
-   * Unix timestamp (seconds) at which funds unlock.
-   */
-  unlockTime: string;
-  /**
-   * Unix timestamp (seconds) for the external dispute window.
-   */
-  externalDisputeUnlockTime: string;
-  /**
-   * Identifier of the providing agent.
+   * datum `agent_identifier` (hex) — the registered Masumi agent.
    */
   agentIdentifier: string;
   /**
-   * Hash of the input data (hex).
+   * datum `input_hash` (hex). Optional; defaults to empty when absent.
    */
-  inputHash: string;
+  inputHash?: string;
+  /**
+   * datum `collateral_return_lovelace` (decimal string; >= 0). Optional;
+   * defaults to 0 when absent.
+   */
+  collateralReturnLovelace?: string;
+  /**
+   * Time bounds as POSIX **milliseconds** (decimal strings) from the Masumi
+   * purchase, ordered `payByTime <= submitResultTime <= unlockTime <=
+   * externalDisputeUnlockTime`.
+   */
+  payByTime: string;
+  submitResultTime: string;
+  unlockTime: string;
+  externalDisputeUnlockTime: string;
 }
 
 /**
@@ -168,6 +199,16 @@ export interface CardanoUtxoOutput {
    * Map of `policyId.assetNameHex` -> quantity for native tokens.
    */
   assets: Record<string, bigint>;
+  /**
+   * CBOR hex of the output's inline datum, when present. Used by the facilitator
+   * to verify script/escrow payments (e.g. the Masumi lock datum).
+   */
+  datum?: string;
+  /**
+   * Byte length of the CBOR-serialized output. Used by the facilitator to check
+   * the output satisfies the protocol min-UTXO. Present for decoded transactions.
+   */
+  serializedSize?: number;
 }
 
 /**

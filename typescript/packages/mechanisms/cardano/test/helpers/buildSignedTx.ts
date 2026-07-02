@@ -17,6 +17,7 @@ import {
   Assets,
   Client,
   mainnet,
+  InlineDatum,
   preprod,
   preview,
   PrivateKey,
@@ -82,6 +83,8 @@ export interface BuildSignedTxParams {
    * selected. Lovelace-only.
    */
   secondInput?: { ref: string; lovelace: bigint };
+  /** Optional inline datum to attach to the payment output (e.g. a Masumi lock). */
+  datum?: InlineDatum.InlineDatum;
 }
 
 /**
@@ -186,7 +189,11 @@ export async function buildSignedTx(params: BuildSignedTxParams): Promise<BuildS
   const signBuilder = await client
     .newTx()
     .collectFrom({ inputs: [nonceUtxo] })
-    .payToAddress({ address: Address.fromBech32(params.payTo), assets: outputAssets })
+    .payToAddress({
+      address: Address.fromBech32(params.payTo),
+      assets: outputAssets,
+      ...(params.datum ? { datum: params.datum } : {}),
+    })
     .setValidity({ to: slotToValidityMs(params.ttlSlot, chain) })
     .build({
       availableUtxos,

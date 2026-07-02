@@ -13,12 +13,15 @@ import {
 import { addressFromSeed } from "@evolution-sdk/evolution/sdk/wallet/Derivation";
 
 import {
+  ASSET_TRANSFER_METHOD_MASUMI,
   CARDANO_MAINNET_CAIP2,
   CARDANO_PREPROD_CAIP2,
   CARDANO_PREVIEW_CAIP2,
   LOVELACE_ASSET,
   normalizeCardanoNetwork,
 } from "./constants";
+import { buildMasumiLockInline } from "./exact/masumi/lock";
+import type { CardanoExtra, CardanoExtraMasumi } from "./types";
 import { parseAssetUnit, parseUtxoRef } from "./utils";
 
 /**
@@ -288,6 +291,18 @@ export interface FacilitatorCardanoSigner {
    * @returns A promise that resolves on a successful dry-run.
    */
   evaluateTransaction?(signedTransactionBase64: string, network: string): Promise<void>;
+
+  /**
+   * Optional: reads the live `coinsPerUtxoByte` protocol parameter. When
+   * implemented, the facilitator's `verify()` uses it to reject payments whose
+   * recipient output carries less than the protocol minimum lovelace (a tx the
+   * chain would refuse at submission). The value is governance-settable, so the
+   * spec requires reading it live rather than hardcoding.
+   *
+   * @param network - The x402 network identifier.
+   * @returns The current `coinsPerUtxoByte`.
+   */
+  getCoinsPerUtxoByte?(network: string): Promise<bigint>;
 }
 
 /**
@@ -369,16 +384,31 @@ export function toClientCardanoSigner(config: ClientCardanoSignerConfig): Client
       const outputAssets = buildOutputAssets(input.asset, BigInt(input.amount));
       const ttlMs = BigInt(Date.now()) + BigInt(input.maxTimeoutSeconds) * 1000n;
 
+      // Masumi attaches an inline lock datum whose `buyer` must equal the payer
+      // the facilitator resolves (the nonce input's owner), so derive it from
+      // that UTXO. Other methods pay a plain output.
+      const extra = input.extra as CardanoExtra | undefined;
+      const masumiDatum =
+        extra?.assetTransferMethod === ASSET_TRANSFER_METHOD_MASUMI
+          ? buildMasumiLockInline(extra as CardanoExtraMasumi, Address.toBech32(nonceUtxo.address))
+          : undefined;
+
       const signBuilder = await client
         .newTx()
         // .collectFrom() with a specific UTXO ensures the nonce appears as an input (rule 5).
         // Additional UTXOs from the wallet may be auto-selected as needed to satisfy the output and fees.
         .collectFrom({ inputs: [nonceUtxo] })
-        .payToAddress({ address: Address.fromBech32(input.payTo), assets: outputAssets })
+        .payToAddress({
+          address: Address.fromBech32(input.payTo),
+          assets: outputAssets,
+          ...(masumiDatum ? { datum: masumiDatum } : {}),
+        })
         .setValidity({ to: ttlMs })
         .build({
           changeAddress,
-          autoMinUtxo: input.asset.toLowerCase() !== LOVELACE_ASSET,
+          // Bump the output to the protocol min-UTXO for native-asset outputs
+          // and for datum-bearing outputs (the Masumi lock datum raises it).
+          autoMinUtxo: input.asset.toLowerCase() !== LOVELACE_ASSET || masumiDatum !== undefined,
         });
 
       const submitBuilder = await signBuilder.sign();
@@ -470,6 +500,10 @@ export function toFacilitatorCardanoSigner(
     }
   };
 
+  // coinsPerUtxoByte changes only at an epoch/governance boundary, so caching the
+  // first read avoids a provider round-trip on every verify().
+  let coinsPerUtxoByte: bigint | undefined;
+
   return {
     getAddresses(): readonly string[] {
       return addresses;
@@ -527,6 +561,15 @@ export function toFacilitatorCardanoSigner(
         Uint8Array.from(Buffer.from(signedTransactionBase64, "base64")),
       );
       await client.evaluateTx(tx);
+    },
+
+    async getCoinsPerUtxoByte(network: string): Promise<bigint> {
+      assertNetwork(network);
+      if (coinsPerUtxoByte === undefined) {
+        const params = await client.getProtocolParameters();
+        coinsPerUtxoByte = params.coinsPerUtxoByte;
+      }
+      return coinsPerUtxoByte;
     },
   };
 }

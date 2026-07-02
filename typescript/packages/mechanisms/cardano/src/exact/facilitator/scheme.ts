@@ -17,6 +17,7 @@ import {
   ERR_INPUT_NOT_AVAILABLE,
   ERR_INVALID_PAYLOAD,
   ERR_INVALID_SIGNATURE,
+  ERR_MIN_UTXO_INSUFFICIENT,
   ERR_NETWORK_ID_MISMATCH,
   ERR_NETWORK_MISMATCH,
   ERR_NONCE_INVALID,
@@ -38,12 +39,19 @@ import {
 } from "../../constants";
 import type {
   CardanoExtra,
+  CardanoExtraMasumi,
   CardanoExtraScript,
   DecodedCardanoTransaction,
   ExactCardanoPayload,
 } from "../../types";
 import type { CardanoUtxoSnapshot, FacilitatorCardanoSigner } from "../../signer";
-import { decodeCardanoPayload, decodeCardanoTransaction, parseUtxoRef } from "../../utils";
+import {
+  decodeCardanoPayload,
+  decodeCardanoTransaction,
+  minUtxoLovelace,
+  parseUtxoRef,
+} from "../../utils";
+import { verifyMasumiLock } from "../masumi/verify";
 import { scriptAddressMatches } from "./scriptAddress";
 
 /**
@@ -313,13 +321,42 @@ export class ExactCardanoScheme implements SchemeNetworkFacilitator {
         assetFoundForRecipient = true;
         if (available > bestAvailable) bestAvailable = available;
         if (available >= requestedAmount) {
+          // Reject outputs below the protocol min-UTXO (the node would refuse
+          // them at submission). coinsPerUtxoByte is read live via the signer
+          // hook; skipped when the hook or serialized size is unavailable.
+          if (
+            typeof this.signer.getCoinsPerUtxoByte === "function" &&
+            output.serializedSize !== undefined
+          ) {
+            let coinsPerUtxoByte: bigint;
+            try {
+              coinsPerUtxoByte = await this.signer.getCoinsPerUtxoByte(requirements.network);
+            } catch (cause) {
+              return {
+                isValid: false,
+                invalidReason: ERR_CHAIN_LOOKUP_FAILED,
+                invalidMessage: cause instanceof Error ? cause.message : String(cause),
+                payer,
+              };
+            }
+            const minUtxo = minUtxoLovelace(output.serializedSize, coinsPerUtxoByte);
+            if (output.coin < minUtxo) {
+              return {
+                isValid: false,
+                invalidReason: ERR_MIN_UTXO_INSUFFICIENT,
+                invalidMessage: `output to ${requirements.payTo} carries ${output.coin} lovelace, min-UTXO requires ${minUtxo}`,
+                payer,
+              };
+            }
+          }
           // SECURITY: Read assetTransferMethod from the canonical
           // server-supplied requirements, NOT from payload.accepted.extra
           // (which is client-echoed and could lie about the method to
           // bypass script-mode reconstruction checks).
           const methodCheck = await this.runMethodSpecificChecks(
             requirements.extra,
-            requirements.payTo,
+            requirements,
+            decoded,
             payer,
           );
           if (!methodCheck.ok) {
@@ -458,29 +495,33 @@ export class ExactCardanoScheme implements SchemeNetworkFacilitator {
    *
    * - `default` / undefined: no extra verification beyond the asset+amount+
    *   address checks performed by the caller.
-   * - `masumi`: the spec does not require additional on-chain verification
-   *   beyond the transfer itself; integrators wishing to enforce extra Masumi
-   *   invariants can subclass and override this method.
+   * - `masumi`: verifies the payment locks funds into the Masumi `vested_pay`
+   *   escrow with a valid `FundsLocked` datum matching the requirements
+   *   (see `verifyMasumiLock`). Only the lock is checked (x402's scope).
    * - `script`: the facilitator reconstructs the script credential from the
    *   declared `script` (+ parameters) or `scriptHash` and confirms it equals
    *   the script payment credential of `requirements.payTo`. A non-script
    *   `payTo`, a missing descriptor, or a mismatch is rejected.
    *
-   * @param extra - The accepted requirements' extra block.
-   * @param payTo - The recipient address declared in the payment requirements.
-   * @param payer - The payer address (passed through for context).
+   * @param extra - The canonical requirements' extra block.
+   * @param requirements - The canonical payment requirements.
+   * @param decoded - The decoded transaction (with output inline datums).
+   * @param payer - The resolved payer address.
    * @returns Result describing success or a precise failure reason.
    */
   protected async runMethodSpecificChecks(
     extra: Record<string, unknown> | undefined,
-    payTo: string,
+    requirements: PaymentRequirements,
+    decoded: DecodedCardanoTransaction,
     payer: string,
   ): Promise<{ ok: true } | { ok: false; reason: string }> {
-    void payer;
     const method =
       (extra as CardanoExtra | undefined)?.assetTransferMethod ?? ASSET_TRANSFER_METHOD_DEFAULT;
-    if (method === ASSET_TRANSFER_METHOD_DEFAULT || method === ASSET_TRANSFER_METHOD_MASUMI) {
+    if (method === ASSET_TRANSFER_METHOD_DEFAULT) {
       return { ok: true };
+    }
+    if (method === ASSET_TRANSFER_METHOD_MASUMI) {
+      return verifyMasumiLock(extra as CardanoExtraMasumi, requirements, decoded, payer);
     }
     if (method === ASSET_TRANSFER_METHOD_SCRIPT) {
       const scriptExtra = extra as CardanoExtraScript;
@@ -490,7 +531,7 @@ export class ExactCardanoScheme implements SchemeNetworkFacilitator {
       // SECURITY: confirm payTo is the script address implied by the declared
       // script + parameters (or scriptHash), so a server cannot redirect the
       // payment to an address unrelated to the advertised script.
-      if (!scriptAddressMatches(scriptExtra, payTo)) {
+      if (!scriptAddressMatches(scriptExtra, requirements.payTo)) {
         return { ok: false, reason: ERR_SCRIPT_ADDRESS_MISMATCH };
       }
       return { ok: true };
