@@ -34,6 +34,58 @@ const MASUMI_ESCROW_SCRIPT_HASH = "2025f0de96b0a8f2d29462a3b186cc480e22b14c0ace2
 export const MASUMI_DEFAULT_COLLATERAL_LOVELACE = 0n;
 
 /**
+ * Non-zero `collateral_return_lovelace` floor enforced by Masumi's off-chain
+ * validation (`checkPaymentAmountsMatch`, `CONSTANTS.MIN_COLLATERAL_LOVELACE`).
+ * A positive collateral below this is rejected.
+ */
+export const MASUMI_MIN_COLLATERAL_LOVELACE = 1_435_230n;
+
+// Min-UTXO for the escrow output must cover the datum as it will look AFTER the
+// seller submits a result, not at lock time: `result_hash` grows from empty to
+// 32 bytes and the cooldowns from 0 to real POSIX-ms timestamps. Otherwise the
+// seller's SubmitResult output falls below min-UTXO and cannot be built. These
+// mirror Masumi's `calculateMinUtxo` (utils/min-utxo) so a lock this facilitator
+// accepts also clears their off-chain check.
+/** CBOR byte delta of an empty vs 32-byte `result_hash` bytestring (0x40 -> 0x5820…). */
+const MASUMI_RESULT_HASH_DELTA_BYTES = 33;
+/** Constant overhead (input + UTXO-map entry), same as the ledger's `160`. */
+const MASUMI_MINUTXO_OVERHEAD_BYTES = 160;
+/** Headroom buffer for the submitted result hash. */
+const MASUMI_MINUTXO_RESULT_HASH_BUFFER = 50;
+/** Headroom buffer for the two cooldown timestamps becoming non-zero. */
+const MASUMI_MINUTXO_COOLDOWN_BUFFER = 15;
+/** Safety margin keeping the estimate above the ledger floor. */
+const MASUMI_MINUTXO_SAFETY_MARGIN = 100;
+/** Per-native-token headroom buffer. */
+const MASUMI_MINUTXO_PER_TOKEN_BUFFER = 50;
+
+/**
+ * Minimum lovelace the escrow output must carry, computed on the datum as it
+ * will look after `SubmitResult` (32-byte `result_hash` + buffers), mirroring
+ * Masumi's `calculateMinUtxo`.
+ *
+ * @param lockDatumBytes - Byte length of the current (empty-result) lock datum.
+ * @param nativeTokenCount - Distinct native tokens carried by the escrow output.
+ * @param coinsPerUtxoByte - Live `coinsPerUtxoByte` protocol parameter.
+ * @returns The minimum lovelace the escrow output must hold.
+ */
+export function masumiMinUtxoLovelace(
+  lockDatumBytes: number,
+  nativeTokenCount: number,
+  coinsPerUtxoByte: bigint,
+): bigint {
+  const totalBytes =
+    lockDatumBytes +
+    MASUMI_RESULT_HASH_DELTA_BYTES +
+    MASUMI_MINUTXO_OVERHEAD_BYTES +
+    MASUMI_MINUTXO_RESULT_HASH_BUFFER +
+    MASUMI_MINUTXO_COOLDOWN_BUFFER +
+    MASUMI_MINUTXO_SAFETY_MARGIN +
+    MASUMI_MINUTXO_PER_TOKEN_BUFFER * nativeTokenCount;
+  return coinsPerUtxoByte * BigInt(totalBytes);
+}
+
+/**
  * Resolves the address of Masumi's canonical `vested_pay` escrow for a network.
  * Fallback convenience only — the authoritative escrow address comes from the
  * purchase via `extra.contractAddress`; a server on a different deployment

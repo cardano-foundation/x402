@@ -154,8 +154,8 @@ The `referenceKey`, `referenceSignature`, nonces, `agentIdentifier`, and the fou
     {
       "scheme": "exact",
       "network": "cardano:preprod", // cardano:mainnet or cardano:preview
-      "amount": "5000000", // lovelace locked into the escrow (Masumi v2 locks ADA)
-      "asset": "lovelace",
+      "amount": "5000000", // amount locked into the escrow (of `asset`)
+      "asset": "lovelace", // lovelace, or a single native token (`policyId.assetNameHex`)
       "payTo": "addr_test1w...", // the Masumi `vested_pay` escrow script address for this network
       "maxTimeoutSeconds": 600, // Has to be set to a higher amount of time because of the Cardano Network speed
       "extra": {
@@ -206,11 +206,14 @@ The client constructs the escrow **datum** (a Plutus `Constr 0` with the fields 
 | 17 | `buyer_cooldown_time` | `0` | — |
 | 18 | `state` | `FundsLocked` | — |
 
-Because the `vested_pay` validator only runs on spend (never on the lock itself), a malformed datum is **not** rejected at lock time — it silently strands the funds. Clients and facilitators MUST therefore enforce, for the lock:
+Because the `vested_pay` validator only runs on spend (never on the lock itself), a malformed datum is **not** rejected at lock time — it silently strands the funds, and the Masumi Payment Service validates the lock **off-chain**. Clients and facilitators MUST therefore enforce, to parity with that off-chain validation, for the lock:
 
 - `buyer` and `seller` are **public-key** (not script) credential addresses, and `buyer` equals the transaction's payer.
-- `pay_by_time ≤ submit_result_time ≤ unlock_time ≤ external_dispute_unlock_time`, and the transaction's validity upper bound ≤ `pay_by_time`.
-- `reference_signature` is at least 16 bytes; `collateral_return_lovelace ≥ 0`; `result_hash` is empty; `state` is `FundsLocked`.
+- `state` is `FundsLocked`, `result_hash` is empty, and **both cooldown timers are `0`**; the escrow output carries **no reference script**.
+- `pay_by_time ≤ submit_result_time ≤ unlock_time ≤ external_dispute_unlock_time`, and the transaction's validity upper bound (TTL) is on/before `pay_by_time` so the lock cannot settle after the deadline.
+- `reference_signature` is at least 16 bytes.
+- `collateral_return_lovelace` is `0` or ≥ **1,435,230**, does **not** exceed the locked lovelace (a collateral above the locked ADA bricks the seller's on-chain spend), and — for a lovelace payment — the locked lovelace covers `amount + collateral_return_lovelace`.
+- The escrow output holds enough lovelace for the protocol min-UTXO of the datum **after `SubmitResult`** (a 32-byte `result_hash` and non-zero cooldowns), not merely at lock time — otherwise the seller can never spend.
 
 The escrow script address is deployment-specific: the validator parameters (`required_admins_multi_sig`, `admin_vks`, `cooldown_period`) are baked into the script hash, so a different parameterization (e.g. a self-hosted Masumi) yields a different address, and the hash alone cannot be checked against the un-applied blueprint. The resource server therefore declares its deployment's escrow address in `extra.contractAddress` (from the purchase); when omitted it defaults to Masumi's canonical address for the network. A facilitator MUST verify that `payTo` equals that declared escrow address before accepting a Masumi payment — this binds the lock to the specific escrow the purchase expects, since a look-alike `vested_pay` with different admins is a different trust domain.
 
@@ -400,10 +403,14 @@ A facilitator MUST enforce all of the following rules before accepting a payment
 **Masumi assetTransferMethod — additional rules.** When `requirements.extra.assetTransferMethod` is `masumi`, the facilitator MUST additionally enforce (rule 2's "recipient" is the escrow output paying `payTo`):
 
 - `payTo` equals the deployment's **Masumi escrow (`vested_pay`) script address** — `extra.contractAddress` when present, else Masumi's canonical address for the network.
-- The output paying `payTo` carries an **inline datum** that decodes to the lock datum, with `state == FundsLocked` and `result_hash` empty.
+- The output paying `payTo` carries an **inline datum** decoding to the lock datum with `state == FundsLocked`, empty `result_hash`, and **both cooldown timers `0`**, and the output carries **no reference script**.
 - `buyer` equals the transaction's payer and `seller` equals `extra.sellerAddress`; both are **public-key** credential addresses.
-- `reference_key`, `reference_signature`, `seller_nonce`, `buyer_nonce`, `agent_identifier`, `input_hash`, `collateral_return_lovelace`, and the four time bounds in the datum match the corresponding `extra` values.
-- `reference_signature` is at least 16 bytes, `collateral_return_lovelace ≥ 0`, and `pay_by_time ≤ submit_result_time ≤ unlock_time ≤ external_dispute_unlock_time` with the transaction's validity upper bound ≤ `pay_by_time`.
+- `reference_key`, `reference_signature`, `seller_nonce`, `buyer_nonce`, `agent_identifier`, `input_hash`, `collateral_return_lovelace`, and the four time bounds in the datum match the corresponding `extra` values, and `reference_signature` is at least 16 bytes.
+- **Value.** For the requested `asset`: **lovelace** MAY be overpaid but the locked lovelace MUST be ≥ `amount + collateral_return_lovelace`; a **native token** MUST match `amount` exactly. `collateral_return_lovelace` MUST be `0` or ≥ **1,435,230** and MUST NOT exceed the locked lovelace.
+- **Deadline.** The transaction MUST carry a validity upper bound (TTL) whose slot time is on/before `pay_by_time`.
+- **Minimum UTXO.** The escrow output MUST hold enough lovelace for the protocol min-UTXO of the datum **after `SubmitResult`** (32-byte `result_hash` + non-zero cooldowns), so the seller's later spend stays above min-UTXO.
+
+A single Masumi payment locks **one** asset — lovelace, or one native token plus its structural lovelace (which covers the collateral and min-UTXO). `PaymentRequirements` carries a single `asset`/`amount`, so a multi-asset basket is out of scope for this scheme.
 
 A valid Masumi settlement means the funds are **locked in the escrow**, not delivered to the seller; releasing them is governed by the contract and the Masumi Payment Service in later transactions outside this scheme.
 

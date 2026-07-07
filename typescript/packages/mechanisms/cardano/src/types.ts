@@ -209,6 +209,11 @@ export interface CardanoUtxoOutput {
    * the output satisfies the protocol min-UTXO. Present for decoded transactions.
    */
   serializedSize?: number;
+  /**
+   * True when the output carries a reference script (`script_ref`). The Masumi
+   * escrow output must not — a set one is treated as a spoofing attempt.
+   */
+  hasReferenceScript?: boolean;
 }
 
 /**

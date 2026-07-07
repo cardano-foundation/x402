@@ -191,6 +191,13 @@
       "protocolFamily": "cardano"
     },
     {
+      "path": "/exact/cardano/masumi-usdm",
+      "method": "GET",
+      "description": "Protected Cardano endpoint using the masumi assetTransferMethod paying a native token (tUSDM)",
+      "requiresPayment": true,
+      "protocolFamily": "cardano"
+    },
+    {
       "path": "/exact/cardano/script",
       "method": "GET",
       "description": "Protected Cardano endpoint using the script assetTransferMethod",

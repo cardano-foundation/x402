@@ -2,6 +2,7 @@ import {
   Address,
   Data,
   Ed25519Signature,
+  SlotConfig,
   Transaction,
   TransactionBody,
   TransactionHash,
@@ -11,8 +12,12 @@ import {
 
 import {
   CARDANO_ASSET_REGEX,
+  CARDANO_MAINNET_CAIP2,
   CARDANO_MIN_UTXO_OVERHEAD_BYTES,
+  CARDANO_PREPROD_CAIP2,
+  CARDANO_PREVIEW_CAIP2,
   CARDANO_UTXO_REF_REGEX,
+  normalizeCardanoNetwork,
 } from "./constants";
 import type { CardanoUtxoOutput, DecodedCardanoTransaction, ExactCardanoPayload } from "./types";
 
@@ -26,6 +31,30 @@ import type { CardanoUtxoOutput, DecodedCardanoTransaction, ExactCardanoPayload 
  */
 export function minUtxoLovelace(serializedSize: number, coinsPerUtxoByte: bigint): bigint {
   return BigInt(CARDANO_MIN_UTXO_OVERHEAD_BYTES + serializedSize) * coinsPerUtxoByte;
+}
+
+/** Evolution slot-config preset per Cardano network (Praos slot <-> wall-clock). */
+const SLOT_CONFIG_BY_NETWORK: Record<string, (typeof SlotConfig.SLOT_CONFIG_NETWORK)["Mainnet"]> = {
+  [CARDANO_MAINNET_CAIP2]: SlotConfig.SLOT_CONFIG_NETWORK.Mainnet,
+  [CARDANO_PREPROD_CAIP2]: SlotConfig.SLOT_CONFIG_NETWORK.Preprod,
+  [CARDANO_PREVIEW_CAIP2]: SlotConfig.SLOT_CONFIG_NETWORK.Preview,
+};
+
+/**
+ * Converts an absolute slot to POSIX milliseconds for a Cardano network, so a
+ * transaction's validity upper bound (a slot) can be compared against a datum
+ * timestamp (POSIX ms), e.g. the Masumi `pay_by_time` deadline.
+ *
+ * @param network - The x402 Cardano network identifier (or a CIP-34 alias).
+ * @param slot - The absolute slot number.
+ * @returns The wall-clock time of the slot in POSIX milliseconds.
+ */
+export function slotToPosixMs(network: string, slot: bigint): number {
+  const cfg = SLOT_CONFIG_BY_NETWORK[normalizeCardanoNetwork(network)];
+  if (!cfg) {
+    throw new Error(`No slot config for network: ${network}`);
+  }
+  return Number(cfg.zeroTime) + (Number(slot) - Number(cfg.zeroSlot)) * cfg.slotLength;
 }
 
 /**
@@ -120,7 +149,15 @@ export function decodeCardanoTransaction(transactionBase64: string): DecodedCard
         ? Data.toCBORHex(datumOption.data)
         : undefined;
     const serializedSize = TxOut.toCBORBytes(out).length;
-    return { address, coin: out.assets.lovelace, assets, datum, serializedSize };
+    const hasReferenceScript = (out as { scriptRef?: unknown }).scriptRef !== undefined;
+    return {
+      address,
+      coin: out.assets.lovelace,
+      assets,
+      datum,
+      serializedSize,
+      hasReferenceScript,
+    };
   });
 
   const ws = tx.witnessSet;

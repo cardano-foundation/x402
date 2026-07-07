@@ -321,14 +321,11 @@ export class ExactCardanoScheme implements SchemeNetworkFacilitator {
         assetFoundForRecipient = true;
         if (available > bestAvailable) bestAvailable = available;
         if (available >= requestedAmount) {
-          // Reject outputs below the protocol min-UTXO (the node would refuse
-          // them at submission). coinsPerUtxoByte is read live via the signer
-          // hook; skipped when the hook or serialized size is unavailable.
-          if (
-            typeof this.signer.getCoinsPerUtxoByte === "function" &&
-            output.serializedSize !== undefined
-          ) {
-            let coinsPerUtxoByte: bigint;
+          // Fetch the live coinsPerUtxoByte once (governance-settable): it feeds
+          // both the generic min-UTXO check and the Masumi post-result min-UTXO
+          // check. Undefined when the signer does not expose the hook.
+          let coinsPerUtxoByte: bigint | undefined;
+          if (typeof this.signer.getCoinsPerUtxoByte === "function") {
             try {
               coinsPerUtxoByte = await this.signer.getCoinsPerUtxoByte(requirements.network);
             } catch (cause) {
@@ -339,6 +336,11 @@ export class ExactCardanoScheme implements SchemeNetworkFacilitator {
                 payer,
               };
             }
+          }
+          // Reject outputs below the protocol min-UTXO (the node would refuse
+          // them at submission). Skipped when coinsPerUtxoByte or the serialized
+          // size is unavailable.
+          if (coinsPerUtxoByte !== undefined && output.serializedSize !== undefined) {
             const minUtxo = minUtxoLovelace(output.serializedSize, coinsPerUtxoByte);
             if (output.coin < minUtxo) {
               return {
@@ -358,6 +360,7 @@ export class ExactCardanoScheme implements SchemeNetworkFacilitator {
             requirements,
             decoded,
             payer,
+            coinsPerUtxoByte,
           );
           if (!methodCheck.ok) {
             return { isValid: false, invalidReason: methodCheck.reason, payer };
@@ -507,6 +510,8 @@ export class ExactCardanoScheme implements SchemeNetworkFacilitator {
    * @param requirements - The canonical payment requirements.
    * @param decoded - The decoded transaction (with output inline datums).
    * @param payer - The resolved payer address.
+   * @param coinsPerUtxoByte - Live `coinsPerUtxoByte`, forwarded to the Masumi
+   *   check for its post-result min-UTXO enforcement. Undefined when unavailable.
    * @returns Result describing success or a precise failure reason.
    */
   protected async runMethodSpecificChecks(
@@ -514,6 +519,7 @@ export class ExactCardanoScheme implements SchemeNetworkFacilitator {
     requirements: PaymentRequirements,
     decoded: DecodedCardanoTransaction,
     payer: string,
+    coinsPerUtxoByte?: bigint,
   ): Promise<{ ok: true } | { ok: false; reason: string }> {
     const method =
       (extra as CardanoExtra | undefined)?.assetTransferMethod ?? ASSET_TRANSFER_METHOD_DEFAULT;
@@ -521,7 +527,13 @@ export class ExactCardanoScheme implements SchemeNetworkFacilitator {
       return { ok: true };
     }
     if (method === ASSET_TRANSFER_METHOD_MASUMI) {
-      return verifyMasumiLock(extra as CardanoExtraMasumi, requirements, decoded, payer);
+      return verifyMasumiLock(
+        extra as CardanoExtraMasumi,
+        requirements,
+        decoded,
+        payer,
+        coinsPerUtxoByte,
+      );
     }
     if (method === ASSET_TRANSFER_METHOD_SCRIPT) {
       const scriptExtra = extra as CardanoExtraScript;

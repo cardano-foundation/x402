@@ -1,12 +1,20 @@
 import type { PaymentRequirements } from "@x402/core/types";
 
 import {
+  ERR_MASUMI_ASSET,
+  ERR_MASUMI_COLLATERAL,
   ERR_MASUMI_CONTRACT_MISMATCH,
   ERR_MASUMI_DATUM_INVALID,
   ERR_MASUMI_DATUM_MISMATCH,
   ERR_MASUMI_DATUM_MISSING,
+  ERR_MASUMI_DEADLINE,
+  ERR_MASUMI_MIN_UTXO,
+  ERR_MASUMI_REFERENCE_SCRIPT,
+  LOVELACE_ASSET,
 } from "../../constants";
 import type { CardanoExtraMasumi, DecodedCardanoTransaction } from "../../types";
+import { slotToPosixMs } from "../../utils";
+import { MASUMI_MIN_COLLATERAL_LOVELACE, masumiMinUtxoLovelace } from "./constants";
 import {
   addressCredentials,
   MASUMI_STATE_FUNDS_LOCKED,
@@ -45,6 +53,8 @@ function sameCredentials(a: MasumiAddressCredentials, b: MasumiAddressCredential
  * @param requirements - The canonical payment requirements.
  * @param decoded - The decoded transaction (with output inline datums).
  * @param payer - The resolved payer (buyer) address.
+ * @param coinsPerUtxoByte - Live `coinsPerUtxoByte`; when supplied, the escrow
+ *   output is checked against the post-result min-UTXO. Skipped when absent.
  * @returns `{ ok: true }` when the lock is valid, else a precise failure reason.
  */
 export function verifyMasumiLock(
@@ -52,6 +62,7 @@ export function verifyMasumiLock(
   requirements: PaymentRequirements,
   decoded: DecodedCardanoTransaction,
   payer: string,
+  coinsPerUtxoByte?: bigint,
 ): Check {
   // 1. payTo must equal the deployment's escrow address, which the server
   //    declares in `extra.contractAddress` (from the purchase). Not defaulted:
@@ -60,24 +71,33 @@ export function verifyMasumiLock(
     return fail(ERR_MASUMI_CONTRACT_MISMATCH);
   }
 
-  // 2. Locate the escrow output (>= amount) carrying an inline datum.
-  const requested = BigInt(requirements.amount);
+  // 2. Locate the escrow output paying payTo and carrying an inline datum.
   const output = decoded.outputs.find(
-    o => o.address === requirements.payTo && o.coin >= requested && o.datum !== undefined,
+    o => o.address === requirements.payTo && o.datum !== undefined,
   );
   if (!output || output.datum === undefined) {
     return fail(ERR_MASUMI_DATUM_MISSING);
   }
-  const view = parseMasumiLockDatum(output.datum);
+  const datumHex = output.datum;
+  // The escrow output must NOT carry a reference script — Masumi treats a set
+  // `reference_script_hash` as a spoofing attempt (FundsOrDatumInvalid).
+  if (output.hasReferenceScript) {
+    return fail(ERR_MASUMI_REFERENCE_SCRIPT);
+  }
+  const view = parseMasumiLockDatum(datumHex);
   if (!view) {
     return fail(ERR_MASUMI_DATUM_INVALID);
   }
 
-  // 3. Structural invariants of a fresh lock (the validator never checks these on
-  //    lock, so a wrong datum would strand funds — reject up front).
+  // 3. Structural invariants of a fresh lock. The validator never checks these
+  //    on lock and Masumi validates them off-chain, so any mismatch strands the
+  //    funds on a purchase Masumi then invalidates — reject up front.
   if (view.state !== MASUMI_STATE_FUNDS_LOCKED) return fail(ERR_MASUMI_DATUM_INVALID);
   if (view.resultHash !== "") return fail(ERR_MASUMI_DATUM_INVALID);
-  if (view.collateralReturnLovelace < 0n) return fail(ERR_MASUMI_DATUM_INVALID);
+  // Fresh lock: both cooldown timers MUST be 0 (a non-zero value is spoofing).
+  if (view.sellerCooldownTime !== 0n || view.buyerCooldownTime !== 0n) {
+    return fail(ERR_MASUMI_DATUM_INVALID);
+  }
   if (view.buyer.payment.isScript || view.seller.payment.isScript) {
     return fail(ERR_MASUMI_DATUM_INVALID);
   }
@@ -92,7 +112,52 @@ export function verifyMasumiLock(
     return fail(ERR_MASUMI_DATUM_INVALID);
   }
 
-  // 4. Field matching against the canonical requirements' extra.
+  // 4. Deadline: the tx MUST carry a validity upper bound (TTL) on/before
+  //    pay_by_time, so it cannot settle past the deadline — Masumi flags a lock
+  //    landing after pay_by_time FundsOrDatumInvalid.
+  if (decoded.ttlSlot === undefined) return fail(ERR_MASUMI_DEADLINE);
+  if (BigInt(slotToPosixMs(requirements.network, decoded.ttlSlot)) > view.payByTime) {
+    return fail(ERR_MASUMI_DEADLINE);
+  }
+
+  // 5. Value: collateral bounds + asset/amount (mirrors Masumi's
+  //    checkPaymentAmountsMatch). collateral_return_lovelace is denominated in
+  //    lovelace and bounded against the locked lovelace for every asset — a
+  //    collateral above the locked ADA bricks the seller's on-chain spend paths.
+  const collateral = view.collateralReturnLovelace;
+  if (
+    collateral < 0n ||
+    (collateral > 0n && collateral < MASUMI_MIN_COLLATERAL_LOVELACE) ||
+    collateral > output.coin
+  ) {
+    return fail(ERR_MASUMI_COLLATERAL);
+  }
+  const amount = BigInt(requirements.amount);
+  const assetKey = requirements.asset.toLowerCase();
+  if (assetKey === LOVELACE_ASSET) {
+    // Lovelace: overpayment allowed for min-ada; locked >= amount + collateral.
+    if (output.coin < amount + collateral) return fail(ERR_MASUMI_ASSET);
+  } else {
+    // Native token: exact amount (Masumi forbids token overpayment); its
+    // structural lovelace covers collateral (above) and min-UTXO (below).
+    if (output.assets[assetKey] !== amount) return fail(ERR_MASUMI_ASSET);
+  }
+
+  // 6. min-UTXO with post-result headroom (when the live coinsPerUtxoByte is
+  //    available): the escrow output must hold enough lovelace that the seller's
+  //    later SubmitResult output (32-byte result_hash + non-zero cooldowns) still
+  //    clears the protocol min-UTXO. Otherwise the seller can never spend.
+  if (coinsPerUtxoByte !== undefined) {
+    const nativeTokenCount = Object.keys(output.assets).length;
+    const requiredMinUtxo = masumiMinUtxoLovelace(
+      datumHex.length / 2,
+      nativeTokenCount,
+      coinsPerUtxoByte,
+    );
+    if (output.coin < requiredMinUtxo) return fail(ERR_MASUMI_MIN_UTXO);
+  }
+
+  // 7. Field matching against the canonical requirements' extra.
   //    buyer MUST be the payer; seller MUST be the declared seller.
   if (!sameCredentials(view.buyer, addressCredentials(payer))) {
     return fail(ERR_MASUMI_DATUM_MISMATCH);

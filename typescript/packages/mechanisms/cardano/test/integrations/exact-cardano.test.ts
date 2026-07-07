@@ -288,14 +288,63 @@ describe("Cardano Integration Tests (deterministic, offline)", () => {
           agentIdentifier: "ee".repeat(16),
           collateralReturnLovelace: 0n,
           inputHash: "",
-          payByTime: 1_000n,
-          submitResultTime: 2_000n,
-          unlockTime: 3_000n,
-          externalDisputeUnlockTime: 4_000n,
+          // pay_by_time must be on/after the tx's TTL slot wall-time, so the lock
+          // cannot settle past the deadline (facilitator deadline check).
+          payByTime: 1_900_000_000_000n,
+          submitResultTime: 1_900_000_100_000n,
+          unlockTime: 1_900_000_200_000n,
+          externalDisputeUnlockTime: 1_900_000_300_000n,
         }),
       );
       const payload = await fixturePayload(escrow, 5_000_000n, datum);
       const requirements = buildRequirements(escrow, "5000000", LOVELACE_ASSET, {
+        assetTransferMethod: "masumi",
+        contractAddress: escrow,
+        sellerAddress: recipient,
+      });
+      const result = await facilitator.verify(payload, requirements);
+      expect(result.isValid).toBe(true);
+    });
+
+    it("accepts a masumi USDM lock into the escrow with a valid FundsLocked datum", async () => {
+      const buyer = await freshPreprodAddress();
+      const facilitator = new ExactCardanoFacilitator(
+        stubFacilitatorSigner({ getUtxo: async () => ({ exists: true, address: buyer }) }),
+      );
+      const escrow = masumiContractAddress(NETWORK);
+      const datum = inlineDatum(
+        buildMasumiLockDatum({
+          buyerAddress: buyer,
+          sellerAddress: recipient,
+          referenceKey: "aa".repeat(32),
+          referenceSignature: "bb".repeat(32),
+          sellerNonce: "cc".repeat(32),
+          buyerNonce: "dd".repeat(32),
+          agentIdentifier: "ee".repeat(16),
+          collateralReturnLovelace: 0n,
+          inputHash: "",
+          payByTime: 1_900_000_000_000n,
+          submitResultTime: 1_900_000_100_000n,
+          unlockTime: 1_900_000_200_000n,
+          externalDisputeUnlockTime: 1_900_000_300_000n,
+        }),
+      );
+      // The escrow output carries the token exactly; its lovelace is structural.
+      const built = await buildSignedTx({
+        payTo: escrow,
+        asset: USDM_PREPROD_ASSET,
+        amount: 1_500_000n,
+        nonceUtxoRef: NONCE_REF,
+        ttlSlot: TTL_SLOT,
+        network: NETWORK,
+        datum,
+      });
+      const payload: PaymentPayload = {
+        x402Version: 2,
+        accepted: buildRequirements(escrow, "1500000", USDM_PREPROD_ASSET),
+        payload: { transaction: built.transaction, nonce: built.nonce },
+      };
+      const requirements = buildRequirements(escrow, "1500000", USDM_PREPROD_ASSET, {
         assetTransferMethod: "masumi",
         contractAddress: escrow,
         sellerAddress: recipient,

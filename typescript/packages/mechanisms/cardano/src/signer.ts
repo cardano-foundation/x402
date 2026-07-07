@@ -3,6 +3,7 @@ import {
   Assets,
   type Chain,
   Client,
+  Data,
   mainnet,
   preprod,
   preview,
@@ -20,6 +21,7 @@ import {
   LOVELACE_ASSET,
   normalizeCardanoNetwork,
 } from "./constants";
+import { masumiMinUtxoLovelace } from "./exact/masumi/constants";
 import { buildMasumiLockInline } from "./exact/masumi/lock";
 import type { CardanoExtra, CardanoExtraMasumi } from "./types";
 import { parseAssetUnit, parseUtxoRef } from "./utils";
@@ -381,17 +383,46 @@ export function toClientCardanoSigner(config: ClientCardanoSignerConfig): Client
       const nonceTxHash = Buffer.from(nonceUtxo.transactionId.hash).toString("hex").toLowerCase();
       const nonce = `${nonceTxHash}#${Number(nonceUtxo.index)}`;
 
-      const outputAssets = buildOutputAssets(input.asset, BigInt(input.amount));
-      const ttlMs = BigInt(Date.now()) + BigInt(input.maxTimeoutSeconds) * 1000n;
-
       // Masumi attaches an inline lock datum whose `buyer` must equal the payer
       // the facilitator resolves (the nonce input's owner), so derive it from
       // that UTXO. Other methods pay a plain output.
       const extra = input.extra as CardanoExtra | undefined;
-      const masumiDatum =
+      const masumiExtra =
         extra?.assetTransferMethod === ASSET_TRANSFER_METHOD_MASUMI
-          ? buildMasumiLockInline(extra as CardanoExtraMasumi, Address.toBech32(nonceUtxo.address))
+          ? (extra as CardanoExtraMasumi)
           : undefined;
+      const masumiDatum = masumiExtra
+        ? buildMasumiLockInline(masumiExtra, Address.toBech32(nonceUtxo.address))
+        : undefined;
+
+      let outputAssets = buildOutputAssets(input.asset, BigInt(input.amount));
+      // A native-token Masumi lock carries the token plus purely structural
+      // lovelace, which must cover the post-result min-UTXO and the collateral.
+      // autoMinUtxo only sizes the current (smaller) datum, so top it up here.
+      // An ADA lock's requested amount is the lovelace and is validated instead
+      // by the facilitator against the same floor.
+      if (masumiExtra && masumiDatum && input.asset.toLowerCase() !== LOVELACE_ASSET) {
+        const { coinsPerUtxoByte } = await client.getProtocolParameters();
+        const datumBytes = Data.toCBORHex(masumiDatum.data).length / 2;
+        const collateral = masumiExtra.collateralReturnLovelace
+          ? BigInt(masumiExtra.collateralReturnLovelace)
+          : 0n;
+        const floor = masumiMinUtxoLovelace(datumBytes, 1, coinsPerUtxoByte);
+        const { policyId, assetNameHex } = parseAssetUnit(input.asset);
+        outputAssets = Assets.addByHex(
+          Assets.fromLovelace(floor > collateral ? floor : collateral),
+          policyId,
+          assetNameHex,
+          BigInt(input.amount),
+        );
+      }
+
+      // Masumi: anchor the tx's validity upper bound to pay_by_time so the lock
+      // can never settle past the deadline (Masumi invalidates a late lock).
+      // Other methods use maxTimeoutSeconds.
+      const ttlMs = masumiExtra
+        ? BigInt(masumiExtra.payByTime)
+        : BigInt(Date.now()) + BigInt(input.maxTimeoutSeconds) * 1000n;
 
       const signBuilder = await client
         .newTx()

@@ -270,3 +270,13 @@ export const ERR_MASUMI_DATUM_MISSING = "invalid_exact_cardano_payload_masumi_da
 export const ERR_MASUMI_DATUM_MISMATCH = "invalid_exact_cardano_payload_masumi_datum_mismatch";
 /** Error: the masumi lock datum is structurally invalid or violates lock invariants. */
 export const ERR_MASUMI_DATUM_INVALID = "invalid_exact_cardano_payload_masumi_datum_invalid";
+/** Error: the tx validity upper bound is not on/before the datum's pay_by_time. */
+export const ERR_MASUMI_DEADLINE = "invalid_exact_cardano_payload_masumi_deadline";
+/** Error: collateral_return_lovelace violates the floor / ceiling / amount rules. */
+export const ERR_MASUMI_COLLATERAL = "invalid_exact_cardano_payload_masumi_collateral";
+/** Error: the escrow output lovelace is below the (post-result) min-UTXO. */
+export const ERR_MASUMI_MIN_UTXO = "invalid_exact_cardano_payload_masumi_min_utxo";
+/** Error: the escrow output carries a reference script (must not be set). */
+export const ERR_MASUMI_REFERENCE_SCRIPT = "invalid_exact_cardano_payload_masumi_reference_script";
+/** Error: the escrow output does not carry the requested asset/amount. */
+export const ERR_MASUMI_ASSET = "invalid_exact_cardano_payload_masumi_asset";
