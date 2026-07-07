@@ -174,6 +174,21 @@ export interface CardanoExtraScript {
    * Maps parameter name to its value descriptor.
    */
   parameters?: Record<string, CardanoScriptParameter>;
+  /**
+   * Optional Plutus datum (CBOR hex) to attach to the `payTo` output as an
+   * INLINE datum. Supply this to lock funds into a contract that requires a
+   * datum — the script method is fully general and not tied to any specific
+   * contract, so the datum is whatever the target validator expects.
+   *
+   * The facilitator does NOT verify the datum's contents: it is arbitrary and
+   * contract-specific, so only the server that defined the contract can judge
+   * its correctness. A datum the target validator does not accept strands the
+   * locked funds, so providing a correct datum is the server's responsibility.
+   * Omit for scripts that spend without a datum (e.g. a PlutusV3 validator
+   * written for the `None` case). Inline only — datum-hash outputs (required to
+   * later spend a PlutusV1 script) are out of scope for this method.
+   */
+  datum?: string;
 }
 
 /**

@@ -15,6 +15,7 @@ import { addressFromSeed } from "@evolution-sdk/evolution/sdk/wallet/Derivation"
 
 import {
   ASSET_TRANSFER_METHOD_MASUMI,
+  ASSET_TRANSFER_METHOD_SCRIPT,
   CARDANO_MAINNET_CAIP2,
   CARDANO_PREPROD_CAIP2,
   CARDANO_PREVIEW_CAIP2,
@@ -23,7 +24,8 @@ import {
 } from "./constants";
 import { masumiMinUtxoLovelace } from "./exact/masumi/constants";
 import { buildMasumiLockInline } from "./exact/masumi/lock";
-import type { CardanoExtra, CardanoExtraMasumi } from "./types";
+import { buildScriptDatumInline } from "./exact/script/datum";
+import type { CardanoExtra, CardanoExtraMasumi, CardanoExtraScript } from "./types";
 import { parseAssetUnit, parseUtxoRef } from "./utils";
 
 /**
@@ -385,15 +387,23 @@ export function toClientCardanoSigner(config: ClientCardanoSignerConfig): Client
 
       // Masumi attaches an inline lock datum whose `buyer` must equal the payer
       // the facilitator resolves (the nonce input's owner), so derive it from
-      // that UTXO. Other methods pay a plain output.
+      // that UTXO. The script method attaches the server-supplied inline datum
+      // verbatim (contract-specific; not verified). Other methods pay a plain
+      // output.
       const extra = input.extra as CardanoExtra | undefined;
       const masumiExtra =
         extra?.assetTransferMethod === ASSET_TRANSFER_METHOD_MASUMI
           ? (extra as CardanoExtraMasumi)
           : undefined;
+      const scriptExtra =
+        extra?.assetTransferMethod === ASSET_TRANSFER_METHOD_SCRIPT
+          ? (extra as CardanoExtraScript)
+          : undefined;
       const masumiDatum = masumiExtra
         ? buildMasumiLockInline(masumiExtra, Address.toBech32(nonceUtxo.address))
         : undefined;
+      const scriptDatum = scriptExtra ? buildScriptDatumInline(scriptExtra) : undefined;
+      const paymentDatum = masumiDatum ?? scriptDatum;
 
       let outputAssets = buildOutputAssets(input.asset, BigInt(input.amount));
       // A native-token Masumi lock carries the token plus purely structural
@@ -432,14 +442,14 @@ export function toClientCardanoSigner(config: ClientCardanoSignerConfig): Client
         .payToAddress({
           address: Address.fromBech32(input.payTo),
           assets: outputAssets,
-          ...(masumiDatum ? { datum: masumiDatum } : {}),
+          ...(paymentDatum ? { datum: paymentDatum } : {}),
         })
         .setValidity({ to: ttlMs })
         .build({
           changeAddress,
           // Bump the output to the protocol min-UTXO for native-asset outputs
-          // and for datum-bearing outputs (the Masumi lock datum raises it).
-          autoMinUtxo: input.asset.toLowerCase() !== LOVELACE_ASSET || masumiDatum !== undefined,
+          // and for datum-bearing outputs (an attached datum raises it).
+          autoMinUtxo: input.asset.toLowerCase() !== LOVELACE_ASSET || paymentDatum !== undefined,
         });
 
       const submitBuilder = await signBuilder.sign();

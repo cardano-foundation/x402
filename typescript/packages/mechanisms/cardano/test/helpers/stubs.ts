@@ -16,8 +16,14 @@ import {
 } from "@evolution-sdk/evolution";
 import type { Network, PaymentRequirements } from "@x402/core/types";
 
-import { CARDANO_PREPROD_CAIP2, LOVELACE_ASSET } from "../../src/constants";
+import {
+  ASSET_TRANSFER_METHOD_SCRIPT,
+  CARDANO_PREPROD_CAIP2,
+  LOVELACE_ASSET,
+} from "../../src/constants";
+import { buildScriptDatumInline } from "../../src/exact/script/datum";
 import type { ClientCardanoSigner, FacilitatorCardanoSigner } from "../../src/signer";
+import type { CardanoExtraScript } from "../../src/types";
 import { buildSignedTx } from "./buildSignedTx";
 
 /** Network used across the deterministic suites. */
@@ -76,6 +82,13 @@ export function stubClientSigner(): ClientCardanoSigner {
   return {
     getAddress: () => PAYER_ADDRESS,
     buildAndSignPaymentTransaction: async input => {
+      // Honor the script method's inline datum like the real signer does, so
+      // full-flow script tests exercise datum attachment through the stack.
+      const extra = input.extra as { assetTransferMethod?: string } | undefined;
+      const scriptDatum =
+        extra?.assetTransferMethod === ASSET_TRANSFER_METHOD_SCRIPT
+          ? buildScriptDatumInline(extra as CardanoExtraScript)
+          : undefined;
       const built = await buildSignedTx({
         payTo: input.payTo,
         asset: input.asset,
@@ -83,6 +96,7 @@ export function stubClientSigner(): ClientCardanoSigner {
         nonceUtxoRef: NONCE_REF,
         ttlSlot: TTL_SLOT,
         network: input.network,
+        ...(scriptDatum ? { datum: scriptDatum } : {}),
       });
       return { transaction: built.transaction, nonce: built.nonce };
     },

@@ -776,6 +776,12 @@ app.use(
               extra: {
                 assetTransferMethod: "script",
                 script: { type: "plutusV3", code: CARDANO_SCRIPT_CODE },
+                // Optional inline datum (CBOR hex) attached to the payTo output.
+                // A real contract declares whatever datum it needs; the client
+                // attaches it verbatim and the facilitator does not verify it.
+                // Here the always-succeeds validator ignores it — this only
+                // demonstrates the wiring. `d8799f182aff` = Constr 0 [42].
+                datum: "d8799f182aff",
               },
             },
             extensions: { ...CARDANO_DISCOVERY },

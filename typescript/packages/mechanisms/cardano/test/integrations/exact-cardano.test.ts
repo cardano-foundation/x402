@@ -1,4 +1,4 @@
-import { Transaction } from "@evolution-sdk/evolution";
+import { Data, Transaction } from "@evolution-sdk/evolution";
 import { beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { x402Client } from "@x402/core/client";
 import { x402Facilitator } from "@x402/core/facilitator";
@@ -18,6 +18,7 @@ import { toClientCardanoSigner, toFacilitatorCardanoSigner } from "../../src/sig
 import { LOVELACE_ASSET, USDM_PREPROD_ASSET } from "../../src/constants";
 import { masumiContractAddress } from "../../src/exact/masumi/constants";
 import { buildMasumiLockDatum, inlineDatum } from "../../src/exact/masumi/datum";
+import { buildScriptDatumInline } from "../../src/exact/script/datum";
 import { decodeCardanoTransaction } from "../../src/utils";
 import { buildSignedTx } from "../helpers/buildSignedTx";
 import {
@@ -147,6 +148,66 @@ describe("Cardano Integration Tests (deterministic, offline)", () => {
       const settleResponse = await server.settlePayment(paymentPayload, accepted!);
       expect(settleResponse.success).toBe(true);
     });
+
+    it("verifies and settles a script payment (no datum) end to end", async () => {
+      const { address: scriptAddr } = scriptAddressFor(MINIMAL_PLUTUS_V3);
+      const accepts = [
+        buildRequirements(scriptAddr, "2000000", LOVELACE_ASSET, {
+          assetTransferMethod: "script",
+          script: { type: "plutusV3", code: MINIMAL_PLUTUS_V3 },
+        }),
+      ];
+      const paymentRequired = await server.createPaymentRequiredResponse(accepts, {
+        url: "https://company.co",
+        description: "Company Co. resource",
+        mimeType: "application/json",
+      });
+
+      const paymentPayload = await client.createPaymentPayload(paymentRequired);
+      const accepted = server.findMatchingRequirements(accepts, paymentPayload);
+      expect(accepted).toBeDefined();
+
+      const verifyResponse = await server.verifyPayment(paymentPayload, accepted!);
+      expect(verifyResponse.isValid).toBe(true);
+
+      const settleResponse = await server.settlePayment(paymentPayload, accepted!);
+      expect(settleResponse.success).toBe(true);
+    });
+
+    it("verifies and settles a script payment carrying an inline datum end to end", async () => {
+      const { address: scriptAddr } = scriptAddressFor(MINIMAL_PLUTUS_V3);
+      // A server-defined contract datum the client must attach verbatim.
+      const datumHex = Data.toCBORHex(Data.constr(0n, [Data.int(42n)]));
+      const accepts = [
+        buildRequirements(scriptAddr, "2000000", LOVELACE_ASSET, {
+          assetTransferMethod: "script",
+          script: { type: "plutusV3", code: MINIMAL_PLUTUS_V3 },
+          datum: datumHex,
+        }),
+      ];
+      const paymentRequired = await server.createPaymentRequiredResponse(accepts, {
+        url: "https://company.co",
+        description: "Company Co. resource",
+        mimeType: "application/json",
+      });
+
+      const paymentPayload = await client.createPaymentPayload(paymentRequired);
+      const accepted = server.findMatchingRequirements(accepts, paymentPayload);
+      expect(accepted).toBeDefined();
+
+      const verifyResponse = await server.verifyPayment(paymentPayload, accepted!);
+      expect(verifyResponse.isValid).toBe(true);
+
+      const settleResponse = await server.settlePayment(paymentPayload, accepted!);
+      expect(settleResponse.success).toBe(true);
+
+      // The client attached the server-declared datum to the script output.
+      const decoded = decodeCardanoTransaction(
+        (paymentPayload.payload as { transaction: string }).transaction,
+      );
+      const scriptOutput = decoded.outputs.find(o => o.address === scriptAddr);
+      expect(scriptOutput?.datum).toBe(datumHex);
+    });
   });
 
   describe("facilitator verify() rules against real signed transactions", () => {
@@ -255,6 +316,32 @@ describe("Cardano Integration Tests (deterministic, offline)", () => {
       });
       const result = await facilitator.verify(payload, requirements);
       expect(result.isValid).toBe(true);
+    });
+
+    it("accepts a script payment carrying an inline datum (datum not verified)", async () => {
+      const facilitator = new ExactCardanoFacilitator(stubFacilitatorSigner());
+      const { address: scriptAddr } = scriptAddressFor(MINIMAL_PLUTUS_V3);
+      // A server-defined contract datum; the client attaches it verbatim.
+      const datumHex = Data.toCBORHex(Data.constr(0n, [Data.int(42n)]));
+      const datum = buildScriptDatumInline({
+        assetTransferMethod: "script",
+        script: { type: "plutusV3", code: MINIMAL_PLUTUS_V3 },
+        datum: datumHex,
+      });
+      const payload = await fixturePayload(scriptAddr, 2_000_000n, datum);
+      const requirements = buildRequirements(scriptAddr, "2000000", LOVELACE_ASSET, {
+        assetTransferMethod: "script",
+        script: { type: "plutusV3", code: MINIMAL_PLUTUS_V3 },
+        datum: datumHex,
+      });
+      const result = await facilitator.verify(payload, requirements);
+      expect(result.isValid).toBe(true);
+      // The datum landed on the script output exactly as supplied.
+      const decoded = decodeCardanoTransaction(
+        (payload.payload as { transaction: string }).transaction,
+      );
+      const scriptOutput = decoded.outputs.find(o => o.address === scriptAddr);
+      expect(scriptOutput?.datum).toBe(datumHex);
     });
 
     it("rejects a script payment whose payTo is not the declared script", async () => {

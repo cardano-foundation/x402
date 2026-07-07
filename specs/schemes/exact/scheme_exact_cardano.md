@@ -10,7 +10,9 @@ It offers different assetTransferMethods to do x402 interactions:
 
 2. Locking funds into the **Masumi** escrow (the `vested_pay` smart contract) for agent-to-agent payments with refund, result-submission, and dispute mechanics. x402 performs only the on-chain **lock**; the subsequent release/refund/dispute lifecycle is governed by the contract and the Masumi Payment Service.
 
-3. Performing payments to scripts using parameters that can be applied to scripts while transaction building.
+3. Performing payments to **scripts** — locking funds into **any contract defined by the server**, with an optional arbitrary **datum** and script parameters applied while transaction building.
+
+**Masumi vs. Script.** These two script-based methods serve different purposes. **Masumi** is the *concrete* agent-to-agent case: a specific deployed contract (`vested_pay`) with a fixed 19-field datum and a defined escrow lifecycle, so x402 knows the datum shape and validates it. **Script** is the *general* case: the server defines whatever contract it wants and supplies whatever datum that contract needs. Because that datum is arbitrary and contract-specific, x402 **cannot** validate its correctness — it verifies only that `payTo` is the declared script's address and attaches the datum verbatim. Use Masumi for agent payments; use Script to lock into your own contract.
 
 ## Network Identifiers
 
@@ -252,13 +254,18 @@ When the Resource Server requires payment to a script, the `extra` field in the 
           "param1": {"value": "Hello World", "type": "bytes"},
           "param2": {"value": 42, "type": "bigint"}
           // Script-specific parameters required for transaction building
-        }
+        },
+        "datum": "d8799f182aff" // optional; CBOR hex of the inline datum to attach to the payTo output
         // Additional fields for script assetTransferMethods can be added here
       }
     }
   ]
 }
 ```
+
+**Datum.** A contract that expects a datum on its locked UTxO declares one in `extra.datum` as **CBOR hex**; the client attaches it to the `payTo` output as an **inline datum**. This is what makes the script method able to lock funds into a real contract (most validators require a datum to be spendable — an output at a PlutusV1/V2 script address with no datum is permanently unspendable, and a PlutusV3 validator only spends a datum-less output if it was written for the `None` case). Omit `datum` only for scripts that spend without one.
+
+Because the datum is arbitrary and contract-specific, **the facilitator does not verify its contents** — it cannot know what an unknown contract expects. The facilitator enforces only that `payTo` is the script address implied by `script`/`parameters` (or `scriptHash`) and attaches the datum as declared. **Providing a datum the target validator accepts is the server's responsibility**: a wrong or missing datum strands the locked funds, and x402 will not catch it. The datum is attached **inline** (PlutusV2/V3); datum-**hash** outputs (needed to later spend a PlutusV1 script) are out of scope for this method.
 
 ### `PAYMENT-SIGNATURE` Header Payload
 
@@ -415,6 +422,12 @@ A facilitator MUST enforce all of the following rules before accepting a payment
 A single Masumi payment locks **one** asset — lovelace, or one native token plus its structural lovelace (which covers the collateral and min-UTXO). `PaymentRequirements` carries a single `asset`/`amount`, so a multi-asset basket is out of scope for this scheme.
 
 A valid Masumi settlement means the funds are **locked in the escrow**, not delivered to the seller; releasing them is governed by the contract and the Masumi Payment Service in later transactions outside this scheme.
+
+**Script assetTransferMethod — additional rules.** When `requirements.extra.assetTransferMethod` is `script`, the facilitator MUST:
+
+- Verify `payTo` is the script address implied by the declared `script` (+ `parameters`) or `scriptHash` — i.e. reconstruct the script's payment credential and confirm it equals `payTo`'s. This binds the payment to the advertised contract; a `payTo` that is not that script address MUST be rejected.
+
+The facilitator **MUST NOT** be expected to validate `extra.datum`: the contract is server-defined and its datum is arbitrary, so no general facilitator can judge whether the datum is correct for the target validator. The client attaches `extra.datum` to the `payTo` output verbatim as an inline datum, and the facilitator passes it through unverified. Consequently the **server owns datum correctness** — a datum the contract does not accept (or a missing datum for a contract that requires one) strands the locked funds, and this scheme provides no on-chain or facilitator guard against it. A facilitator MAY optionally reject a script payment whose `payTo` output carries no inline datum when it has reason to require one, but this is not mandated because some scripts spend without a datum.
 
 ### `PAYMENT-RESPONSE` Header Payload
 
