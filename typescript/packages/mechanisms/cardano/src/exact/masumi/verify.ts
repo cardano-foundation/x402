@@ -45,6 +45,23 @@ function sameCredentials(a: MasumiAddressCredentials, b: MasumiAddressCredential
 }
 
 /**
+ * Whether the datum's optional return address exactly matches the declared one:
+ * a declared address must be present in the datum with matching credentials; an
+ * omitted one must be absent (`None`).
+ *
+ * @param declared - The `extra` return address (bech32), or undefined.
+ * @param actual - The datum's return-address credentials, or null (`None`).
+ * @returns True when they correspond exactly.
+ */
+function returnAddressMatches(
+  declared: string | undefined,
+  actual: MasumiAddressCredentials | null,
+): boolean {
+  if (declared === undefined) return actual === null;
+  return actual !== null && sameCredentials(actual, addressCredentials(declared));
+}
+
+/**
  * Verifies that a payment locks funds into the Masumi `vested_pay` escrow with a
  * well-formed `FundsLocked` datum matching the requirements. Only the on-chain
  * lock is checked (x402's scope); the post-lock lifecycle is out of scope.
@@ -142,6 +159,12 @@ export function verifyMasumiLock(
     // structural lovelace covers collateral (above) and min-UTXO (below).
     if (output.assets[assetKey] !== amount) return fail(ERR_MASUMI_ASSET);
   }
+  // The escrow output must carry EXACTLY the requested asset set — no extra
+  // native tokens (Masumi rejects a mismatched token count). Zero tokens for a
+  // lovelace payment; exactly the one requested token otherwise.
+  if (Object.keys(output.assets).length !== (assetKey === LOVELACE_ASSET ? 0 : 1)) {
+    return fail(ERR_MASUMI_ASSET);
+  }
 
   // 6. min-UTXO with post-result headroom (when the live coinsPerUtxoByte is
   //    available): the escrow output must hold enough lovelace that the seller's
@@ -163,6 +186,15 @@ export function verifyMasumiLock(
     return fail(ERR_MASUMI_DATUM_MISMATCH);
   }
   if (!sameCredentials(view.seller, addressCredentials(extra.sellerAddress))) {
+    return fail(ERR_MASUMI_DATUM_MISMATCH);
+  }
+  // Return addresses must match EXACTLY: declared in extra -> datum `Some(match)`,
+  // omitted -> datum `None`. Masumi compares these against the purchase, so a
+  // return address it doesn't expect (or a missing one it does) is rejected.
+  if (
+    !returnAddressMatches(extra.buyerReturnAddress, view.buyerReturnAddress) ||
+    !returnAddressMatches(extra.sellerReturnAddress, view.sellerReturnAddress)
+  ) {
     return fail(ERR_MASUMI_DATUM_MISMATCH);
   }
   // Server-declared datum fields, when present, MUST match the datum. Fields the

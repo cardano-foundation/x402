@@ -42,7 +42,11 @@ export interface MasumiLockDatumInput {
 /** Decoded view of a lock datum used by the facilitator. */
 export interface MasumiDatumView {
   buyer: MasumiAddressCredentials;
+  /** Optional payout address (`Some`) or `null` when the datum carries `None`. */
+  buyerReturnAddress: MasumiAddressCredentials | null;
   seller: MasumiAddressCredentials;
+  /** Optional payout address (`Some`) or `null` when the datum carries `None`. */
+  sellerReturnAddress: MasumiAddressCredentials | null;
   referenceKey: string;
   referenceSignature: string;
   sellerNonce: string;
@@ -248,6 +252,22 @@ function dataToAddress(d: Data.Data): MasumiAddressCredentials | null {
 }
 
 /**
+ * Decodes an `Option<Address>` datum field (`Some(addr)` / `None`).
+ *
+ * @param d - The optional-address Plutus data.
+ * @returns `{ value }` with the address credentials (`Some`) or `null` (`None`),
+ *   or `null` on a structural mismatch.
+ */
+function dataToOptionAddress(d: Data.Data): { value: MasumiAddressCredentials | null } | null {
+  const c = asConstr(d);
+  if (!c) return null;
+  if (c.index === 1n && c.fields.length === 0) return { value: null }; // None
+  if (c.index !== 0n || c.fields.length !== 1) return null; // Some(addr)
+  const addr = dataToAddress(c.fields[0]);
+  return addr ? { value: addr } : null;
+}
+
+/**
  * Parses a Masumi lock datum (Plutus data or its CBOR hex) into a typed view.
  * Total: returns `null` when the structure does not match the 19-field datum.
  *
@@ -266,7 +286,9 @@ export function parseMasumiLockDatum(datum: Data.Data | string): MasumiDatumView
   const f = root.fields;
 
   const buyer = dataToAddress(f[0]);
+  const buyerReturnAddress = dataToOptionAddress(f[1]);
   const seller = dataToAddress(f[2]);
+  const sellerReturnAddress = dataToOptionAddress(f[3]);
   const referenceKey = asHex(f[4]);
   const referenceSignature = asHex(f[5]);
   const sellerNonce = asHex(f[6]);
@@ -285,7 +307,9 @@ export function parseMasumiLockDatum(datum: Data.Data | string): MasumiDatumView
 
   if (
     !buyer ||
+    !buyerReturnAddress ||
     !seller ||
+    !sellerReturnAddress ||
     referenceKey === null ||
     referenceSignature === null ||
     sellerNonce === null ||
@@ -307,7 +331,9 @@ export function parseMasumiLockDatum(datum: Data.Data | string): MasumiDatumView
 
   return {
     buyer,
+    buyerReturnAddress: buyerReturnAddress.value,
     seller,
+    sellerReturnAddress: sellerReturnAddress.value,
     referenceKey,
     referenceSignature,
     sellerNonce,

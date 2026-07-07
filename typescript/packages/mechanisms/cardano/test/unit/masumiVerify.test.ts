@@ -272,4 +272,47 @@ describe("verifyMasumiLock", () => {
       ).ok,
     ).toBe(false);
   });
+
+  it("rejects a lovelace lock carrying extra native tokens (token-count mismatch)", () => {
+    expect(run({ decode: { assets: { [USDM_PREPROD_ASSET]: 1n } } }).ok).toBe(false);
+  });
+
+  it("rejects a USDM lock carrying an extra unrequested token", () => {
+    expect(
+      usdm(
+        { amount: "1500000" },
+        {
+          assets: { [USDM_PREPROD_ASSET]: 1_500_000n, [`${"ab".repeat(28)}.beef`]: 1n },
+          coin: 2_000_000n,
+        },
+      ).ok,
+    ).toBe(false);
+  });
+
+  // Return addresses (datum fields 1 / 3) must match the declared extra exactly.
+  it("accepts when a declared return address matches the datum", () => {
+    expect(
+      run({
+        extra: { sellerReturnAddress: SELLER },
+        datum: datumHex({ sellerReturnAddress: SELLER }),
+      }),
+    ).toEqual({ ok: true });
+  });
+
+  it("rejects a datum return address the server did not declare", () => {
+    expect(run({ datum: datumHex({ sellerReturnAddress: SELLER }) }).ok).toBe(false);
+  });
+
+  it("rejects when the server declares a return address the datum omits", () => {
+    expect(run({ extra: { sellerReturnAddress: SELLER } }).ok).toBe(false);
+  });
+
+  it("rejects when a declared return address differs from the datum", () => {
+    expect(
+      run({
+        extra: { sellerReturnAddress: SELLER },
+        datum: datumHex({ sellerReturnAddress: BUYER }),
+      }).ok,
+    ).toBe(false);
+  });
 });
