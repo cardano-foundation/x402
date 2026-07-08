@@ -1,4 +1,4 @@
-import { Transaction } from "@evolution-sdk/evolution";
+import { Data, Transaction } from "@evolution-sdk/evolution";
 import { beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { x402Client } from "@x402/core/client";
 import { x402Facilitator } from "@x402/core/facilitator";
@@ -16,6 +16,9 @@ import { ExactCardanoScheme as ExactCardanoFacilitator } from "../../src/exact/f
 import { ExactCardanoScheme as ExactCardanoServer } from "../../src/exact/server/scheme";
 import { toClientCardanoSigner, toFacilitatorCardanoSigner } from "../../src/signer";
 import { LOVELACE_ASSET, USDM_PREPROD_ASSET } from "../../src/constants";
+import { masumiContractAddress } from "../../src/exact/masumi/constants";
+import { buildMasumiLockDatum, inlineDatum } from "../../src/exact/masumi/datum";
+import { buildScriptDatumInline } from "../../src/exact/script/datum";
 import { decodeCardanoTransaction } from "../../src/utils";
 import { buildSignedTx } from "../helpers/buildSignedTx";
 import {
@@ -145,6 +148,66 @@ describe("Cardano Integration Tests (deterministic, offline)", () => {
       const settleResponse = await server.settlePayment(paymentPayload, accepted!);
       expect(settleResponse.success).toBe(true);
     });
+
+    it("verifies and settles a script payment (no datum) end to end", async () => {
+      const { address: scriptAddr } = scriptAddressFor(MINIMAL_PLUTUS_V3);
+      const accepts = [
+        buildRequirements(scriptAddr, "2000000", LOVELACE_ASSET, {
+          assetTransferMethod: "script",
+          script: { type: "plutusV3", code: MINIMAL_PLUTUS_V3 },
+        }),
+      ];
+      const paymentRequired = await server.createPaymentRequiredResponse(accepts, {
+        url: "https://company.co",
+        description: "Company Co. resource",
+        mimeType: "application/json",
+      });
+
+      const paymentPayload = await client.createPaymentPayload(paymentRequired);
+      const accepted = server.findMatchingRequirements(accepts, paymentPayload);
+      expect(accepted).toBeDefined();
+
+      const verifyResponse = await server.verifyPayment(paymentPayload, accepted!);
+      expect(verifyResponse.isValid).toBe(true);
+
+      const settleResponse = await server.settlePayment(paymentPayload, accepted!);
+      expect(settleResponse.success).toBe(true);
+    });
+
+    it("verifies and settles a script payment carrying an inline datum end to end", async () => {
+      const { address: scriptAddr } = scriptAddressFor(MINIMAL_PLUTUS_V3);
+      // A server-defined contract datum the client must attach verbatim.
+      const datumHex = Data.toCBORHex(Data.constr(0n, [Data.int(42n)]));
+      const accepts = [
+        buildRequirements(scriptAddr, "2000000", LOVELACE_ASSET, {
+          assetTransferMethod: "script",
+          script: { type: "plutusV3", code: MINIMAL_PLUTUS_V3 },
+          datum: datumHex,
+        }),
+      ];
+      const paymentRequired = await server.createPaymentRequiredResponse(accepts, {
+        url: "https://company.co",
+        description: "Company Co. resource",
+        mimeType: "application/json",
+      });
+
+      const paymentPayload = await client.createPaymentPayload(paymentRequired);
+      const accepted = server.findMatchingRequirements(accepts, paymentPayload);
+      expect(accepted).toBeDefined();
+
+      const verifyResponse = await server.verifyPayment(paymentPayload, accepted!);
+      expect(verifyResponse.isValid).toBe(true);
+
+      const settleResponse = await server.settlePayment(paymentPayload, accepted!);
+      expect(settleResponse.success).toBe(true);
+
+      // The client attached the server-declared datum to the script output.
+      const decoded = decodeCardanoTransaction(
+        (paymentPayload.payload as { transaction: string }).transaction,
+      );
+      const scriptOutput = decoded.outputs.find(o => o.address === scriptAddr);
+      expect(scriptOutput?.datum).toBe(datumHex);
+    });
   });
 
   describe("facilitator verify() rules against real signed transactions", () => {
@@ -156,7 +219,11 @@ describe("Cardano Integration Tests (deterministic, offline)", () => {
      * @param requirements - The requirements to verify the payload against.
      * @returns The payload and requirements pair.
      */
-    async function fixturePayload(payTo: string, amount: bigint): Promise<PaymentPayload> {
+    async function fixturePayload(
+      payTo: string,
+      amount: bigint,
+      datum?: ReturnType<typeof inlineDatum>,
+    ): Promise<PaymentPayload> {
       const built = await buildSignedTx({
         payTo,
         asset: LOVELACE_ASSET,
@@ -164,6 +231,7 @@ describe("Cardano Integration Tests (deterministic, offline)", () => {
         nonceUtxoRef: NONCE_REF,
         ttlSlot: TTL_SLOT,
         network: NETWORK,
+        ...(datum ? { datum } : {}),
       });
       return {
         x402Version: 2,
@@ -195,6 +263,27 @@ describe("Cardano Integration Tests (deterministic, offline)", () => {
       const result = await facilitator.verify(payload, buildRequirements(recipient, "1000000"));
       expect(result.isValid).toBe(false);
       expect(result.invalidReason).toBe("invalid_exact_cardano_payload_amount_insufficient");
+    });
+
+    it("rejects when the output is below the protocol min-UTXO", async () => {
+      // An absurdly large coinsPerUtxoByte pushes the min-UTXO far above the
+      // output's 1 ADA, exercising the min-UTXO comparison branch.
+      const facilitator = new ExactCardanoFacilitator(
+        stubFacilitatorSigner({ getCoinsPerUtxoByte: async () => 100_000n }),
+      );
+      const payload = await fixturePayload(recipient, 1_000_000n);
+      const result = await facilitator.verify(payload, buildRequirements(recipient, "1000000"));
+      expect(result.isValid).toBe(false);
+      expect(result.invalidReason).toBe("invalid_exact_cardano_payload_min_utxo_insufficient");
+    });
+
+    it("accepts an output that meets the protocol min-UTXO", async () => {
+      const facilitator = new ExactCardanoFacilitator(
+        stubFacilitatorSigner({ getCoinsPerUtxoByte: async () => 4310n }),
+      );
+      const payload = await fixturePayload(recipient, 2_000_000n);
+      const result = await facilitator.verify(payload, buildRequirements(recipient, "2000000"));
+      expect(result.isValid).toBe(true);
     });
 
     it("rejects when the nonce UTXO is already spent (rule 5)", async () => {
@@ -229,6 +318,32 @@ describe("Cardano Integration Tests (deterministic, offline)", () => {
       expect(result.isValid).toBe(true);
     });
 
+    it("accepts a script payment carrying an inline datum (datum not verified)", async () => {
+      const facilitator = new ExactCardanoFacilitator(stubFacilitatorSigner());
+      const { address: scriptAddr } = scriptAddressFor(MINIMAL_PLUTUS_V3);
+      // A server-defined contract datum; the client attaches it verbatim.
+      const datumHex = Data.toCBORHex(Data.constr(0n, [Data.int(42n)]));
+      const datum = buildScriptDatumInline({
+        assetTransferMethod: "script",
+        script: { type: "plutusV3", code: MINIMAL_PLUTUS_V3 },
+        datum: datumHex,
+      });
+      const payload = await fixturePayload(scriptAddr, 2_000_000n, datum);
+      const requirements = buildRequirements(scriptAddr, "2000000", LOVELACE_ASSET, {
+        assetTransferMethod: "script",
+        script: { type: "plutusV3", code: MINIMAL_PLUTUS_V3 },
+        datum: datumHex,
+      });
+      const result = await facilitator.verify(payload, requirements);
+      expect(result.isValid).toBe(true);
+      // The datum landed on the script output exactly as supplied.
+      const decoded = decodeCardanoTransaction(
+        (payload.payload as { transaction: string }).transaction,
+      );
+      const scriptOutput = decoded.outputs.find(o => o.address === scriptAddr);
+      expect(scriptOutput?.datum).toBe(datumHex);
+    });
+
     it("rejects a script payment whose payTo is not the declared script", async () => {
       const facilitator = new ExactCardanoFacilitator(stubFacilitatorSigner());
       const payload = await fixturePayload(recipient, 2_000_000n);
@@ -241,24 +356,100 @@ describe("Cardano Integration Tests (deterministic, offline)", () => {
       expect(result.invalidReason).toBe("invalid_exact_cardano_payload_script_address_mismatch");
     });
 
-    it("accepts a masumi payment (method-agnostic rules 1-6)", async () => {
-      const facilitator = new ExactCardanoFacilitator(stubFacilitatorSigner());
-      const payload = await fixturePayload(recipient, 2_000_000n);
-      const requirements = buildRequirements(recipient, "2000000", LOVELACE_ASSET, {
+    it("accepts a masumi lock into the escrow with a valid FundsLocked datum", async () => {
+      // The datum buyer must equal the payer the facilitator resolves from the
+      // nonce input, so return a real (parseable) buyer address from getUtxo.
+      const buyer = await freshPreprodAddress();
+      const facilitator = new ExactCardanoFacilitator(
+        stubFacilitatorSigner({ getUtxo: async () => ({ exists: true, address: buyer }) }),
+      );
+      const escrow = masumiContractAddress(NETWORK);
+      const datum = inlineDatum(
+        buildMasumiLockDatum({
+          buyerAddress: buyer,
+          sellerAddress: recipient,
+          referenceKey: "aa".repeat(32),
+          referenceSignature: "bb".repeat(32),
+          sellerNonce: "cc".repeat(32),
+          buyerNonce: "dd".repeat(32),
+          agentIdentifier: "ee".repeat(16),
+          collateralReturnLovelace: 0n,
+          inputHash: "",
+          // pay_by_time must be on/after the tx's TTL slot wall-time, so the lock
+          // cannot settle past the deadline (facilitator deadline check).
+          payByTime: 1_900_000_000_000n,
+          submitResultTime: 1_900_000_100_000n,
+          unlockTime: 1_900_000_200_000n,
+          externalDisputeUnlockTime: 1_900_000_300_000n,
+        }),
+      );
+      const payload = await fixturePayload(escrow, 5_000_000n, datum);
+      const requirements = buildRequirements(escrow, "5000000", LOVELACE_ASSET, {
         assetTransferMethod: "masumi",
-        identifierFromPurchaser: "aabbaabb11221122aabb",
-        sellerVkey: "deadbeef",
-        paymentType: "Web3CardanoV1",
-        blockchainIdentifier: "bid",
-        payByTime: "1713626260",
-        submitResultTime: "1713636260",
-        unlockTime: "1713636260",
-        externalDisputeUnlockTime: "1713636260",
-        agentIdentifier: "agent",
-        inputHash: "9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08",
+        contractAddress: escrow,
+        sellerAddress: recipient,
       });
       const result = await facilitator.verify(payload, requirements);
       expect(result.isValid).toBe(true);
+    });
+
+    it("accepts a masumi USDM lock into the escrow with a valid FundsLocked datum", async () => {
+      const buyer = await freshPreprodAddress();
+      const facilitator = new ExactCardanoFacilitator(
+        stubFacilitatorSigner({ getUtxo: async () => ({ exists: true, address: buyer }) }),
+      );
+      const escrow = masumiContractAddress(NETWORK);
+      const datum = inlineDatum(
+        buildMasumiLockDatum({
+          buyerAddress: buyer,
+          sellerAddress: recipient,
+          referenceKey: "aa".repeat(32),
+          referenceSignature: "bb".repeat(32),
+          sellerNonce: "cc".repeat(32),
+          buyerNonce: "dd".repeat(32),
+          agentIdentifier: "ee".repeat(16),
+          collateralReturnLovelace: 0n,
+          inputHash: "",
+          payByTime: 1_900_000_000_000n,
+          submitResultTime: 1_900_000_100_000n,
+          unlockTime: 1_900_000_200_000n,
+          externalDisputeUnlockTime: 1_900_000_300_000n,
+        }),
+      );
+      // The escrow output carries the token exactly; its lovelace is structural.
+      const built = await buildSignedTx({
+        payTo: escrow,
+        asset: USDM_PREPROD_ASSET,
+        amount: 1_500_000n,
+        nonceUtxoRef: NONCE_REF,
+        ttlSlot: TTL_SLOT,
+        network: NETWORK,
+        datum,
+      });
+      const payload: PaymentPayload = {
+        x402Version: 2,
+        accepted: buildRequirements(escrow, "1500000", USDM_PREPROD_ASSET),
+        payload: { transaction: built.transaction, nonce: built.nonce },
+      };
+      const requirements = buildRequirements(escrow, "1500000", USDM_PREPROD_ASSET, {
+        assetTransferMethod: "masumi",
+        contractAddress: escrow,
+        sellerAddress: recipient,
+      });
+      const result = await facilitator.verify(payload, requirements);
+      expect(result.isValid).toBe(true);
+    });
+
+    it("rejects a masumi payment whose payTo is not the declared escrow address", async () => {
+      const facilitator = new ExactCardanoFacilitator(stubFacilitatorSigner());
+      const payload = await fixturePayload(recipient, 5_000_000n);
+      const requirements = buildRequirements(recipient, "5000000", LOVELACE_ASSET, {
+        assetTransferMethod: "masumi",
+        contractAddress: masumiContractAddress(NETWORK),
+        sellerAddress: recipient,
+      });
+      const result = await facilitator.verify(payload, requirements);
+      expect(result.isValid).toBe(false);
     });
 
     it("accepts a multi-input tx when every input is unspent, rejects when one is spent", async () => {

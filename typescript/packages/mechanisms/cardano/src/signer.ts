@@ -3,6 +3,7 @@ import {
   Assets,
   type Chain,
   Client,
+  Data,
   mainnet,
   preprod,
   preview,
@@ -13,12 +14,18 @@ import {
 import { addressFromSeed } from "@evolution-sdk/evolution/sdk/wallet/Derivation";
 
 import {
+  ASSET_TRANSFER_METHOD_MASUMI,
+  ASSET_TRANSFER_METHOD_SCRIPT,
   CARDANO_MAINNET_CAIP2,
   CARDANO_PREPROD_CAIP2,
   CARDANO_PREVIEW_CAIP2,
   LOVELACE_ASSET,
   normalizeCardanoNetwork,
 } from "./constants";
+import { masumiMinUtxoLovelace } from "./exact/masumi/constants";
+import { buildMasumiLockInline } from "./exact/masumi/lock";
+import { buildScriptDatumInline } from "./exact/script/datum";
+import type { CardanoExtra, CardanoExtraMasumi, CardanoExtraScript } from "./types";
 import { parseAssetUnit, parseUtxoRef } from "./utils";
 
 /**
@@ -288,6 +295,18 @@ export interface FacilitatorCardanoSigner {
    * @returns A promise that resolves on a successful dry-run.
    */
   evaluateTransaction?(signedTransactionBase64: string, network: string): Promise<void>;
+
+  /**
+   * Optional: reads the live `coinsPerUtxoByte` protocol parameter. When
+   * implemented, the facilitator's `verify()` uses it to reject payments whose
+   * recipient output carries less than the protocol minimum lovelace (a tx the
+   * chain would refuse at submission). The value is governance-settable, so the
+   * spec requires reading it live rather than hardcoding.
+   *
+   * @param network - The x402 network identifier.
+   * @returns The current `coinsPerUtxoByte`.
+   */
+  getCoinsPerUtxoByte?(network: string): Promise<bigint>;
 }
 
 /**
@@ -366,19 +385,71 @@ export function toClientCardanoSigner(config: ClientCardanoSignerConfig): Client
       const nonceTxHash = Buffer.from(nonceUtxo.transactionId.hash).toString("hex").toLowerCase();
       const nonce = `${nonceTxHash}#${Number(nonceUtxo.index)}`;
 
-      const outputAssets = buildOutputAssets(input.asset, BigInt(input.amount));
-      const ttlMs = BigInt(Date.now()) + BigInt(input.maxTimeoutSeconds) * 1000n;
+      // Masumi attaches an inline lock datum whose `buyer` must equal the payer
+      // the facilitator resolves (the nonce input's owner), so derive it from
+      // that UTXO. The script method attaches the server-supplied inline datum
+      // verbatim (contract-specific; not verified). Other methods pay a plain
+      // output.
+      const extra = input.extra as CardanoExtra | undefined;
+      const masumiExtra =
+        extra?.assetTransferMethod === ASSET_TRANSFER_METHOD_MASUMI
+          ? (extra as CardanoExtraMasumi)
+          : undefined;
+      const scriptExtra =
+        extra?.assetTransferMethod === ASSET_TRANSFER_METHOD_SCRIPT
+          ? (extra as CardanoExtraScript)
+          : undefined;
+      const masumiDatum = masumiExtra
+        ? buildMasumiLockInline(masumiExtra, Address.toBech32(nonceUtxo.address))
+        : undefined;
+      const scriptDatum = scriptExtra ? buildScriptDatumInline(scriptExtra) : undefined;
+      const paymentDatum = masumiDatum ?? scriptDatum;
+
+      let outputAssets = buildOutputAssets(input.asset, BigInt(input.amount));
+      // A native-token Masumi lock carries the token plus purely structural
+      // lovelace, which must cover the post-result min-UTXO and the collateral.
+      // autoMinUtxo only sizes the current (smaller) datum, so top it up here.
+      // An ADA lock's requested amount is the lovelace and is validated instead
+      // by the facilitator against the same floor.
+      if (masumiExtra && masumiDatum && input.asset.toLowerCase() !== LOVELACE_ASSET) {
+        const { coinsPerUtxoByte } = await client.getProtocolParameters();
+        const datumBytes = Data.toCBORHex(masumiDatum.data).length / 2;
+        const collateral = masumiExtra.collateralReturnLovelace
+          ? BigInt(masumiExtra.collateralReturnLovelace)
+          : 0n;
+        const floor = masumiMinUtxoLovelace(datumBytes, 1, coinsPerUtxoByte);
+        const { policyId, assetNameHex } = parseAssetUnit(input.asset);
+        outputAssets = Assets.addByHex(
+          Assets.fromLovelace(floor > collateral ? floor : collateral),
+          policyId,
+          assetNameHex,
+          BigInt(input.amount),
+        );
+      }
+
+      // Masumi: anchor the tx's validity upper bound to pay_by_time so the lock
+      // can never settle past the deadline (Masumi invalidates a late lock).
+      // Other methods use maxTimeoutSeconds.
+      const ttlMs = masumiExtra
+        ? BigInt(masumiExtra.payByTime)
+        : BigInt(Date.now()) + BigInt(input.maxTimeoutSeconds) * 1000n;
 
       const signBuilder = await client
         .newTx()
         // .collectFrom() with a specific UTXO ensures the nonce appears as an input (rule 5).
         // Additional UTXOs from the wallet may be auto-selected as needed to satisfy the output and fees.
         .collectFrom({ inputs: [nonceUtxo] })
-        .payToAddress({ address: Address.fromBech32(input.payTo), assets: outputAssets })
+        .payToAddress({
+          address: Address.fromBech32(input.payTo),
+          assets: outputAssets,
+          ...(paymentDatum ? { datum: paymentDatum } : {}),
+        })
         .setValidity({ to: ttlMs })
         .build({
           changeAddress,
-          autoMinUtxo: input.asset.toLowerCase() !== LOVELACE_ASSET,
+          // Bump the output to the protocol min-UTXO for native-asset outputs
+          // and for datum-bearing outputs (an attached datum raises it).
+          autoMinUtxo: input.asset.toLowerCase() !== LOVELACE_ASSET || paymentDatum !== undefined,
         });
 
       const submitBuilder = await signBuilder.sign();
@@ -470,6 +541,10 @@ export function toFacilitatorCardanoSigner(
     }
   };
 
+  // coinsPerUtxoByte changes only at an epoch/governance boundary, so caching the
+  // first read avoids a provider round-trip on every verify().
+  let coinsPerUtxoByte: bigint | undefined;
+
   return {
     getAddresses(): readonly string[] {
       return addresses;
@@ -527,6 +602,15 @@ export function toFacilitatorCardanoSigner(
         Uint8Array.from(Buffer.from(signedTransactionBase64, "base64")),
       );
       await client.evaluateTx(tx);
+    },
+
+    async getCoinsPerUtxoByte(network: string): Promise<bigint> {
+      assertNetwork(network);
+      if (coinsPerUtxoByte === undefined) {
+        const params = await client.getProtocolParameters();
+        coinsPerUtxoByte = params.coinsPerUtxoByte;
+      }
+      return coinsPerUtxoByte;
     },
   };
 }

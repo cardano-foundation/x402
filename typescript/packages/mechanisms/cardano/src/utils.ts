@@ -1,14 +1,61 @@
 import {
   Address,
+  Data,
   Ed25519Signature,
+  SlotConfig,
   Transaction,
   TransactionBody,
   TransactionHash,
+  TxOut,
   VKey,
 } from "@evolution-sdk/evolution";
 
-import { CARDANO_ASSET_REGEX, CARDANO_UTXO_REF_REGEX } from "./constants";
+import {
+  CARDANO_ASSET_REGEX,
+  CARDANO_MAINNET_CAIP2,
+  CARDANO_MIN_UTXO_OVERHEAD_BYTES,
+  CARDANO_PREPROD_CAIP2,
+  CARDANO_PREVIEW_CAIP2,
+  CARDANO_UTXO_REF_REGEX,
+  normalizeCardanoNetwork,
+} from "./constants";
 import type { CardanoUtxoOutput, DecodedCardanoTransaction, ExactCardanoPayload } from "./types";
+
+/**
+ * Protocol minimum lovelace for a transaction output of the given CBOR-serialized
+ * size: `(overhead + serializedSize) * coinsPerUtxoByte` (Babbage/Conway rule).
+ *
+ * @param serializedSize - Byte length of the CBOR-serialized output.
+ * @param coinsPerUtxoByte - The `coinsPerUtxoByte` protocol parameter.
+ * @returns The minimum lovelace the output must carry.
+ */
+export function minUtxoLovelace(serializedSize: number, coinsPerUtxoByte: bigint): bigint {
+  return BigInt(CARDANO_MIN_UTXO_OVERHEAD_BYTES + serializedSize) * coinsPerUtxoByte;
+}
+
+/** Evolution slot-config preset per Cardano network (Praos slot <-> wall-clock). */
+const SLOT_CONFIG_BY_NETWORK: Record<string, (typeof SlotConfig.SLOT_CONFIG_NETWORK)["Mainnet"]> = {
+  [CARDANO_MAINNET_CAIP2]: SlotConfig.SLOT_CONFIG_NETWORK.Mainnet,
+  [CARDANO_PREPROD_CAIP2]: SlotConfig.SLOT_CONFIG_NETWORK.Preprod,
+  [CARDANO_PREVIEW_CAIP2]: SlotConfig.SLOT_CONFIG_NETWORK.Preview,
+};
+
+/**
+ * Converts an absolute slot to POSIX milliseconds for a Cardano network, so a
+ * transaction's validity upper bound (a slot) can be compared against a datum
+ * timestamp (POSIX ms), e.g. the Masumi `pay_by_time` deadline.
+ *
+ * @param network - The x402 Cardano network identifier (or a CIP-34 alias).
+ * @param slot - The absolute slot number.
+ * @returns The wall-clock time of the slot in POSIX milliseconds.
+ */
+export function slotToPosixMs(network: string, slot: bigint): number {
+  const cfg = SLOT_CONFIG_BY_NETWORK[normalizeCardanoNetwork(network)];
+  if (!cfg) {
+    throw new Error(`No slot config for network: ${network}`);
+  }
+  return Number(cfg.zeroTime) + (Number(slot) - Number(cfg.zeroSlot)) * cfg.slotLength;
+}
 
 /**
  * Splits a Cardano asset unit (`policyId.assetNameHex`) into its components.
@@ -96,7 +143,21 @@ export function decodeCardanoTransaction(transactionBase64: string): DecodedCard
         }
       }
     }
-    return { address, coin: out.assets.lovelace, assets };
+    const datumOption = (out as { datumOption?: { _tag: string; data: Data.Data } }).datumOption;
+    const datum =
+      datumOption && datumOption._tag === "InlineDatum"
+        ? Data.toCBORHex(datumOption.data)
+        : undefined;
+    const serializedSize = TxOut.toCBORBytes(out).length;
+    const hasReferenceScript = (out as { scriptRef?: unknown }).scriptRef !== undefined;
+    return {
+      address,
+      coin: out.assets.lovelace,
+      assets,
+      datum,
+      serializedSize,
+      hasReferenceScript,
+    };
   });
 
   const ws = tx.witnessSet;

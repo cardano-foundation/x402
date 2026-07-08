@@ -177,7 +177,8 @@ describe("ExactCardanoScheme facilitator", () => {
       facilitator as unknown as {
         runMethodSpecificChecks: (
           extra: Record<string, unknown> | undefined,
-          payTo: string,
+          requirements: PaymentRequirements,
+          decoded: unknown,
           payer: string,
         ) => Promise<{ ok: true } | { ok: false; reason: string }>;
       }
@@ -186,7 +187,8 @@ describe("ExactCardanoScheme facilitator", () => {
         assetTransferMethod: "script",
         scriptHash: "deadbeef",
       },
-      RECIPIENT,
+      buildRequirements({ payTo: RECIPIENT }),
+      { outputs: [] },
       "addr1qpayer00",
     );
     expect(result).toEqual({

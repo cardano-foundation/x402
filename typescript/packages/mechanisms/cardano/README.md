@@ -67,9 +67,11 @@ from the faucet; preprod **USDM** must be sourced separately, so use lovelace fo
 
 Per spec, three methods can be selected via `requirements.extra.assetTransferMethod`:
 
-- `default` — address-to-address payments. No extra verification beyond the six core rules.
-- `masumi` — Masumi smart-protocol metadata in `extra`. The base verifier accepts the transfer; integrators may layer additional checks via subclassing.
-- `script` — script-address payments. Integrators MUST override `runMethodSpecificChecks` to reconstruct the script address and verify it equals `requirements.payTo`.
+- `default` — address-to-address payments. No extra verification beyond the core rules.
+- `masumi` — locks funds into Masumi's `vested_pay` escrow for **concrete agent-to-agent payments**. The base facilitator builds and verifies the fixed 19-field lock datum (`buildMasumiLockInline` / `verifyMasumiLock`); no subclassing is required.
+- `script` — locks funds into **any contract defined by the server**, with an optional arbitrary datum. The base facilitator reconstructs the script address from `extra.script`/`parameters` (or `scriptHash`) and verifies it equals `requirements.payTo`. Supply `extra.datum` (CBOR hex) to attach an inline datum for contracts that require one — the client attaches it verbatim; because the datum is arbitrary and contract-specific, the facilitator does **not** verify its contents, so a correct datum is the server's responsibility (a wrong or missing one strands the funds). Use this to lock into your own contract; use `masumi` for agent payments.
+
+Overriding `runMethodSpecificChecks` is **not** required for any built-in method; if you subclass to add a custom method, call `super.runMethodSpecificChecks(...)` so the Masumi and script checks still run.
 
 ## Settlement status
 
