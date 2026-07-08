@@ -23,7 +23,7 @@ export const MASUMI_PAYMENT_SOURCE_TYPE = "Web3CardanoV2";
  * authoritative — a different (e.g. self-hosted) deployment has a different
  * address, and this hash goes stale if Masumi ever redeploys.
  */
-const MASUMI_ESCROW_SCRIPT_HASH = "2025f0de96b0a8f2d29462a3b186cc480e22b14c0ace2490469ad305";
+const MASUMI_ESCROW_SCRIPT_HASH = "2d6abca32e4b22b59e948ef22dfe682017de917a9ec088aa1bc3c64e";
 
 /**
  * Default `collateral_return_lovelace` when the requirements omit it (the
