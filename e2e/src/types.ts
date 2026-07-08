@@ -1,6 +1,6 @@
 import type { NetworkSet } from './networks/networks';
 
-export type ProtocolFamily = 'evm' | 'svm' | 'avm' | 'aptos' | 'hedera' | 'keeta' | 'stellar' | 'tvm' | 'cardano';
+export type ProtocolFamily = 'evm' | 'svm' | 'avm' | 'aptos' | 'hedera' | 'keeta' | 'near' | 'stellar' | 'ccd' | 'tvm' | 'cardano';
 export type Transport = 'http' | 'mcp';
 export type PaymentScheme = 'exact' | 'upto' | 'batch-settlement';
 export type AssetTransferMethod = 'eip3009' | 'permit2';
@@ -78,6 +78,8 @@ export interface ClientConfig {
   svmPrivateKey: string;
   avmPrivateKey: string;
   aptosPrivateKey: string;
+  ccdPrivateKey: string;
+  ccdAddress: string;
   hederaAccountId: string;
   hederaPrivateKey: string;
   keetaClientMnemonic: string;
@@ -90,6 +92,8 @@ export interface ClientConfig {
   evmRpcUrl: string;
   svmNetwork: string;
   svmRpcUrl: string;
+  ccdNetwork: string;
+  ccdGrpcUrl: string;
   hederaNetwork: string;
   hederaNodeUrl: string;
   keetaNetwork: string;
@@ -97,6 +101,10 @@ export interface ClientConfig {
   tvmRpcUrl: string;
   cardanoNetwork: string;
   cardanoRpcUrl: string;
+  nearAccountId: string;
+  nearPrivateKey: string;
+  nearNetwork: string;
+  nearRpcUrl: string;
   batchSettlement?: BatchSettlementClientConfig;
 }
 
@@ -106,6 +114,7 @@ export interface ServerConfig {
   svmPayTo: string;
   avmPayTo: string;
   aptosPayTo: string;
+  ccdPayTo: string;
   hederaPayTo: string;
   hederaAsset?: string;
   hederaAmount?: string;
@@ -113,6 +122,9 @@ export interface ServerConfig {
   stellarPayTo: string;
   tvmPayTo: string;
   cardanoPayTo: string;
+  nearPayTo: string;
+  nearAsset?: string;
+  nearAmount?: string;
   networks: NetworkSet;
   facilitatorUrl?: string;
   mockFacilitatorUrl?: string;

@@ -5,7 +5,7 @@
  * optional chain configuration via environment variables.
  *
  * New chain support should be added here in alphabetic order by network prefix
- * (e.g., "eip155" before "solana" before "stellar").
+ * (e.g., "algorand" before "ccd" before "eip155" before "hedera" before "near" before "solana" before "stellar" before "tvm").
  */
 
 import * as KeetaNet from "@keetanetwork/keetanet-client";
@@ -13,6 +13,13 @@ import { toFacilitatorAvmSigner } from "@x402/avm";
 import { ExactAvmScheme } from "@x402/avm/exact/facilitator";
 import { toFacilitatorCardanoSigner } from "@x402/cardano";
 import { ExactCardanoScheme } from "@x402/cardano/exact/facilitator";
+import { ExactConcordiumScheme } from "@x402/concordium/exact/facilitator";
+import {
+  CONCORDIUM_TESTNET_CAIP2,
+  getConcordiumGrpcUrl,
+  parseGrpcUrl,
+  toConcordiumFacilitatorSigner,
+} from "@x402/concordium";
 import { x402Facilitator } from "@x402/core/facilitator";
 import {
   Network,
@@ -31,6 +38,7 @@ import {
   createHederaClient,
   createHederaPreflightTransfer,
   createHederaSignAndSubmitTransaction,
+  createHederaVerifyPayerSignature,
   toFacilitatorHederaSigner,
 } from "@x402/hedera";
 import { ExactHederaScheme } from "@x402/hedera/exact/facilitator";
@@ -40,6 +48,12 @@ import {
   FacilitatorKeetaSigner,
 } from "@x402/keeta";
 import { ExactKeetaScheme } from "@x402/keeta/exact/facilitator";
+import {
+  createFacilitatorNearSigner,
+  NEAR_TESTNET_CAIP2,
+  type FacilitatorRelayerConfig,
+} from "@x402/near";
+import { ExactNearScheme } from "@x402/near/exact/facilitator";
 import { toFacilitatorSvmSigner } from "@x402/svm";
 import { ExactSvmScheme } from "@x402/svm/exact/facilitator";
 import { base58 } from "@scure/base";
@@ -70,8 +84,22 @@ const cardanoMnemonic = process.env.CARDANO_MNEMONIC as string | undefined;
 const cardanoNetwork = (process.env.CARDANO_NETWORK || "cardano:preprod") as Network;
 const blockfrostBaseUrl = process.env.BLOCKFROST_PREPROD_URL;
 const blockfrostProjectId = process.env.BLOCKFROST_PROJECT_ID;
+const ccdFacilitatorPrivateKey = process.env.CCD_FACILITATOR_PRIVATE_KEY as
+  | string
+  | undefined;
+const ccdFacilitatorAddress = process.env.CCD_FACILITATOR_ADDRESS as
+  | string
+  | undefined;
 const evmPrivateKey = process.env.EVM_PRIVATE_KEY as `0x${string}` | undefined;
 const keetaMnemonic = process.env.KEETA_MNEMONIC as string | undefined;
+const nearRelayerAccountId = process.env.NEAR_RELAYER_ACCOUNT_ID as
+  | string
+  | undefined;
+const nearRelayerPrivateKey = process.env.NEAR_RELAYER_PRIVATE_KEY as
+  | FacilitatorRelayerConfig["secretKey"]
+  | undefined;
+const nearNetwork = process.env.NEAR_NETWORK || NEAR_TESTNET_CAIP2;
+const nearRpcUrl = process.env.NEAR_RPC_URL as string | undefined;
 const svmPrivateKey = process.env.SVM_PRIVATE_KEY as string | undefined;
 const stellarPrivateKey = process.env.STELLAR_PRIVATE_KEY as string | undefined;
 const tvmPrivateKey = process.env.TVM_PRIVATE_KEY as string | undefined;
@@ -83,15 +111,17 @@ const hederaPrivateKey = process.env.HEDERA_PRIVATE_KEY;
 if (
   !avmPrivateKey &&
   !cardanoMnemonic &&
+  !(ccdFacilitatorPrivateKey && ccdFacilitatorAddress) &&
   !evmPrivateKey &&
   !keetaMnemonic &&
+  !(nearRelayerAccountId && nearRelayerPrivateKey) &&
   !svmPrivateKey &&
   !stellarPrivateKey &&
   !tvmPrivateKey &&
   !(hederaAccountId && hederaPrivateKey)
 ) {
   console.error(
-    "❌ At least one of AVM_PRIVATE_KEY, CARDANO_MNEMONIC, EVM_PRIVATE_KEY, KEETA_MNEMONIC, SVM_PRIVATE_KEY, STELLAR_PRIVATE_KEY, TVM_PRIVATE_KEY, or HEDERA_ACCOUNT_ID + HEDERA_PRIVATE_KEY is required",
+    "❌ At least one of AVM_PRIVATE_KEY, CARDANO_MNEMONIC, CCD_FACILITATOR_PRIVATE_KEY + CCD_FACILITATOR_ADDRESS, EVM_PRIVATE_KEY, KEETA_MNEMONIC, NEAR_RELAYER_ACCOUNT_ID + NEAR_RELAYER_PRIVATE_KEY, SVM_PRIVATE_KEY, STELLAR_PRIVATE_KEY, TVM_PRIVATE_KEY, or HEDERA_ACCOUNT_ID + HEDERA_PRIVATE_KEY is required",
   );
   process.exit(1);
 }
@@ -99,9 +129,11 @@ if (
 // Network configuration (alphabetic order)
 const AVM_NETWORK = "algorand:SGO1GKSzyE7IEPItTxCByw9x8FmnrCDexi9/cOUJOiI="; // Algorand Testnet
 const CARDANO_NETWORK = cardanoNetwork; // Cardano Preprod Testnet (default)
+const CCD_NETWORK = "ccd:4221332d34e1694168c2a0c0b3fd0f27"; // Concordium Testnet
 const EVM_NETWORK = "eip155:84532"; // Base Sepolia
 const HEDERA_NETWORK = "hedera:testnet"; // Hedera Testnet
 const KEETA_NETWORK = KEETA_TESTNET_CAIP2; // Keeta Testnet
+const NEAR_NETWORK = nearNetwork as Network; // NEAR Testnet
 const SVM_NETWORK = "solana:EtWTRABZaYq6iMfeYKouRu166VU2xqa1"; // Solana Devnet
 const STELLAR_NETWORK = "stellar:testnet"; // Stellar Testnet
 const TVM_NETWORK = (process.env.TVM_NETWORK || "tvm:-3") as Network; // TON Testnet
@@ -148,6 +180,23 @@ if (cardanoMnemonic) {
   });
   console.info(`Cardano Facilitator account: ${cardanoSigner.getAddresses()[0]}`);
   facilitator.register(CARDANO_NETWORK, new ExactCardanoScheme(cardanoSigner));
+}
+
+// Register Concordium scheme if private key + address are provided (recommended).
+// This matches how every other mechanism reads a private key from an env var.
+if (ccdFacilitatorPrivateKey && ccdFacilitatorAddress) {
+  const [host, port] = parseGrpcUrl(getConcordiumGrpcUrl(CCD_NETWORK));
+
+  const signer = toConcordiumFacilitatorSigner(
+    ccdFacilitatorAddress,
+    ccdFacilitatorPrivateKey,
+    { host, port, useTls: true },
+  );
+
+  facilitator.register(CCD_NETWORK, new ExactConcordiumScheme({ signer }));
+  console.info(
+    `CCD Facilitator account: ${ccdFacilitatorAddress} on ${CCD_NETWORK}`,
+  );
 }
 
 // Register EVM scheme if private key is provided
@@ -226,7 +275,8 @@ if (hederaAccountId && hederaPrivateKey) {
       buildHederaClient,
       hederaKey,
     ),
-    preflightTransfer: createHederaPreflightTransfer(buildHederaClient),
+    verifyPayerSignature: createHederaVerifyPayerSignature(),
+    preflightTransfer: createHederaPreflightTransfer(),
   });
   facilitator.register(HEDERA_NETWORK, new ExactHederaScheme(hederaSigner));
   console.info(`Hedera Facilitator account: ${hederaAccountId}`);
@@ -247,6 +297,20 @@ if (keetaMnemonic) {
   facilitator.register(
     KEETA_NETWORK,
     new ExactKeetaScheme(keetaSigner, console),
+  );
+}
+
+// Register NEAR scheme if relayer account and private key are provided
+if (nearRelayerAccountId && nearRelayerPrivateKey) {
+  const nearSigner = createFacilitatorNearSigner({
+    relayers: [
+      { accountId: nearRelayerAccountId, secretKey: nearRelayerPrivateKey },
+    ],
+    rpcUrls: nearRpcUrl ? { [NEAR_NETWORK]: nearRpcUrl } : undefined,
+  });
+  facilitator.register(NEAR_NETWORK, new ExactNearScheme(nearSigner));
+  console.info(
+    `NEAR Facilitator relayer account: ${nearRelayerAccountId} on ${NEAR_NETWORK}`,
   );
 }
 

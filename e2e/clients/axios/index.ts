@@ -26,8 +26,12 @@ import { ExactCardanoScheme } from "@x402/cardano/exact/client";
 import { toClientCardanoSigner } from "@x402/cardano";
 import { ExactTvmScheme } from "@x402/tvm/exact/client";
 import { toClientTvmSigner, TVM_PROVIDER_TONAPI, TVM_PROVIDER_TONCENTER } from "@x402/tvm";
+import { createClientNearSigner, type ClientNearSignerConfig } from "@x402/near";
+import { ExactNearScheme as ExactNearClientScheme } from "@x402/near/exact/client";
 import { ExactAvmScheme as ExactAvmClientScheme } from "@x402/avm/exact/client";
 import { toClientAvmSigner } from "@x402/avm";
+import { ExactConcordiumScheme } from "@x402/concordium/exact/client";
+import { AccountAddress, buildBasicAccountSigner } from "@concordium/web-sdk";
 import * as KeetaNet from "@keetanetwork/keetanet-client";
 import { base58 } from "@scure/base";
 import { createKeyPairSignerFromBytes } from "@solana/kit";
@@ -63,6 +67,9 @@ const uptoSchemeOptions: UptoEvmSchemeOptions | undefined = process.env.EVM_RPC_
   ? { rpcUrl: process.env.EVM_RPC_URL }
   : undefined;
 const svmSchemeOptions = process.env.SVM_RPC_URL ? { rpcUrl: process.env.SVM_RPC_URL } : undefined;
+
+const ccdPrivateKey = process.env.CCD_PRIVATE_KEY;
+const ccdAddress = process.env.CCD_ADDRESS;
 
 /**
  * Parses the TVM private key accepted by e2e env fixtures.
@@ -189,6 +196,18 @@ const client = new x402Client()
   .register("solana:*", new ExactSvmScheme(svmSigner, svmSchemeOptions))
   .registerV1("solana-devnet", new ExactSvmSchemeV1(svmSigner, svmSchemeOptions))
   .registerV1("solana", new ExactSvmSchemeV1(svmSigner, svmSchemeOptions));
+if (ccdPrivateKey && ccdAddress) {
+  client.register(
+    "ccd:*",
+    new ExactConcordiumScheme(
+      {
+        accountAddress: AccountAddress.fromBase58(ccdAddress),
+        signer: buildBasicAccountSigner(ccdPrivateKey),
+      },
+      process.env.CCD_GRPC_URL ? { grpcUrl: process.env.CCD_GRPC_URL } : undefined,
+    ),
+  );
+}
 if (aptosAccount) {
   client.register("aptos:*", new ExactAptosScheme(aptosAccount));
 }
@@ -209,6 +228,15 @@ if (avmSigner) {
 }
 if (tvmScheme) {
   client.register("tvm:*", tvmScheme);
+}
+if (process.env.NEAR_ACCOUNT_ID && process.env.NEAR_PRIVATE_KEY) {
+  const nearNetwork = (process.env.NEAR_NETWORK || "near:testnet") as `${string}:${string}`;
+  const nearSigner = createClientNearSigner({
+    accountId: process.env.NEAR_ACCOUNT_ID,
+    secretKey: process.env.NEAR_PRIVATE_KEY as ClientNearSignerConfig["secretKey"],
+    rpcUrls: process.env.NEAR_RPC_URL ? { [nearNetwork]: process.env.NEAR_RPC_URL } : undefined,
+  });
+  client.register(nearNetwork, new ExactNearClientScheme(nearSigner));
 }
 
 const axiosWithPayment = wrapAxiosWithPayment(axios.create(), client);

@@ -44,6 +44,8 @@ PUBLISHED_PACKAGES = [
     "@x402/stellar",
     "@x402/hedera",
     "@x402/keeta",
+    "@x402/near",
+    "@x402/concordium",
     "@x402/tvm",
     "@x402/paywall",
     "@x402/axios",

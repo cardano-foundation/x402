@@ -55,12 +55,16 @@ export interface FacilitatorConfig {
   svmPrivateKey?: string;
   avmPrivateKey?: string;
   aptosPrivateKey?: string;
+  ccdPrivateKey?: string;
+  ccdAddress?: string;
   hederaAccountId?: string;
   hederaPrivateKey?: string;
   keetaFacilitatorMnemonic?: string;
   stellarPrivateKey?: string;
   tvmPrivateKey?: string;
   cardanoMnemonic?: string;
+  nearRelayerAccountId?: string;
+  nearRelayerPrivateKey?: string;
   networks: NetworkSet;
 }
 
@@ -122,11 +126,15 @@ export class GenericFacilitatorProxy extends BaseProxy implements FacilitatorPro
       SVM_PRIVATE_KEY: config.svmPrivateKey || '',
       AVM_PRIVATE_KEY: config.avmPrivateKey || '',
       APTOS_PRIVATE_KEY: config.aptosPrivateKey || '',
+      CCD_FACILITATOR_PRIVATE_KEY: config.ccdPrivateKey || '',
+      CCD_FACILITATOR_ADDRESS: config.ccdAddress || '',
       HEDERA_ACCOUNT_ID: config.hederaAccountId || '',
       HEDERA_PRIVATE_KEY: config.hederaPrivateKey || '',
       KEETA_FACILITATOR_MNEMONIC: config.keetaFacilitatorMnemonic || '',
       STELLAR_PRIVATE_KEY: config.stellarPrivateKey || '',
       TVM_PRIVATE_KEY: config.tvmPrivateKey || '',
+      NEAR_RELAYER_ACCOUNT_ID: config.nearRelayerAccountId || '',
+      NEAR_RELAYER_PRIVATE_KEY: config.nearRelayerPrivateKey || '',
 
       // Network configs from NetworkSet
       EVM_NETWORK: config.networks.evm.caip2,
@@ -137,12 +145,16 @@ export class GenericFacilitatorProxy extends BaseProxy implements FacilitatorPro
       AVM_RPC_URL: config.networks.avm.rpcUrl,
       APTOS_NETWORK: config.networks.aptos.caip2,
       APTOS_RPC_URL: config.networks.aptos.rpcUrl,
+      CCD_NETWORK: config.networks.ccd.caip2,
+      CCD_GRPC_URL: config.networks.ccd.rpcUrl,
       HEDERA_NETWORK: config.networks.hedera.caip2,
       HEDERA_NODE_URL: config.networks.hedera.rpcUrl,
       KEETA_NETWORK: config.networks.keeta.caip2,
       STELLAR_NETWORK: config.networks.stellar.caip2,
       STELLAR_RPC_URL: config.networks.stellar.rpcUrl,
       TVM_NETWORK: config.networks.tvm.caip2,
+      NEAR_NETWORK: config.networks.near.caip2,
+      NEAR_RPC_URL: config.networks.near.rpcUrl,
       TVM_PROVIDER: process.env.TVM_PROVIDER || '',
       TONCENTER_BASE_URL: process.env.TONCENTER_BASE_URL || config.networks.tvm.rpcUrl,
       TONAPI_API_KEY: process.env.TONAPI_API_KEY || '',

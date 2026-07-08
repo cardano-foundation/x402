@@ -68,6 +68,7 @@ and fill required environment variables:
 
 - `FACILITATOR_URL` - Facilitator endpoint URL
 - `CARDANO_ADDRESS` - Cardano `addr_test1...` address to receive payments (optional for `all-networks`)
+- `CCD_ADDRESS` - Concordium account address to receive payments (optional for `all-networks`)
 - `EVM_ADDRESS` - Ethereum address to receive payments
 - `SVM_ADDRESS` - Solana address to receive payments (optional for `all-networks`)
 - `STELLAR_ADDRESS` - Stellar public address (starts with `G`) to receive payments
