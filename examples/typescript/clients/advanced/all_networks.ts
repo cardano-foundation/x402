@@ -5,20 +5,28 @@
  * optional chain configuration via environment variables.
  *
  * New chain support should be added here in alphabetic order by network prefix
- * (e.g., "algorand" before "eip155" before "hedera" before "solana" before "stellar" before "tvm").
+ * (e.g., "algorand" before "ccd" before "eip155" before "hedera" before "near" before "solana" before "stellar" before "tvm").
  */
 
 import { config } from "dotenv";
+import type { Network } from "@x402/core/types";
 import { x402Client, wrapFetchWithPayment, x402HTTPClient } from "@x402/fetch";
 import { toClientAvmSigner } from "@x402/avm";
 import { ExactAvmScheme } from "@x402/avm/exact/client";
 import { toClientCardanoSigner } from "@x402/cardano";
 import { ExactCardanoScheme } from "@x402/cardano/exact/client";
+import { ExactConcordiumScheme } from "@x402/concordium/exact/client";
 import { ExactEvmScheme } from "@x402/evm/exact/client";
 import { UptoEvmScheme } from "@x402/evm/upto/client";
 import { ExactSvmScheme } from "@x402/svm/exact/client";
 import { toClientKeetaSigner } from "@x402/keeta";
 import { ExactKeetaScheme } from "@x402/keeta/exact/client";
+import {
+  createClientNearSigner,
+  NEAR_TESTNET_CAIP2,
+  type ClientNearSignerConfig,
+} from "@x402/near";
+import { ExactNearScheme } from "@x402/near/exact/client";
 import { ExactStellarScheme } from "@x402/stellar/exact/client";
 import { ExactTvmScheme } from "@x402/tvm/exact/client";
 import { createEd25519Signer } from "@x402/stellar";
@@ -26,6 +34,7 @@ import { ExactHederaScheme } from "@x402/hedera/exact/client";
 import { createClientHederaSigner, PrivateKey } from "@x402/hedera";
 import { toClientTvmSigner, TVM_PROVIDER_TONAPI, TVM_PROVIDER_TONCENTER } from "@x402/tvm";
 import { keyPairFromSeed, type KeyPair } from "@ton/crypto";
+import { buildBasicAccountSigner, AccountAddress } from "@concordium/web-sdk";
 import { base58 } from "@scure/base";
 import { createKeyPairSignerFromBytes } from "@solana/kit";
 import { privateKeyToAccount } from "viem/accounts";
@@ -39,8 +48,16 @@ const cardanoMnemonic = process.env.CARDANO_MNEMONIC as string | undefined;
 const cardanoNetwork = process.env.CARDANO_NETWORK || "cardano:preprod";
 const blockfrostBaseUrl = process.env.BLOCKFROST_PREPROD_URL;
 const blockfrostProjectId = process.env.BLOCKFROST_PROJECT_ID;
+const ccdPrivateKey = process.env.CCD_PRIVATE_KEY as string | undefined;
+const ccdAddress = process.env.CCD_ADDRESS as string | undefined;
 const evmPrivateKey = process.env.EVM_PRIVATE_KEY as `0x${string}` | undefined;
 const keetaMnemonic = process.env.KEETA_MNEMONIC as string | undefined;
+const nearAccountId = process.env.NEAR_ACCOUNT_ID as string | undefined;
+const nearPrivateKey = process.env.NEAR_PRIVATE_KEY as
+  | ClientNearSignerConfig["secretKey"]
+  | undefined;
+const nearNetwork = (process.env.NEAR_NETWORK || NEAR_TESTNET_CAIP2) as Network;
+const nearRpcUrl = process.env.NEAR_RPC_URL as string | undefined;
 const svmPrivateKey = process.env.SVM_PRIVATE_KEY as string | undefined;
 const stellarPrivateKey = process.env.STELLAR_PRIVATE_KEY as string | undefined;
 const hederaAccountId = process.env.HEDERA_ACCOUNT_ID;
@@ -83,15 +100,17 @@ async function main(): Promise<void> {
   if (
     !avmPrivateKey &&
     !cardanoMnemonic &&
+    !(ccdPrivateKey && ccdAddress) &&
     !evmPrivateKey &&
     !keetaMnemonic &&
+    !(nearAccountId && nearPrivateKey) &&
     !svmPrivateKey &&
     !stellarPrivateKey &&
     !(hederaAccountId && hederaPrivateKey) &&
     !tvmPrivateKey
   ) {
     console.error(
-      "❌ At least one of AVM_PRIVATE_KEY, CARDANO_MNEMONIC, EVM_PRIVATE_KEY, KEETA_MNEMONIC, SVM_PRIVATE_KEY, STELLAR_PRIVATE_KEY, TVM_PRIVATE_KEY, or HEDERA_ACCOUNT_ID + HEDERA_PRIVATE_KEY is required",
+      "❌ At least one of AVM_PRIVATE_KEY, CARDANO_MNEMONIC, CCD_PRIVATE_KEY + CCD_ADDRESS, EVM_PRIVATE_KEY, KEETA_MNEMONIC, NEAR_ACCOUNT_ID + NEAR_PRIVATE_KEY, SVM_PRIVATE_KEY, STELLAR_PRIVATE_KEY, HEDERA_ACCOUNT_ID + HEDERA_PRIVATE_KEY, or TVM_PRIVATE_KEY is required",
     );
     process.exit(1);
   }
@@ -123,6 +142,16 @@ async function main(): Promise<void> {
     console.log(`Initialized Cardano signer on ${cardanoNetwork}`);
   }
 
+  // Register Concordium scheme if private key and address are provided
+  if (ccdPrivateKey && ccdAddress) {
+    const signer = {
+      accountAddress: AccountAddress.fromBase58(ccdAddress),
+      signer: buildBasicAccountSigner(ccdPrivateKey),
+    };
+    client.register("ccd:*", new ExactConcordiumScheme(signer));
+    console.log(`Initialized CCD account: ${ccdAddress}`);
+  }
+
   // Register EVM scheme if private key is provided
   if (evmPrivateKey) {
     const evmSigner = privateKeyToAccount(evmPrivateKey);
@@ -150,6 +179,17 @@ async function main(): Promise<void> {
   if (keetaSigner && keetaAccount) {
     client.register("keeta:*", new ExactKeetaScheme(keetaSigner));
     console.log(`Initialized Keeta account: ${keetaAccount.publicKeyString.toString()}`);
+  }
+
+  // Register NEAR scheme if account and private key are provided
+  if (nearAccountId && nearPrivateKey) {
+    const nearSigner = createClientNearSigner({
+      accountId: nearAccountId,
+      secretKey: nearPrivateKey,
+      rpcUrls: nearRpcUrl ? { [nearNetwork]: nearRpcUrl } : undefined,
+    });
+    client.register(nearNetwork, new ExactNearScheme(nearSigner));
+    console.log(`Initialized NEAR account: ${nearAccountId} on ${nearNetwork}`);
   }
 
   // Register SVM scheme if private key is provided

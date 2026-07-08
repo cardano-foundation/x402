@@ -6,7 +6,7 @@
  */
 
 export type NetworkMode = 'testnet' | 'mainnet';
-export type ProtocolFamily = 'evm' | 'svm' | 'avm' | 'aptos' | 'hedera' | 'keeta' | 'stellar' | 'tvm' | 'cardano';
+export type ProtocolFamily = 'evm' | 'svm' | 'avm' | 'aptos' | 'hedera' | 'keeta' | 'near' | 'stellar' | 'ccd' | 'tvm' | 'cardano';
 
 export type NetworkConfig = {
   name: string;
@@ -23,8 +23,10 @@ export type NetworkSet = {
   hedera: NetworkConfig;
   keeta: NetworkConfig;
   stellar: NetworkConfig;
+  ccd: NetworkConfig;
   tvm: NetworkConfig;
   cardano: NetworkConfig;
+  near: NetworkConfig;
 };
 
 /**
@@ -47,6 +49,11 @@ const NETWORK_SETS: Record<NetworkMode, NetworkSet> = {
       name: 'Algorand Testnet',
       caip2: 'algorand:SGO1GKSzyE7IEPItTxCByw9x8FmnrCDexi9/cOUJOiI=',
       rpcUrl: process.env.AVM_TESTNET_RPC_URL || 'https://testnet-api.4160.nodely.dev',
+    },
+    ccd: {
+      name: 'Concordium Testnet',
+      caip2: 'ccd:4221332d34e1694168c2a0c0b3fd0f27',
+      rpcUrl: process.env.CONCORDIUM_TESTNET_GRPC_URL || 'grpc.testnet.concordium.com:20000',
     },
     aptos: {
       name: 'Aptos Testnet',
@@ -79,6 +86,11 @@ const NETWORK_SETS: Record<NetworkMode, NetworkSet> = {
       caip2: 'cardano:preprod',
       rpcUrl: process.env.BLOCKFROST_PREPROD_URL || 'https://cardano-preprod.blockfrost.io/api/v0',
     },
+    near: {
+      name: 'NEAR Testnet',
+      caip2: 'near:testnet',
+      rpcUrl: process.env.NEAR_TESTNET_RPC_URL || 'https://rpc.testnet.fastnear.com',
+    },
   },
   mainnet: {
     evm: {
@@ -96,6 +108,11 @@ const NETWORK_SETS: Record<NetworkMode, NetworkSet> = {
       name: 'Algorand Mainnet',
       caip2: 'algorand:wGHE2Pwdvd7S12BL5FaOP20EGYesN73ktiC1qzkkit8=',
       rpcUrl: process.env.AVM_RPC_URL || 'https://mainnet-api.4160.nodely.dev',
+    },
+    ccd: {
+      name: 'Concordium Mainnet',
+      caip2: 'ccd:9dd9ca4d19e9393877d2c44b70f89acb',
+      rpcUrl: process.env.CONCORDIUM_MAINNET_GRPC_URL || 'grpc.mainnet.concordium.software:20000',
     },
     aptos: {
       name: 'Aptos',
@@ -127,6 +144,11 @@ const NETWORK_SETS: Record<NetworkMode, NetworkSet> = {
       name: 'Cardano Mainnet',
       caip2: 'cardano:mainnet',
       rpcUrl: process.env.BLOCKFROST_MAINNET_URL || 'https://cardano-mainnet.blockfrost.io/api/v0',
+    },
+    near: {
+      name: 'NEAR',
+      caip2: 'near:mainnet',
+      rpcUrl: process.env.NEAR_RPC_URL || 'https://rpc.mainnet.fastnear.com',
     },
   },
 };
@@ -162,7 +184,7 @@ export function resolveEvmPermit2Asset(networks: NetworkSet): string {
  * Get network config for a protocol family in a given mode
  *
  * @param mode - 'testnet' or 'mainnet'
- * @param protocolFamily - 'evm', 'svm', 'avm', 'aptos', 'hedera', 'stellar', 'tvm', or 'cardano'
+ * @param protocolFamily - 'evm', 'svm', 'avm', 'aptos', 'hedera', 'near', 'stellar', 'ccd', 'tvm', or 'cardano'
  * @returns NetworkConfig for the specified protocol
  */
 export function getNetworkForProtocol(
@@ -180,6 +202,6 @@ export function getNetworkForProtocol(
  */
 export function getNetworkModeDescription(mode: NetworkMode): string {
   const set = NETWORK_SETS[mode];
-  const networks = [set.evm.name, set.svm.name, set.avm.name, set.aptos.name, set.hedera.name, set.keeta.name, set.stellar.name, set.tvm.name, set.cardano.name];
+  const networks = [set.evm.name, set.svm.name, set.avm.name, set.aptos.name, set.hedera.name, set.keeta.name, set.near.name, set.stellar.name, set.ccd.name, set.tvm.name, set.cardano.name];
   return networks.join(' + ');
 }

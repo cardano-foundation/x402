@@ -14,6 +14,8 @@ import { ExactStellarScheme } from "@x402/stellar/exact/server";
 import { ExactCardanoScheme } from "@x402/cardano/exact/server";
 import { masumiContractAddress, getDefaultUsdmAsset } from "@x402/cardano";
 import { ExactTvmScheme } from "@x402/tvm/exact/server";
+import { ExactNearScheme } from "@x402/near/exact/server";
+import { ExactConcordiumScheme } from "@x402/concordium/exact/server";
 import { bazaarResourceServerExtension, declareDiscoveryExtension } from "@x402/extensions/bazaar";
 import {
   declareEip2612GasSponsoringExtension,
@@ -43,6 +45,9 @@ const KEETA_NETWORK = (process.env.KEETA_NETWORK || KEETA_TESTNET_CAIP2) as `${s
 const STELLAR_NETWORK = (process.env.STELLAR_NETWORK || "stellar:testnet") as `${string}:${string}`;
 const CARDANO_NETWORK = (process.env.CARDANO_NETWORK || "cardano:preprod") as `${string}:${string}`;
 const TVM_NETWORK = (process.env.TVM_NETWORK || "tvm:-3") as `${string}:${string}`;
+const CCD_NETWORK = (process.env.CCD_NETWORK || "ccd:4221332d34e1694168c2a0c0b3fd0f27") as `${string}:${string}`;
+const CCD_PAYEE_ADDRESS = process.env.CCD_PAYEE_ADDRESS as string | undefined;
+const CCD_WEATHER_PRICE_MICRO_CCD = "1000";
 const EVM_PAYEE_ADDRESS = process.env.EVM_PAYEE_ADDRESS as `0x${string}`;
 const SVM_PAYEE_ADDRESS = process.env.SVM_PAYEE_ADDRESS as string;
 const EVM_PERMIT2_ASSET = process.env.EVM_PERMIT2_ASSET as `0x${string}`;
@@ -85,6 +90,10 @@ const CARDANO_MASUMI_TIMES = {
   externalDisputeUnlockTime: (CARDANO_MASUMI_BASE_MS + 120 * 60_000).toString(),
 };
 const TVM_PAYEE_ADDRESS = process.env.TVM_PAYEE_ADDRESS as string | undefined;
+const NEAR_NETWORK = (process.env.NEAR_NETWORK || "near:testnet") as `${string}:${string}`;
+const NEAR_PAYEE_ADDRESS = process.env.NEAR_PAYEE_ADDRESS as string | undefined;
+const NEAR_ASSET = process.env.NEAR_ASSET as string | undefined;
+const NEAR_AMOUNT = process.env.NEAR_AMOUNT as string | undefined;
 const HEDERA_ASSET = process.env.HEDERA_ASSET ?? "0.0.0"; // 0.0.0 = HBAR or 0.0.429274 for USDC testnet
 const HEDERA_AMOUNT = process.env.HEDERA_AMOUNT ?? "100000"; // price in smallest units (tinybars or token decimals), defaults to 0.001 HBAR or 0.1 USDC
 const facilitatorUrl = process.env.FACILITATOR_URL;
@@ -121,6 +130,9 @@ const server = new x402ResourceServer(facilitatorClients);
 if (AVM_PAYEE_ADDRESS) {
   server.register("algorand:*", new ExactAvmScheme());
 }
+if (CCD_PAYEE_ADDRESS) {
+  server.register("ccd:*", new ExactConcordiumScheme());
+}
 server.register("eip155:*", new ExactEvmScheme());
 server.register("eip155:*", new UptoEvmScheme());
 
@@ -156,6 +168,9 @@ if (CARDANO_PAYEE_ADDRESS) {
 }
 if (TVM_PAYEE_ADDRESS) {
   server.register("tvm:*", new ExactTvmScheme());
+}
+if (NEAR_PAYEE_ADDRESS) {
+  server.register("near:*", new ExactNearScheme());
 }
 
 // Register Bazaar discovery extension
@@ -217,6 +232,20 @@ app.get("/exact/keeta", (req, res, next) => {
     return res.status(501).json({
       error: "Keeta payments not configured",
       message: "KEETA_PAYEE_ADDRESS environment variable is not set",
+    });
+  }
+  next();
+});
+
+/**
+ * Pre-middleware guard for optional Concordium endpoint
+ * Returns 501 Not Implemented if Concordium is not configured
+ */
+app.get("/exact/ccd", (req, res, next) => {
+  if (!CCD_PAYEE_ADDRESS) {
+    return res.status(501).json({
+      error: "Concordium payments not configured",
+      message: "CCD_PAYEE_ADDRESS environment variable is not set",
     });
   }
   next();
@@ -302,6 +331,38 @@ app.use(
             },
           },
         }
+        : {}),
+      ...(CCD_PAYEE_ADDRESS
+        ? {
+            "GET /exact/ccd": {
+              accepts: {
+                payTo: CCD_PAYEE_ADDRESS,
+                scheme: "exact",
+                price: {
+                  amount: CCD_WEATHER_PRICE_MICRO_CCD,
+                  asset: "CCD",
+                },
+                network: CCD_NETWORK,
+              },
+              extensions: {
+                ...declareDiscoveryExtension({
+                  output: {
+                    example: {
+                      message: "Protected endpoint accessed successfully",
+                      timestamp: "2024-01-01T00:00:00Z",
+                    },
+                    schema: {
+                      properties: {
+                        message: { type: "string" },
+                        timestamp: { type: "string" },
+                      },
+                      required: ["message", "timestamp"],
+                    },
+                  },
+                }),
+              },
+            },
+          }
         : {}),
       "GET /batch-settlement/evm/eip3009": {
         accepts: {
@@ -788,6 +849,21 @@ app.use(
           },
         }
         : {}),
+      ...(NEAR_PAYEE_ADDRESS
+        ? {
+            "GET /exact/near": {
+              accepts: {
+                payTo: NEAR_PAYEE_ADDRESS,
+                scheme: "exact",
+                price: {
+                  amount: NEAR_AMOUNT || "1000000000000000000000",
+                  asset: NEAR_ASSET || "wrap.testnet",
+                },
+                network: NEAR_NETWORK,
+              },
+            },
+          }
+        : {}),
     },
     server, // Pass pre-configured server instance
   ),
@@ -906,6 +982,20 @@ app.get("/exact/hedera", (req, res) => {
 app.get("/exact/keeta", (req, res) => {
   res.json({
     message: "Protected Keeta endpoint accessed successfully",
+    timestamp: new Date().toISOString(),
+  });
+});
+
+/**
+ * Protected Concordium endpoint - requires payment via Concordium exact scheme
+ *
+ * This endpoint demonstrates a resource protected by x402 payment middleware for Concordium.
+ * Clients must provide a valid payment signature to access this endpoint.
+ * Note: 501 check is handled by pre-middleware guard above.
+ */
+app.get("/exact/ccd", (req, res) => {
+  res.json({
+    message: "Protected Concordium endpoint accessed successfully",
     timestamp: new Date().toISOString(),
   });
 });
@@ -1035,6 +1125,15 @@ if (TVM_PAYEE_ADDRESS) {
   });
 }
 
+if (NEAR_PAYEE_ADDRESS) {
+  app.get("/exact/near", (req, res) => {
+    res.json({
+      message: "Protected NEAR endpoint accessed successfully",
+      timestamp: new Date().toISOString(),
+    });
+  });
+}
+
 /**
  * Health check endpoint - no payment required
  *
@@ -1079,12 +1178,14 @@ app.listen(parseInt(PORT), () => {
 ║  Stellar Network: ${STELLAR_NETWORK}║
 ║  Cardano Network: ${CARDANO_NETWORK}║
 ║  TVM Network: ${TVM_NETWORK}║
+║  CCD Network:  ${CCD_NETWORK}                          ║
 ║  AVM Payee:    ${AVM_PAYEE_ADDRESS || "(not configured)"}
 ║  EVM Payee:    ${EVM_PAYEE_ADDRESS}                    ║
 ║  SVM Payee:    ${SVM_PAYEE_ADDRESS}                    ║
 ║  Aptos Payee:  ${APTOS_PAYEE_ADDRESS || "(not configured)"}
 ║  Hedera Payee: ${HEDERA_PAYEE_ADDRESS || "(not configured)"}
 ║  Keeta Payee:  ${KEETA_PAYEE_ADDRESS || "(not configured)"}
+║  CCD Payee:    ${CCD_PAYEE_ADDRESS || "(not configured)"}
 ║  Stellar Payee: ${STELLAR_PAYEE_ADDRESS || "(not configured)"}
 ║  Cardano Payee: ${CARDANO_PAYEE_ADDRESS || "(not configured)"}
 ║  TVM Payee: ${TVM_PAYEE_ADDRESS || "(not configured)"}
