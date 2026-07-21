@@ -188,13 +188,11 @@ export function verifyMasumiLock(
   if (!sameCredentials(view.seller, addressCredentials(extra.sellerAddress))) {
     return fail(ERR_MASUMI_DATUM_MISMATCH);
   }
-  // Return addresses must match EXACTLY: declared in extra -> datum `Some(match)`,
+  // seller_return address is server-declared, so it must match EXACTLY: declared in extra -> datum `Some(match)`,
   // omitted -> datum `None`. Masumi compares these against the purchase, so a
   // return address it doesn't expect (or a missing one it does) is rejected.
-  if (
-    !returnAddressMatches(extra.buyerReturnAddress, view.buyerReturnAddress) ||
-    !returnAddressMatches(extra.sellerReturnAddress, view.sellerReturnAddress)
-  ) {
+  // buyer_return address is user-declared.
+  if (!returnAddressMatches(extra.sellerReturnAddress, view.sellerReturnAddress)) {
     return fail(ERR_MASUMI_DATUM_MISMATCH);
   }
   // Server-declared datum fields, when present, MUST match the datum. Fields the

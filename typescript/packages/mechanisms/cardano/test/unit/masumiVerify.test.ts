@@ -293,8 +293,9 @@ describe("verifyMasumiLock", () => {
     ).toBe(false);
   });
 
-  // Return addresses (datum fields 1 / 3) must match the declared extra exactly.
-  it("accepts when a declared return address matches the datum", () => {
+  // seller_return_address (datum field 3) is server-declared, so it must match
+  // the declared extra exactly in both directions.
+  it("accepts when a declared seller return address matches the datum", () => {
     expect(
       run({
         extra: { sellerReturnAddress: SELLER },
@@ -303,21 +304,50 @@ describe("verifyMasumiLock", () => {
     ).toEqual({ ok: true });
   });
 
-  it("rejects a datum return address the server did not declare", () => {
+  it("rejects a datum seller return address the server did not declare", () => {
     expect(run({ datum: datumHex({ sellerReturnAddress: SELLER }) }).ok).toBe(false);
   });
 
-  it("rejects when the server declares a return address the datum omits", () => {
+  it("rejects when the server declares a seller return address the datum omits", () => {
     expect(run({ extra: { sellerReturnAddress: SELLER } }).ok).toBe(false);
   });
 
-  it("rejects when a declared return address differs from the datum", () => {
+  it("rejects when a declared seller return address differs from the datum", () => {
     expect(
       run({
         extra: { sellerReturnAddress: SELLER },
         datum: datumHex({ sellerReturnAddress: BUYER }),
       }).ok,
     ).toBe(false);
+  });
+
+  // buyer_return_address (datum field 1) is buyer-supplied: the 402 answers an
+  // unauthenticated request, so the server cannot know the payer's refund
+  // address and normally omits it.
+  it("accepts a buyer return address the server did not declare", () => {
+    expect(run({ datum: datumHex({ buyerReturnAddress: BUYER }) })).toEqual({ ok: true });
+  });
+
+  it("accepts an omitted buyer return address", () => {
+    expect(run({})).toEqual({ ok: true });
+  });
+
+  // The buyer picks its own refund address, so the facilitator does not match it
+  // even when a server declares one — it has no authoritative value to compare
+  // against. The buyer stays pinned by the `buyer` = payer rule instead.
+  it("does not match the buyer return address against extra", () => {
+    expect(
+      run({
+        extra: { buyerReturnAddress: BUYER },
+        datum: datumHex({ buyerReturnAddress: BUYER }),
+      }),
+    ).toEqual({ ok: true });
+    expect(
+      run({
+        extra: { buyerReturnAddress: BUYER },
+        datum: datumHex({ buyerReturnAddress: SELLER }),
+      }),
+    ).toEqual({ ok: true });
   });
 });
 

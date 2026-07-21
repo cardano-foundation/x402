@@ -822,14 +822,15 @@ app.use(
                 contractAddress: masumiContractAddress(CARDANO_NETWORK),
                 sellerAddress: CARDANO_PAYEE_ADDRESS!,
                 agentIdentifier: "deadbeefdeadbeefdeadbeefdeadbeef",
-                inputHash: "9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08",
                 collateralReturnLovelace: "0",
-                // Purchase-bound identifiers; real values come from the Masumi
-                // purchase. Fixed placeholders keep the e2e lock deterministic.
+                // Seller-side identifiers from the Masumi payment request. Fixed
+                // placeholders keep the e2e lock deterministic. The buyer-side
+                // fields (buyer_nonce, input_hash, buyer_return_address) are
+                // deliberately absent: this 402 answers an unauthenticated
+                // request, so the server cannot know them — the client fills them.
                 referenceKey: "aa".repeat(32),
                 referenceSignature: "bb".repeat(64),
                 sellerNonce: "cc".repeat(32),
-                identifierFromPurchaser: "dd".repeat(32),
                 ...CARDANO_MASUMI_TIMES,
               },
             },

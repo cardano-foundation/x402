@@ -141,7 +141,23 @@ When the Resource Server requires payment via **Masumi**, the buyer locks the pa
 
 **Scope:** x402 covers only the **lock** step — the escrow's initial `FundsLocked` state. Result submission, seller withdrawal, buyer refund, and dispute resolution all happen later, in **separate transactions** governed by the contract and the Masumi Payment Service, and are out of scope for this scheme. A successful `/settle` for Masumi therefore means **"funds are locked in escrow", not "payment delivered"**: the resource server grants access on the lock and trusts the Masumi lifecycle to release funds to the agent.
 
-The `referenceKey`, `referenceSignature`, nonces, `agentIdentifier`, and the four time bounds originate off-chain — the buyer first creates a purchase with the Masumi Payment Service (for an agent registered in the Masumi Registry), which returns these binding identifiers. They are stored in the datum and, although the on-chain validator does not verify most of them, the Masumi service uses them to match the locked UTxO to the purchase. The resource server therefore **MUST** provide them in `extra` (they are required); the client MUST NOT invent or randomize them, since a value that does not match the purchase yields an escrow the Masumi service cannot settle. Only `inputHash` (defaults to empty) and `collateralReturnLovelace` (defaults to 0) are optional.
+**End-to-end flow.** Steps 6–7 are the x402 payment; everything else is Masumi's own protocol (MIP-003 + the Payment Service API) and happens outside this scheme. The ordering below is fixed by Masumi's API contracts, not by x402:
+
+1. **Seller registers** an agent in the Masumi Registry → `agentIdentifier` (≥ 57 characters).
+2. **Buyer generates `identifierFromPurchaser`** — a **14–26 character hex** nonce (`min(14).max(26)` in both `createPurchaseInitSchemaInput` and `createPaymentsSchemaInput`) — and computes `inputHash`, the SHA-256 of its job input.
+3. **Buyer calls the agent's MIP-003 `POST /start_job`** with `input_data` and `identifier_from_purchaser`. *The buyer's nonce reaches the seller here* — this is why a payment request cannot exist before the buyer has spoken.
+4. **Seller calls its Payment Service `POST /payment`** with `inputHash`, `agentIdentifier`, `identifierFromPurchaser`, the four time bounds and `RequestedFunds`. It returns a seller-signed **`blockchainIdentifier`**.
+5. **`blockchainIdentifier` packs the datum's binding fields.** Per `generateBlockchainIdentifier`, it is `hex(LZString([sellerNonce, buyerNonce, referenceSignature, referenceKey, smartContractAddress?].join(".")))`, where `sellerNonce` carries `agentIdentifier` appended beyond its first 64 characters, and the optional 5th segment is the V2 escrow address. Decoding it therefore yields `reference_key`, `reference_signature`, `seller_nonce`, `buyer_nonce`, `agent_identifier` and the contract address — every seller-side datum field in one token. The agent returns it, with the time bounds, from `/start_job`.
+6. **Buyer locks the funds.** In native Masumi this is `POST /purchase`; under this scheme it is the x402 payment — the client builds the escrow output with the full datum and retries with the `PAYMENT-SIGNATURE` header, and the facilitator's `/verify` checks the lock against the declared fields.
+7. **`/settle`** submits the lock transaction. x402's involvement ends here; the Payment Service observes the UTxO and advances its own state (`FundsLockingRequested` → `FundsLocked`).
+8. **Seller submits the result** — `SubmitResult` writes `result_hash` (SHA-256 of the output) and starts the cooldowns. After `unlock_time` the seller's node collects the payment automatically. Before it, the buyer may call `POST /purchase/request-refund`; `external_dispute_unlock_time` and the admin multi-sig resolve the deadlock case.
+
+Because step 8 is entirely out of band, the datum's deadlines and collateral are the only thing bounding it — which is why a facilitator MUST enforce them at lock time (see the invariants below).
+
+**Who supplies which field.** The datum is filled from two sides, because the 402 answers an **unauthenticated** request — the resource server does not know who is calling and therefore cannot know any buyer-side value:
+
+- **Server-declared (REQUIRED in `extra`).** `contractAddress`, `sellerAddress`, `sellerNonce`, `agentIdentifier`, `referenceKey`, `referenceSignature`, the four time bounds, and optionally `sellerReturnAddress` / `collateralReturnLovelace`. These come from the seller's **payment request**, created with the Masumi Payment Service for an agent registered in the Masumi Registry. They bind the locked UTxO to that payment request, so the client MUST NOT invent or randomize them — a value that does not match yields an escrow the Masumi service cannot settle. The facilitator matches every declared field against the datum.
+- **Buyer-supplied (MUST NOT be required in `extra`).** `identifierFromPurchaser` (datum `buyer_nonce`), `inputHash`, and `buyerReturnAddress`. The buyer creates its **purchase** against the payment request *after* receiving the 402, so these are client inputs: the client fills them from its purchase, or generates a fresh nonce and takes the contract defaults (`input_hash` empty, `buyer_return_address` `None`). A server that already knows the purchase MAY declare `identifierFromPurchaser` or `inputHash`, and the facilitator then matches those; `buyerReturnAddress` is never matched. The buyer is still pinned by the `buyer == payer` rule.
 
 ```js
 {
@@ -166,15 +182,15 @@ The `referenceKey`, `referenceSignature`, nonces, `agentIdentifier`, and the fou
         "contractAddress": "addr_test1w...",      // optional; escrow address for this deployment (defaults to Masumi's canonical address). MUST equal payTo
         "sellerAddress": "addr_test1q...",        // datum `seller` (full, key-credential address)
         "sellerReturnAddress": "addr_test1q...",  // optional; datum `seller_return_address`
-        "buyerReturnAddress": "addr_test1q...",   // optional; datum `buyer_return_address`
         "referenceKey": "<hex>",                  // datum `reference_key`
         "referenceSignature": "<hex>",            // datum `reference_signature` (>= 16 bytes, unique per UTxO)
-        "identifierFromPurchaser": "<hex>",       // datum `buyer_nonce`
         "sellerNonce": "<hex>",                   // datum `seller_nonce`
         "agentIdentifier": "<hex>",               // datum `agent_identifier`
-        "inputHash": "9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08", // datum `input_hash`
         "collateralReturnLovelace": "0",          // datum `collateral_return_lovelace` (>= 0)
-        "payByTime": "1713626260000",             // POSIX milliseconds
+        // buyer_nonce / input_hash / buyer_return_address are NOT declared here:
+        // the server cannot know them on an unauthenticated request. The client
+        // fills them when it builds the lock.
+        "payByTime": "1713626260000",             // POSIX milliseconds, from THIS request's payment request
         "submitResultTime": "1713636260000",
         "unlockTime": "1713636260000",
         "externalDisputeUnlockTime": "1713636260000"
@@ -189,16 +205,16 @@ The client constructs the escrow **datum** (a Plutus `Constr 0` with the fields 
 | # | Datum field | Value at lock | Source |
 |---|-------------|---------------|--------|
 | 0 | `buyer` | the **payer**'s address (key-credential) | client wallet |
-| 1 | `buyer_return_address` | `None`, or an address | `extra.buyerReturnAddress` |
+| 1 | `buyer_return_address` | `None`, or an address | **client** (or `extra.buyerReturnAddress` if declared) |
 | 2 | `seller` | seller address (key-credential) | `extra.sellerAddress` |
 | 3 | `seller_return_address` | `None`, or an address | `extra.sellerReturnAddress` |
 | 4 | `reference_key` | bytes | `extra.referenceKey` |
 | 5 | `reference_signature` | bytes, length ≥ 16, unique per script UTxO | `extra.referenceSignature` |
 | 6 | `seller_nonce` | bytes | `extra.sellerNonce` |
-| 7 | `buyer_nonce` | bytes | `extra.identifierFromPurchaser` |
+| 7 | `buyer_nonce` | bytes | **client** — its purchase, else a fresh random nonce |
 | 8 | `agent_identifier` | bytes | `extra.agentIdentifier` |
 | 9 | `collateral_return_lovelace` | integer ≥ 0 | `extra.collateralReturnLovelace` |
-| 10 | `input_hash` | bytes | `extra.inputHash` |
+| 10 | `input_hash` | bytes, may be empty | **client** (or `extra.inputHash` if declared) |
 | 11 | `result_hash` | **empty** | — |
 | 12 | `pay_by_time` | POSIX ms | `extra.payByTime` |
 | 13 | `submit_result_time` | POSIX ms | `extra.submitResultTime` |
@@ -216,7 +232,7 @@ Because the `vested_pay` validator only runs on spend (never on the lock itself)
 - `reference_signature` is at least 16 bytes.
 - `collateral_return_lovelace` is `0` or ≥ **1,435,230**, does **not** exceed the locked lovelace (a collateral above the locked ADA bricks the seller's on-chain spend), and — for a lovelace payment — the locked lovelace covers `amount + collateral_return_lovelace`.
 - The escrow output holds enough lovelace for the protocol min-UTXO of the datum **after `SubmitResult`** (a 32-byte `result_hash` and non-zero cooldowns), not merely at lock time — otherwise the seller can never spend.
-- `buyer_return_address` / `seller_return_address` match the declared values exactly (declared ⇒ present in the datum; omitted ⇒ `None`), and the escrow output carries **exactly** the requested asset set (no extra native tokens).
+- `seller_return_address` matches the declared value exactly (declared ⇒ present in the datum; omitted ⇒ `None`). `buyer_return_address` is buyer-chosen and is **not** matched against `extra`. The escrow output carries **exactly** the requested asset set (no extra native tokens).
 
 The escrow script address is deployment-specific: the validator parameters (`required_admins_multi_sig`, `admin_vks`, `cooldown_period`) are baked into the script hash, so a different parameterization (e.g. a self-hosted Masumi) yields a different address, and the hash alone cannot be checked against the un-applied blueprint. The resource server therefore declares its deployment's escrow address in `extra.contractAddress` (from the purchase); when omitted it defaults to Masumi's canonical address for the network. A facilitator MUST verify that `payTo` equals that declared escrow address before accepting a Masumi payment — this binds the lock to the specific escrow the purchase expects, since a look-alike `vested_pay` with different admins is a different trust domain.
 
@@ -335,10 +351,8 @@ Expanded Schema based on assetTransferMethods:
         "sellerAddress": "addr_test1q...",
         "referenceKey": "<hex>",
         "referenceSignature": "<hex>",
-        "identifierFromPurchaser": "<hex>",
         "sellerNonce": "<hex>",
         "agentIdentifier": "<hex>",
-        "inputHash": "9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08",
         "collateralReturnLovelace": "0",
         "payByTime": "1713626260000",
         "submitResultTime": "1713636260000",
@@ -413,8 +427,9 @@ A facilitator MUST enforce all of the following rules before accepting a payment
 - `payTo` equals the deployment's **Masumi escrow (`vested_pay`) script address** — `extra.contractAddress` when present, else Masumi's canonical address for the network.
 - The output paying `payTo` carries an **inline datum** decoding to the lock datum with `state == FundsLocked`, empty `result_hash`, and **both cooldown timers `0`**, and the output carries **no reference script**.
 - `buyer` equals the transaction's payer and `seller` equals `extra.sellerAddress`; both are **public-key** credential addresses.
-- `reference_key`, `reference_signature`, `seller_nonce`, `buyer_nonce`, `agent_identifier`, `input_hash`, `collateral_return_lovelace`, and the four time bounds in the datum match the corresponding `extra` values, and `reference_signature` is at least 16 bytes.
-- `buyer_return_address` / `seller_return_address` match `extra` **exactly**: a value declared in `extra` MUST be present in the datum with matching credentials, and one omitted from `extra` MUST be `None` in the datum.
+- `reference_key`, `reference_signature`, `seller_nonce`, `agent_identifier`, `collateral_return_lovelace`, and the four time bounds in the datum match the corresponding `extra` values, and `reference_signature` is at least 16 bytes.
+- The buyer-supplied fields are not required in `extra`: `buyer_nonce` and `input_hash` are matched **only when the server declared them**, and `buyer_return_address` is never matched (the buyer chooses its own refund address). A server issuing a 402 for an unauthenticated request cannot know these, so their absence MUST NOT be a rejection; the buyer remains bound by the `buyer` = payer rule.
+- `seller_return_address` matches `extra` **exactly**: declared in `extra` ⇒ present in the datum with matching credentials; omitted from `extra` ⇒ `None` in the datum.
 - **Value.** For the requested `asset`: **lovelace** MAY be overpaid but the locked lovelace MUST be ≥ `amount + collateral_return_lovelace`; a **native token** MUST match `amount` exactly. The escrow output MUST carry **exactly** the requested asset set — no extra native tokens (zero tokens for a lovelace payment, exactly the one requested token otherwise). `collateral_return_lovelace` MUST be `0` or ≥ **1,435,230** and MUST NOT exceed the locked lovelace.
 - **Deadline.** The transaction MUST carry a validity upper bound (TTL) whose slot time is on/before `pay_by_time`.
 - **Minimum UTXO.** The escrow output MUST hold enough lovelace for the protocol min-UTXO of the datum **after `SubmitResult`** (32-byte `result_hash` + non-zero cooldowns), so the seller's later spend stays above min-UTXO.

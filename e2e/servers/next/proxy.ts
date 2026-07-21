@@ -48,6 +48,11 @@ export const STELLAR_NETWORK = (process.env.STELLAR_NETWORK ||
   "stellar:testnet") as `${string}:${string}`;
 export const CARDANO_NETWORK = (process.env.CARDANO_NETWORK ||
   "cardano:preprod") as `${string}:${string}`;
+// Asset the Cardano endpoints charge in; defaults to lovelace (tADA) so the e2e
+// is faucet-fundable. Set CARDANO_ASSET to a `policyId.assetNameHex` unit to run
+// the same endpoints against a native token.
+export const CARDANO_ASSET = process.env.CARDANO_ASSET || "lovelace";
+export const CARDANO_AMOUNT = process.env.CARDANO_AMOUNT || "5000000";
 export const TVM_NETWORK = (process.env.TVM_NETWORK || "tvm:-3") as `${string}:${string}`;
 export const NEAR_PAYEE_ADDRESS = process.env.NEAR_PAYEE_ADDRESS as string | undefined;
 export const NEAR_NETWORK = (process.env.NEAR_NETWORK || "near:testnet") as `${string}:${string}`;
@@ -432,7 +437,7 @@ export const proxy = paymentProxy(
             accepts: {
               payTo: CARDANO_PAYEE_ADDRESS,
               scheme: "exact",
-              price: "$0.001",
+              price: { amount: CARDANO_AMOUNT, asset: CARDANO_ASSET },
               network: CARDANO_NETWORK,
             },
             extensions: {

@@ -1,7 +1,13 @@
 import { NextRequest, NextResponse } from "next/server";
 import { withX402 } from "@x402/next";
 import { declareDiscoveryExtension } from "@x402/extensions/bazaar";
-import { server, CARDANO_PAYEE_ADDRESS, CARDANO_NETWORK } from "@/proxy";
+import {
+  server,
+  CARDANO_PAYEE_ADDRESS,
+  CARDANO_NETWORK,
+  CARDANO_ASSET,
+  CARDANO_AMOUNT,
+} from "@/proxy";
 
 /**
  * Handler for the protected endpoint
@@ -24,7 +30,7 @@ export const GET = CARDANO_PAYEE_ADDRESS
         accepts: {
           payTo: CARDANO_PAYEE_ADDRESS,
           scheme: "exact",
-          price: "$0.001",
+          price: { amount: CARDANO_AMOUNT, asset: CARDANO_ASSET },
           network: CARDANO_NETWORK,
         },
         extensions: {

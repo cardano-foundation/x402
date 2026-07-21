@@ -23,7 +23,7 @@ import {
   normalizeCardanoNetwork,
 } from "./constants";
 import { masumiTokenLockLovelace } from "./exact/masumi/constants";
-import { buildMasumiLockInline } from "./exact/masumi/lock";
+import { buildMasumiLockInline, type MasumiBuyerInput } from "./exact/masumi/lock";
 import { buildScriptDatumInline } from "./exact/script/datum";
 import type { CardanoExtra, CardanoExtraMasumi, CardanoExtraScript } from "./types";
 import { parseAssetUnit, parseUtxoRef } from "./utils";
@@ -329,6 +329,14 @@ export interface ClientCardanoSignerConfig {
    * Optional account index for key derivation. Defaults to 0.
    */
   accountIndex?: number;
+  /**
+   * Supplies the buyer-side datum fields for a Masumi lock, called once per
+   * payment with the server's masumi `extra`. Integrate a Masumi Payment
+   * Service here to return the purchase's `buyer_nonce` / `input_hash` /
+   * return address. Omit it and the client generates a fresh nonce and takes
+   * the contract defaults, which is enough to produce a valid lock.
+   */
+  masumiBuyerInput?: (extra: CardanoExtraMasumi) => MasumiBuyerInput | Promise<MasumiBuyerInput>;
 }
 
 /**
@@ -400,7 +408,11 @@ export function toClientCardanoSigner(config: ClientCardanoSignerConfig): Client
           ? (extra as CardanoExtraScript)
           : undefined;
       const masumiDatum = masumiExtra
-        ? buildMasumiLockInline(masumiExtra, Address.toBech32(nonceUtxo.address))
+        ? buildMasumiLockInline(
+            masumiExtra,
+            Address.toBech32(nonceUtxo.address),
+            (await config.masumiBuyerInput?.(masumiExtra)) ?? {},
+          )
         : undefined;
       const scriptDatum = scriptExtra ? buildScriptDatumInline(scriptExtra) : undefined;
       const paymentDatum = masumiDatum ?? scriptDatum;

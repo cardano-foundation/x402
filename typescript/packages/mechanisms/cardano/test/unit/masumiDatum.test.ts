@@ -8,7 +8,9 @@ import {
   type MasumiLockDatumInput,
 } from "../../src/exact/masumi/datum";
 import { masumiContractAddress } from "../../src/exact/masumi/constants";
+import { buildMasumiLockInline, type MasumiBuyerInput } from "../../src/exact/masumi/lock";
 import { CARDANO_PREPROD_CAIP2 } from "../../src/constants";
+import type { CardanoExtraMasumi } from "../../src/types";
 
 // Base (payment + stake) preprod addresses.
 const BUYER =
@@ -78,5 +80,62 @@ describe("masumi lock datum codec", () => {
   it("returns null for a non-matching datum", () => {
     expect(parseMasumiLockDatum(Data.constr(0n, [Data.int(1n)]))).toBeNull();
     expect(parseMasumiLockDatum("not-cbor")).toBeNull();
+  });
+});
+
+// The 402 answers an unauthenticated request, so a server cannot know the
+// buyer's nonce, input hash or refund address. The client must be able to build
+// a valid lock from a 402 that declares only the seller-side fields.
+describe("masumi lock from a server 402 without buyer-side fields", () => {
+  const sellerExtra: CardanoExtraMasumi = {
+    assetTransferMethod: "masumi",
+    contractAddress: masumiContractAddress(CARDANO_PREPROD_CAIP2),
+    sellerAddress: SELLER,
+    referenceKey: "aabb".padEnd(64, "0"),
+    referenceSignature: "cc".repeat(32),
+    sellerNonce: "11".repeat(32),
+    agentIdentifier: "33".repeat(16),
+    payByTime: "1000",
+    submitResultTime: "2000",
+    unlockTime: "3000",
+    externalDisputeUnlockTime: "4000",
+  };
+
+  const viewOf = (extra: CardanoExtraMasumi, buyerInput?: MasumiBuyerInput) =>
+    parseMasumiLockDatum(Data.toCBORHex(buildMasumiLockInline(extra, BUYER, buyerInput).data))!;
+
+  it("builds without buyer fields, generating a fresh nonce and contract defaults", () => {
+    const view = viewOf(sellerExtra);
+    expect(view).not.toBeNull();
+    // Masumi validates identifierFromPurchaser as a 14-26 character hex string
+    // (createPurchaseInitSchemaInput), so the generated nonce must land inside
+    // that range — a longer one is rejected off-chain.
+    expect(view.buyerNonce).toMatch(/^[0-9a-f]+$/);
+    expect(view.buyerNonce.length).toBeGreaterThanOrEqual(14);
+    expect(view.buyerNonce.length).toBeLessThanOrEqual(26);
+    expect(view.inputHash).toBe("");
+    expect(view.buyerReturnAddress).toBeNull();
+  });
+
+  it("generates a distinct nonce per lock", () => {
+    expect(viewOf(sellerExtra).buyerNonce).not.toBe(viewOf(sellerExtra).buyerNonce);
+  });
+
+  it("uses the buyer's supplied purchase values when the client provides them", () => {
+    const view = viewOf(sellerExtra, {
+      identifierFromPurchaser: "dd".repeat(32),
+      inputHash: "9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08",
+      buyerReturnAddress: BUYER,
+    });
+    expect(view.buyerNonce).toBe("dd".repeat(32));
+    expect(view.inputHash).toBe("9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08");
+    expect(addressCredentials(BUYER).payment.hash).toBe(view.buyerReturnAddress?.payment.hash);
+  });
+
+  it("still requires the seller-side fields the server must declare", () => {
+    const missingSellerNonce = { ...sellerExtra, sellerNonce: undefined };
+    expect(() => buildMasumiLockInline(missingSellerNonce as CardanoExtraMasumi, BUYER)).toThrow(
+      /sellerNonce/,
+    );
   });
 });

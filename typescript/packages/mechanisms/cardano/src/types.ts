@@ -39,13 +39,16 @@ export interface CardanoExtraDefault {
  * the Masumi `vested_pay` escrow lock datum. Field semantics follow the spec
  * section "Masumi assetTransferMethod Schema"; each maps to a datum field.
  *
- * The identifier and time-bound fields are **required**: in x402 the resource
- * server obtains them from the Masumi purchase and MUST supply them here. They
- * bind the locked UTxO to the purchase off-chain — the client must not invent
- * them (a wrong/random value produces an escrow the Masumi Payment Service
- * cannot match to the purchase). Only fields with a contract-defined default
- * (`inputHash` → empty, `collateralReturnLovelace` → 0) and the optional return
- * addresses are optional.
+ * Fields split by who knows them:
+ *
+ * - **Server-declared (required)** — the seller-side identifiers and time bounds
+ *   the resource server takes from its Masumi payment request. They bind the
+ *   locked UTxO to that purchase, so the client must not invent them and the
+ *   facilitator matches every one against the datum.
+ * - **Buyer-supplied (optional here)** — `identifierFromPurchaser`, `inputHash`
+ *   and `buyerReturnAddress`. The 402 is issued for an unauthenticated request,
+ *   so the server cannot know them; the client fills them when it builds the
+ *   lock. A server that does declare one is still honoured and matched.
  */
 export interface CardanoExtraMasumi {
   /**
@@ -78,7 +81,10 @@ export interface CardanoExtraMasumi {
    */
   sellerReturnAddress?: string;
   /**
-   * Optional payout destination; datum `buyer_return_address`.
+   * datum `buyer_return_address`. **Buyer-supplied** — the resource server does
+   * not know the payer when it issues the 402 (the request is unauthenticated),
+   * so it normally omits this and the client fills it. Declared only by a server
+   * that already knows the purchase; the facilitator then matches it.
    */
   buyerReturnAddress?: string;
   /**
@@ -90,9 +96,13 @@ export interface CardanoExtraMasumi {
    */
   referenceSignature: string;
   /**
-   * datum `buyer_nonce` (hex) — from the Masumi purchase.
+   * datum `buyer_nonce` (hex). **Buyer-supplied**, for the same reason as
+   * {@link CardanoExtraMasumi.buyerReturnAddress}: it comes from the buyer's
+   * purchase, which is created *after* the 402. The client fills it (from its
+   * Masumi purchase, or a fresh random nonce). A server that already knows the
+   * purchase may declare it, and the facilitator then matches it.
    */
-  identifierFromPurchaser: string;
+  identifierFromPurchaser?: string;
   /**
    * datum `seller_nonce` (hex) — from the Masumi purchase.
    */
@@ -102,7 +112,8 @@ export interface CardanoExtraMasumi {
    */
   agentIdentifier: string;
   /**
-   * datum `input_hash` (hex). Optional; defaults to empty when absent.
+   * datum `input_hash` (hex) — hash of the job input the buyer sends the agent,
+   * so it is **buyer-supplied** too. Defaults to empty when neither side sets it.
    */
   inputHash?: string;
   /**
