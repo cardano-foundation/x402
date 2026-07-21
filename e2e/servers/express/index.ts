@@ -15,6 +15,8 @@ import { ExactCardanoScheme } from "@x402/cardano/exact/server";
 import { masumiContractAddress, getDefaultUsdmAsset } from "@x402/cardano";
 import { ExactTvmScheme } from "@x402/tvm/exact/server";
 import { ExactNearScheme } from "@x402/near/exact/server";
+import type { XrplAssetTransferMethod } from "@x402/xrpl";
+import { ExactXrplScheme } from "@x402/xrpl/exact/server";
 import { ExactConcordiumScheme } from "@x402/concordium/exact/server";
 import { bazaarResourceServerExtension, declareDiscoveryExtension } from "@x402/extensions/bazaar";
 import {
@@ -94,9 +96,30 @@ const NEAR_NETWORK = (process.env.NEAR_NETWORK || "near:testnet") as `${string}:
 const NEAR_PAYEE_ADDRESS = process.env.NEAR_PAYEE_ADDRESS as string | undefined;
 const NEAR_ASSET = process.env.NEAR_ASSET as string | undefined;
 const NEAR_AMOUNT = process.env.NEAR_AMOUNT as string | undefined;
+const XRPL_NETWORK = (process.env.XRPL_NETWORK || "xrpl:1") as `${string}:${string}`;
+const XRPL_PAYEE_ADDRESS = process.env.XRPL_PAYEE_ADDRESS as string | undefined;
+const XRPL_ASSET = process.env.XRPL_ASSET as string | undefined;
+const XRPL_AMOUNT = process.env.XRPL_AMOUNT as string | undefined;
+const XRPL_ISSUER = process.env.XRPL_ISSUER as string | undefined;
 const HEDERA_ASSET = process.env.HEDERA_ASSET ?? "0.0.0"; // 0.0.0 = HBAR or 0.0.429274 for USDC testnet
 const HEDERA_AMOUNT = process.env.HEDERA_AMOUNT ?? "100000"; // price in smallest units (tinybars or token decimals), defaults to 0.001 HBAR or 0.1 USDC
 const facilitatorUrl = process.env.FACILITATOR_URL;
+
+const xrplPaymentConfig = (payTo: string, assetTransferMethod: XrplAssetTransferMethod) => ({
+  accepts: {
+    payTo,
+    scheme: "exact" as const,
+    price: {
+      amount: XRPL_AMOUNT || "1000",
+      asset: XRPL_ASSET || "XRP",
+      extra: {
+        assetTransferMethod,
+        ...(XRPL_ASSET && XRPL_ASSET !== "XRP" && XRPL_ISSUER ? { issuer: XRPL_ISSUER } : {}),
+      },
+    },
+    network: XRPL_NETWORK,
+  },
+});
 
 if (!EVM_PAYEE_ADDRESS) {
   console.error("❌ EVM_PAYEE_ADDRESS environment variable is required");
@@ -171,6 +194,9 @@ if (TVM_PAYEE_ADDRESS) {
 }
 if (NEAR_PAYEE_ADDRESS) {
   server.register("near:*", new ExactNearScheme());
+}
+if (XRPL_PAYEE_ADDRESS) {
+  server.register("xrpl:*", new ExactXrplScheme());
 }
 
 // Register Bazaar discovery extension
@@ -864,6 +890,15 @@ app.use(
             },
           }
         : {}),
+      ...(XRPL_PAYEE_ADDRESS
+        ? {
+            "GET /exact/xrpl/sequence": xrplPaymentConfig(XRPL_PAYEE_ADDRESS, "sequence"),
+            "GET /exact/xrpl/ticketSequence": xrplPaymentConfig(
+              XRPL_PAYEE_ADDRESS,
+              "ticketSequence",
+            ),
+          }
+        : {}),
     },
     server, // Pass pre-configured server instance
   ),
@@ -1132,6 +1167,17 @@ if (NEAR_PAYEE_ADDRESS) {
       timestamp: new Date().toISOString(),
     });
   });
+}
+
+if (XRPL_PAYEE_ADDRESS) {
+  for (const assetTransferMethod of ["sequence", "ticketSequence"] as const) {
+    app.get(`/exact/xrpl/${assetTransferMethod}`, (req, res) => {
+      res.json({
+        message: "Protected XRPL endpoint accessed successfully",
+        timestamp: new Date().toISOString(),
+      });
+    });
+  }
 }
 
 /**

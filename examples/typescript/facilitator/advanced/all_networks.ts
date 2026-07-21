@@ -5,10 +5,18 @@
  * optional chain configuration via environment variables.
  *
  * New chain support should be added here in alphabetic order by network prefix
- * (e.g., "algorand" before "ccd" before "eip155" before "hedera" before "near" before "solana" before "stellar" before "tvm").
+ * (e.g., "algorand" before "aptos" before "ccd" before "eip155" before "hedera" before "near" before "solana" before "stellar" before "tvm" before "xrpl").
  */
 
+import {
+  Account,
+  Ed25519PrivateKey,
+  PrivateKey as AptosPrivateKey,
+  PrivateKeyVariants,
+} from "@aptos-labs/ts-sdk";
 import * as KeetaNet from "@keetanetwork/keetanet-client";
+import { toFacilitatorAptosSigner } from "@x402/aptos";
+import { ExactAptosScheme } from "@x402/aptos/exact/facilitator";
 import { toFacilitatorAvmSigner } from "@x402/avm";
 import { ExactAvmScheme } from "@x402/avm/exact/facilitator";
 import { toFacilitatorCardanoSigner } from "@x402/cardano";
@@ -67,6 +75,8 @@ import {
   TVM_PROVIDER_TONCENTER,
 } from "@x402/tvm";
 import { ExactTvmScheme } from "@x402/tvm/exact/facilitator";
+import { XRPL_TESTNET } from "@x402/xrpl";
+import { ExactXrplScheme } from "@x402/xrpl/exact/facilitator";
 import dotenv from "dotenv";
 import express from "express";
 import { createWalletClient, http, publicActions } from "viem";
@@ -84,6 +94,8 @@ const cardanoMnemonic = process.env.CARDANO_MNEMONIC as string | undefined;
 const cardanoNetwork = (process.env.CARDANO_NETWORK || "cardano:preprod") as Network;
 const blockfrostBaseUrl = process.env.BLOCKFROST_PREPROD_URL;
 const blockfrostProjectId = process.env.BLOCKFROST_PROJECT_ID;
+const aptosPrivateKey = process.env.APTOS_PRIVATE_KEY as string | undefined;
+const aptosRpcUrl = process.env.APTOS_RPC_URL as string | undefined;
 const ccdFacilitatorPrivateKey = process.env.CCD_FACILITATOR_PRIVATE_KEY as
   | string
   | undefined;
@@ -106,11 +118,15 @@ const tvmPrivateKey = process.env.TVM_PRIVATE_KEY as string | undefined;
 const hederaAccountId = process.env.HEDERA_ACCOUNT_ID;
 // Hedera private key should be an ECDSA key string (0x-prefixed or DER-encoded).
 const hederaPrivateKey = process.env.HEDERA_PRIVATE_KEY;
+// XRPL is keyless for the facilitator: the payer signs and pays fees.
+const xrplNetwork = process.env.XRPL_NETWORK || XRPL_TESTNET;
+const xrplWsUrl = process.env.XRPL_WS_URL as string | undefined;
 
 // Validate at least one private key is provided
 if (
   !avmPrivateKey &&
   !cardanoMnemonic &&
+  !aptosPrivateKey &&
   !(ccdFacilitatorPrivateKey && ccdFacilitatorAddress) &&
   !evmPrivateKey &&
   !keetaMnemonic &&
@@ -121,7 +137,7 @@ if (
   !(hederaAccountId && hederaPrivateKey)
 ) {
   console.error(
-    "❌ At least one of AVM_PRIVATE_KEY, CARDANO_MNEMONIC, CCD_FACILITATOR_PRIVATE_KEY + CCD_FACILITATOR_ADDRESS, EVM_PRIVATE_KEY, KEETA_MNEMONIC, NEAR_RELAYER_ACCOUNT_ID + NEAR_RELAYER_PRIVATE_KEY, SVM_PRIVATE_KEY, STELLAR_PRIVATE_KEY, TVM_PRIVATE_KEY, or HEDERA_ACCOUNT_ID + HEDERA_PRIVATE_KEY is required",
+    "❌ At least one of AVM_PRIVATE_KEY, APTOS_PRIVATE_KEY, CARDANO_MNEMONIC, CCD_FACILITATOR_PRIVATE_KEY + CCD_FACILITATOR_ADDRESS, EVM_PRIVATE_KEY, KEETA_MNEMONIC, NEAR_RELAYER_ACCOUNT_ID + NEAR_RELAYER_PRIVATE_KEY, SVM_PRIVATE_KEY, STELLAR_PRIVATE_KEY, TVM_PRIVATE_KEY, or HEDERA_ACCOUNT_ID + HEDERA_PRIVATE_KEY is required",
   );
   process.exit(1);
 }
@@ -129,6 +145,7 @@ if (
 // Network configuration (alphabetic order)
 const AVM_NETWORK = "algorand:SGO1GKSzyE7IEPItTxCByw9x8FmnrCDexi9/cOUJOiI="; // Algorand Testnet
 const CARDANO_NETWORK = cardanoNetwork; // Cardano Preprod Testnet (default)
+const APTOS_NETWORK = (process.env.APTOS_NETWORK || "aptos:2") as Network; // Aptos Testnet
 const CCD_NETWORK = "ccd:4221332d34e1694168c2a0c0b3fd0f27"; // Concordium Testnet
 const EVM_NETWORK = "eip155:84532"; // Base Sepolia
 const HEDERA_NETWORK = "hedera:testnet"; // Hedera Testnet
@@ -137,6 +154,7 @@ const NEAR_NETWORK = nearNetwork as Network; // NEAR Testnet
 const SVM_NETWORK = "solana:EtWTRABZaYq6iMfeYKouRu166VU2xqa1"; // Solana Devnet
 const STELLAR_NETWORK = "stellar:testnet"; // Stellar Testnet
 const TVM_NETWORK = (process.env.TVM_NETWORK || "tvm:-3") as Network; // TON Testnet
+const XRPL_NETWORK = xrplNetwork as Network; // XRPL Testnet
 
 // Initialize the x402 Facilitator
 const facilitator = new x402Facilitator()
@@ -164,6 +182,25 @@ if (avmPrivateKey) {
   const avmSigner = toFacilitatorAvmSigner(avmPrivateKey);
   console.info(`AVM Facilitator account: ${avmSigner.getAddresses()[0]}`);
   facilitator.register(AVM_NETWORK, new ExactAvmScheme(avmSigner));
+}
+
+// Register Aptos scheme if private key is provided
+if (aptosPrivateKey) {
+  const formattedKey = AptosPrivateKey.formatPrivateKey(
+    aptosPrivateKey,
+    PrivateKeyVariants.Ed25519,
+  );
+  const aptosAccount = Account.fromPrivateKey({
+    privateKey: new Ed25519PrivateKey(formattedKey),
+  });
+  const aptosSigner = toFacilitatorAptosSigner(
+    aptosAccount,
+    aptosRpcUrl ? { defaultRpcUrl: aptosRpcUrl } : undefined,
+  );
+  facilitator.register(APTOS_NETWORK, new ExactAptosScheme(aptosSigner));
+  console.info(
+    `Aptos Facilitator account: ${aptosAccount.accountAddress.toStringLong()} on ${APTOS_NETWORK}`,
+  );
 }
 
 // Register Cardano scheme if a mnemonic and Blockfrost connection are provided
@@ -359,6 +396,23 @@ if (tvmPrivateKey) {
   );
 
   facilitator.register(TVM_NETWORK, new ExactTvmScheme(tvmSigner));
+}
+
+// Register XRPL scheme if XRPL_NETWORK is set. XRPL is keyless: the payer
+// signs and pays transaction fees; the facilitator only reads ledger state
+// and submits the payer-signed transaction.
+if (process.env.XRPL_NETWORK) {
+  facilitator.register(
+    XRPL_NETWORK,
+    new ExactXrplScheme(
+      xrplWsUrl
+        ? { wsUrlByNetwork: { [XRPL_NETWORK as `xrpl:${number}`]: xrplWsUrl } }
+        : {},
+    ),
+  );
+  console.info(
+    `XRPL facilitator enabled on ${XRPL_NETWORK} (payer-signed transactions; no facilitator signer)`,
+  );
 }
 
 // Initialize Express app

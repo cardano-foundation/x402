@@ -15,6 +15,8 @@ import { ExactCardanoScheme } from "@x402/cardano/exact/server";
 import { ExactTvmScheme } from "@x402/tvm/exact/server";
 import { ExactAvmScheme } from "@x402/avm/exact/server";
 import { ExactNearScheme } from "@x402/near/exact/server";
+import type { XrplAssetTransferMethod } from "@x402/xrpl";
+import { ExactXrplScheme } from "@x402/xrpl/exact/server";
 import { ExactConcordiumScheme } from "@x402/concordium/exact/server";
 import { bazaarResourceServerExtension, declareDiscoveryExtension } from "@x402/extensions/bazaar";
 import {
@@ -46,6 +48,7 @@ const STELLAR_NETWORK = (process.env.STELLAR_NETWORK || "stellar:testnet") as `$
 const CARDANO_NETWORK = (process.env.CARDANO_NETWORK || "cardano:preprod") as `${string}:${string}`;
 const TVM_NETWORK = (process.env.TVM_NETWORK || "tvm:-3") as `${string}:${string}`;
 const NEAR_NETWORK = (process.env.NEAR_NETWORK || "near:testnet") as `${string}:${string}`;
+const XRPL_NETWORK = (process.env.XRPL_NETWORK || "xrpl:1") as `${string}:${string}`;
 const CCD_NETWORK = (process.env.CCD_NETWORK || "ccd:4221332d34e1694168c2a0c0b3fd0f27") as `${string}:${string}`;
 const CCD_PAYEE_ADDRESS = process.env.CCD_PAYEE_ADDRESS as string | undefined;
 const CCD_WEATHER_PRICE_MICRO_CCD = "1000";
@@ -61,10 +64,47 @@ const TVM_PAYEE_ADDRESS = process.env.TVM_PAYEE_ADDRESS as string | undefined;
 const NEAR_PAYEE_ADDRESS = process.env.NEAR_PAYEE_ADDRESS as string | undefined;
 const NEAR_ASSET = process.env.NEAR_ASSET as string | undefined;
 const NEAR_AMOUNT = process.env.NEAR_AMOUNT as string | undefined;
+const XRPL_PAYEE_ADDRESS = process.env.XRPL_PAYEE_ADDRESS as string | undefined;
+const XRPL_ASSET = process.env.XRPL_ASSET as string | undefined;
+const XRPL_AMOUNT = process.env.XRPL_AMOUNT as string | undefined;
+const XRPL_ISSUER = process.env.XRPL_ISSUER as string | undefined;
 const HEDERA_ASSET = process.env.HEDERA_ASSET ?? "0.0.0"; // 0.0.0 = HBAR or 0.0.429274 for USDC testnet
 const HEDERA_AMOUNT = process.env.HEDERA_AMOUNT ?? "100000"; // price in smallest units (tinybars or token decimals), defaults to 0.001 HBAR or 0.1 USDC
 const EVM_PERMIT2_ASSET = process.env.EVM_PERMIT2_ASSET as `0x${string}`;
 const facilitatorUrl = process.env.FACILITATOR_URL;
+
+const xrplPaymentConfig = (payTo: string, assetTransferMethod: XrplAssetTransferMethod) => ({
+  accepts: {
+    payTo,
+    scheme: "exact" as const,
+    price: {
+      amount: XRPL_AMOUNT || "1000",
+      asset: XRPL_ASSET || "XRP",
+      extra: {
+        assetTransferMethod,
+        ...(XRPL_ASSET && XRPL_ASSET !== "XRP" && XRPL_ISSUER ? { issuer: XRPL_ISSUER } : {}),
+      },
+    },
+    network: XRPL_NETWORK,
+  },
+  extensions: {
+    ...declareDiscoveryExtension({
+      output: {
+        example: {
+          message: "Protected XRPL endpoint accessed successfully",
+          timestamp: "2024-01-01T00:00:00Z",
+        },
+        schema: {
+          properties: {
+            message: { type: "string" },
+            timestamp: { type: "string" },
+          },
+          required: ["message", "timestamp"],
+        },
+      },
+    }),
+  },
+});
 
 if (!EVM_PAYEE_ADDRESS) {
   console.error("❌ EVM_PAYEE_ADDRESS environment variable is required");
@@ -139,6 +179,9 @@ if (TVM_PAYEE_ADDRESS) {
 }
 if (NEAR_PAYEE_ADDRESS) {
   x402Server.register("near:*", new ExactNearScheme());
+}
+if (XRPL_PAYEE_ADDRESS) {
+  x402Server.register("xrpl:*", new ExactXrplScheme());
 }
 
 // Register Bazaar discovery extension
@@ -291,6 +334,23 @@ app.get("/exact/near", async (c, next) => {
       {
         error: "NEAR payments not configured",
         message: "NEAR_PAYEE_ADDRESS environment variable is not set",
+      },
+      501,
+    );
+  }
+  await next();
+});
+
+/**
+ * Pre-middleware guard for optional XRPL endpoint
+ * Returns 501 Not Implemented if XRPL is not configured
+ */
+app.use("/exact/xrpl/*", async (c, next) => {
+  if (!XRPL_PAYEE_ADDRESS) {
+    return c.json(
+      {
+        error: "XRPL payments not configured",
+        message: "XRPL_PAYEE_ADDRESS environment variable is not set",
       },
       501,
     );
@@ -822,6 +882,15 @@ app.use(
             },
           }
         : {}),
+      ...(XRPL_PAYEE_ADDRESS
+        ? {
+            "GET /exact/xrpl/sequence": xrplPaymentConfig(XRPL_PAYEE_ADDRESS, "sequence"),
+            "GET /exact/xrpl/ticketSequence": xrplPaymentConfig(
+              XRPL_PAYEE_ADDRESS,
+              "ticketSequence",
+            ),
+          }
+        : {}),
     },
     x402Server, // Pass pre-configured server instance
   ),
@@ -1061,6 +1130,17 @@ if (NEAR_PAYEE_ADDRESS) {
   });
 }
 
+if (XRPL_PAYEE_ADDRESS) {
+  for (const assetTransferMethod of ["sequence", "ticketSequence"] as const) {
+    app.get(`/exact/xrpl/${assetTransferMethod}`, c => {
+      return c.json({
+        message: "Protected XRPL endpoint accessed successfully",
+        timestamp: new Date().toISOString(),
+      });
+    });
+  }
+}
+
 /**
  * Protected Cardano endpoint - requires payment to access
  *
@@ -1127,6 +1207,7 @@ console.log(`
 ║  Stellar Network: ${STELLAR_NETWORK}                    ║
 ║  Cardano Network: ${CARDANO_NETWORK}                    ║
 ║  NEAR Network:   ${NEAR_NETWORK}                        ║
+║  XRPL Network:   ${XRPL_NETWORK}                        ║
 ║  CCD Network:    ${CCD_NETWORK}                          ║
 ║  AVM Payee:      ${AVM_PAYEE_ADDRESS || "(not configured)"}
 ║  EVM Payee:      ${EVM_PAYEE_ADDRESS}                   ║
@@ -1138,6 +1219,7 @@ console.log(`
 ║  Stellar Payee:  ${STELLAR_PAYEE_ADDRESS || "(not configured)"}
 ║  Cardano Payee:  ${CARDANO_PAYEE_ADDRESS || "(not configured)"}
 ║  NEAR Payee:     ${NEAR_PAYEE_ADDRESS || "(not configured)"}
+║  XRPL Payee:     ${XRPL_PAYEE_ADDRESS || "(not configured)"}
 ║                                                        ║
 ║  Endpoints:                                            ║
 ║  • GET  /exact/avm                            (AVM)           ║
@@ -1153,6 +1235,8 @@ console.log(`
 ║  • GET  /exact/stellar                        (Stellar)       ║
 ║  • GET  /exact/cardano                        (Cardano)       ║
 ║  • GET  /exact/near                           (NEAR)          ║
+║  • GET  /exact/xrpl/sequence                  (XRPL Sequence) ║
+║  • GET  /exact/xrpl/ticketSequence            (XRPL Ticket)   ║
 ║  • GET  /health                  (no payment required)     ║
 ║  • POST /close                   (shutdown server)         ║
 ╚════════════════════════════════════════════════════════╝

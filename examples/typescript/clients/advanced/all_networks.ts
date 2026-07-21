@@ -5,12 +5,19 @@
  * optional chain configuration via environment variables.
  *
  * New chain support should be added here in alphabetic order by network prefix
- * (e.g., "algorand" before "ccd" before "eip155" before "hedera" before "near" before "solana" before "stellar" before "tvm").
+ * (e.g., "algorand" before "aptos" before "ccd" before "eip155" before "hedera" before "near" before "solana" before "stellar" before "tvm" before "xrpl").
  */
 
+import {
+  Account,
+  Ed25519PrivateKey,
+  PrivateKey as AptosPrivateKey,
+  PrivateKeyVariants,
+} from "@aptos-labs/ts-sdk";
 import { config } from "dotenv";
 import type { Network } from "@x402/core/types";
 import { x402Client, wrapFetchWithPayment, x402HTTPClient } from "@x402/fetch";
+import { ExactAptosScheme } from "@x402/aptos/exact/client";
 import { toClientAvmSigner } from "@x402/avm";
 import { ExactAvmScheme } from "@x402/avm/exact/client";
 import { toClientCardanoSigner } from "@x402/cardano";
@@ -34,6 +41,9 @@ import { ExactHederaScheme } from "@x402/hedera/exact/client";
 import { createClientHederaSigner, PrivateKey } from "@x402/hedera";
 import { toClientTvmSigner, TVM_PROVIDER_TONAPI, TVM_PROVIDER_TONCENTER } from "@x402/tvm";
 import { keyPairFromSeed, type KeyPair } from "@ton/crypto";
+import { createXrplWalletSigner, XRPL_TESTNET } from "@x402/xrpl";
+import { ExactXrplScheme } from "@x402/xrpl/exact/client";
+import { Wallet } from "xrpl";
 import { buildBasicAccountSigner, AccountAddress } from "@concordium/web-sdk";
 import { base58 } from "@scure/base";
 import { createKeyPairSignerFromBytes } from "@solana/kit";
@@ -48,6 +58,7 @@ const cardanoMnemonic = process.env.CARDANO_MNEMONIC as string | undefined;
 const cardanoNetwork = process.env.CARDANO_NETWORK || "cardano:preprod";
 const blockfrostBaseUrl = process.env.BLOCKFROST_PREPROD_URL;
 const blockfrostProjectId = process.env.BLOCKFROST_PROJECT_ID;
+const aptosPrivateKey = process.env.APTOS_PRIVATE_KEY as string | undefined;
 const ccdPrivateKey = process.env.CCD_PRIVATE_KEY as string | undefined;
 const ccdAddress = process.env.CCD_ADDRESS as string | undefined;
 const evmPrivateKey = process.env.EVM_PRIVATE_KEY as `0x${string}` | undefined;
@@ -67,6 +78,9 @@ const hederaNetwork = process.env.HEDERA_NETWORK || "hedera:testnet";
 const tvmPrivateKey = process.env.TVM_PRIVATE_KEY as string | undefined;
 const tvmNetwork = process.env.TVM_NETWORK || "tvm:-3";
 const tvmProvider = (process.env.TVM_PROVIDER || TVM_PROVIDER_TONCENTER).toLowerCase();
+const xrplSeed = process.env.XRPL_SEED as string | undefined;
+const xrplNetwork = (process.env.XRPL_NETWORK || XRPL_TESTNET) as Network;
+const xrplWsUrl = process.env.XRPL_WS_URL as string | undefined;
 const baseURL = process.env.RESOURCE_SERVER_URL || "http://localhost:4021";
 const endpointPath = process.env.ENDPOINT_PATH || "/weather";
 const url = `${baseURL}${endpointPath}`;
@@ -100,6 +114,7 @@ async function main(): Promise<void> {
   if (
     !avmPrivateKey &&
     !cardanoMnemonic &&
+    !aptosPrivateKey &&
     !(ccdPrivateKey && ccdAddress) &&
     !evmPrivateKey &&
     !keetaMnemonic &&
@@ -107,10 +122,11 @@ async function main(): Promise<void> {
     !svmPrivateKey &&
     !stellarPrivateKey &&
     !(hederaAccountId && hederaPrivateKey) &&
-    !tvmPrivateKey
+    !tvmPrivateKey &&
+    !xrplSeed
   ) {
     console.error(
-      "❌ At least one of AVM_PRIVATE_KEY, CARDANO_MNEMONIC, CCD_PRIVATE_KEY + CCD_ADDRESS, EVM_PRIVATE_KEY, KEETA_MNEMONIC, NEAR_ACCOUNT_ID + NEAR_PRIVATE_KEY, SVM_PRIVATE_KEY, STELLAR_PRIVATE_KEY, HEDERA_ACCOUNT_ID + HEDERA_PRIVATE_KEY, or TVM_PRIVATE_KEY is required",
+      "❌ At least one of AVM_PRIVATE_KEY, APTOS_PRIVATE_KEY, CARDANO_MNEMONIC, CCD_PRIVATE_KEY + CCD_ADDRESS, EVM_PRIVATE_KEY, KEETA_MNEMONIC, NEAR_ACCOUNT_ID + NEAR_PRIVATE_KEY, SVM_PRIVATE_KEY, STELLAR_PRIVATE_KEY, HEDERA_ACCOUNT_ID + HEDERA_PRIVATE_KEY, TVM_PRIVATE_KEY, or XRPL_SEED is required",
     );
     process.exit(1);
   }
@@ -123,6 +139,17 @@ async function main(): Promise<void> {
     const avmSigner = toClientAvmSigner(avmPrivateKey);
     client.register("algorand:*", new ExactAvmScheme(avmSigner));
     console.log(`Initialized AVM account: ${avmSigner.address}`);
+  }
+
+  // Register Aptos scheme if private key is provided
+  if (aptosPrivateKey) {
+    const formattedKey = AptosPrivateKey.formatPrivateKey(
+      aptosPrivateKey,
+      PrivateKeyVariants.Ed25519,
+    );
+    const account = Account.fromPrivateKey({ privateKey: new Ed25519PrivateKey(formattedKey) });
+    client.register("aptos:*", new ExactAptosScheme(account));
+    console.log(`Initialized Aptos account: ${account.accountAddress.toStringLong()}`);
   }
 
   // Register Cardano scheme if a mnemonic and Blockfrost connection are provided
@@ -222,6 +249,19 @@ async function main(): Promise<void> {
     });
     client.register("tvm:*", new ExactTvmScheme(tvmSigner));
     console.log(`Initialized TVM account: ${tvmSigner.address}`);
+  }
+
+  // Register XRPL scheme if seed is provided
+  if (xrplSeed) {
+    const xrplSigner = createXrplWalletSigner(Wallet.fromSeed(xrplSeed));
+    client.register(
+      xrplNetwork,
+      new ExactXrplScheme(
+        xrplSigner,
+        xrplWsUrl ? { wsUrlByNetwork: { [xrplNetwork as `xrpl:${number}`]: xrplWsUrl } } : {},
+      ),
+    );
+    console.log(`Initialized XRPL account: ${xrplSigner.classicAddress} on ${xrplNetwork}`);
   }
 
   // Wrap fetch with payment handling

@@ -498,7 +498,7 @@ function maskPrivateKeys<T>(value: T): T {
     const masked: Record<string, unknown> = {};
     for (const [key, entry] of Object.entries(value)) {
       masked[key] =
-        /privateKey/i.test(key) && typeof entry === 'string' && entry.length > 0
+        /(privateKey|seed)$/i.test(key) && typeof entry === 'string' && entry.length > 0
           ? maskSecret(entry)
           : maskPrivateKeys(entry);
     }
@@ -699,6 +699,51 @@ async function waitForCardanoWalletSettled(opts: {
   verboseLog(`  ⚠️ Timed out waiting for Blockfrost to reflect ${txHash.slice(0, 12)}…; proceeding`);
 }
 
+function waitForChildProcess(child: ChildProcess, timeoutMs: number): Promise<boolean> {
+  if (child.exitCode !== null || child.signalCode !== null) {
+    return Promise.resolve(true);
+  }
+
+  return new Promise(resolve => {
+    const onClose = () => {
+      clearTimeout(timeout);
+      resolve(true);
+    };
+    const timeout = setTimeout(() => {
+      child.removeListener('close', onClose);
+      resolve(false);
+    }, timeoutMs);
+
+    child.once('close', onClose);
+  });
+}
+
+async function stopMockFacilitator(child: ChildProcess, url: string): Promise<void> {
+  try {
+    const response = await fetch(`${url}/close`, {
+      method: 'POST',
+      signal: AbortSignal.timeout(2_000),
+    });
+    await response.text();
+  } catch (error) {
+    verboseLog(`Mock facilitator graceful shutdown failed: ${String(error)}`);
+  }
+
+  if (await waitForChildProcess(child, 3_000)) {
+    return;
+  }
+
+  child.kill('SIGTERM');
+  if (await waitForChildProcess(child, 3_000)) {
+    return;
+  }
+
+  child.kill('SIGKILL');
+  await waitForChildProcess(child, 2_000);
+  child.stdout?.destroy();
+  child.stderr?.destroy();
+}
+
 async function runTest() {
   // Show help if requested
   if (parsedArgs.showHelp) {
@@ -726,6 +771,7 @@ async function runTest() {
   const serverTvmAddress = process.env.SERVER_TVM_ADDRESS;
   const serverCardanoAddress = process.env.SERVER_CARDANO_ADDRESS;
   const serverNearAddress = process.env.SERVER_NEAR_ADDRESS;
+  const serverXrplAddress = process.env.SERVER_XRPL_ADDRESS;
   const clientEvmPrivateKey = process.env.CLIENT_EVM_PRIVATE_KEY;
   const clientSvmPrivateKey = process.env.CLIENT_SVM_PRIVATE_KEY;
   const clientAvmPrivateKey = process.env.CLIENT_AVM_PRIVATE_KEY;
@@ -740,6 +786,7 @@ async function runTest() {
   const clientCardanoMnemonic = process.env.CLIENT_CARDANO_MNEMONIC;
   const clientNearAccountId = process.env.CLIENT_NEAR_ACCOUNT_ID;
   const clientNearPrivateKey = process.env.CLIENT_NEAR_PRIVATE_KEY;
+  const clientXrplSeed = process.env.CLIENT_XRPL_SEED;
   const facilitatorEvmPrivateKey = process.env.FACILITATOR_EVM_PRIVATE_KEY;
   const facilitatorSvmPrivateKey = process.env.FACILITATOR_SVM_PRIVATE_KEY;
   const facilitatorAvmPrivateKey = process.env.FACILITATOR_AVM_PRIVATE_KEY;
@@ -840,6 +887,7 @@ async function runTest() {
   log(`   TVM: ${networks.tvm.name} (${networks.tvm.caip2})`);
   log(`   CARDANO: ${networks.cardano.name} (${networks.cardano.caip2})`);
   log(`   NEAR: ${networks.near.name} (${networks.near.caip2})`);
+  log(`   XRPL: ${networks.xrpl.name} (${networks.xrpl.caip2})`);
 
   if (networkMode === 'mainnet') {
     log('\n⚠️  WARNING: Running on MAINNET - real funds will be used!');
@@ -911,6 +959,10 @@ async function runTest() {
       ['CLIENT_NEAR_PRIVATE_KEY', clientNearPrivateKey],
       ['FACILITATOR_NEAR_ACCOUNT_ID', facilitatorNearAccountId],
       ['FACILITATOR_NEAR_PRIVATE_KEY', facilitatorNearPrivateKey],
+    ],
+    xrpl: [
+      ['SERVER_XRPL_ADDRESS', serverXrplAddress],
+      ['CLIENT_XRPL_SEED', clientXrplSeed],
     ],
   };
 
@@ -1135,6 +1187,12 @@ async function runTest() {
     'NEAR_PAYEE_ADDRESS',
     'NEAR_ASSET',
     'NEAR_AMOUNT',
+    'XRPL_NETWORK',
+    'XRPL_WS_URL',
+    'XRPL_SEED',
+    'XRPL_PAYEE_ADDRESS',
+    'XRPL_ASSET',
+    'XRPL_AMOUNT',
   ]);
 
   for (const [facilitatorName, facilitator] of uniqueFacilitators) {
@@ -1283,7 +1341,7 @@ async function runTest() {
   const mockFacilitatorPort = allocatePort();
   log(`\n🎭 Starting mock facilitator on port ${mockFacilitatorPort}...`);
   const mockFacilitatorProcess: ChildProcess = spawn(
-    'npx', ['tsx', 'index.ts'],
+    process.execPath, ['--import', 'tsx', 'index.ts'],
     {
       cwd: join(process.cwd(), 'mock-facilitator'),
       env: {
@@ -1298,6 +1356,7 @@ async function runTest() {
         TVM_NETWORK: networks.tvm.caip2,
         CARDANO_NETWORK: networks.cardano.caip2,
         NEAR_NETWORK: networks.near.caip2,
+        XRPL_NETWORK: networks.xrpl.caip2,
       },
       stdio: 'pipe',
     },
@@ -1323,7 +1382,7 @@ async function runTest() {
   );
   if (!mockHealthy) {
     log('❌ Failed to start mock facilitator');
-    mockFacilitatorProcess.kill();
+    await stopMockFacilitator(mockFacilitatorProcess, mockFacilitatorUrl);
     process.exit(1);
   }
   log(`  ✅ Mock facilitator ready at ${mockFacilitatorUrl}`);
@@ -1386,6 +1445,9 @@ async function runTest() {
       nearPrivateKey: clientNearPrivateKey || '',
       nearNetwork: networks.near.caip2,
       nearRpcUrl: networks.near.rpcUrl,
+      xrplSeed: clientXrplSeed || '',
+      xrplNetwork: networks.xrpl.caip2,
+      xrplWsUrl: networks.xrpl.rpcUrl,
     };
 
     try {
@@ -1621,6 +1683,7 @@ async function runTest() {
     const facilitatorSupportsTvm = facilitatorConfig?.protocolFamilies?.includes('tvm') ?? false;
     const facilitatorSupportsCardano = facilitatorConfig?.protocolFamilies?.includes('cardano') ?? false;
     const facilitatorSupportsNear = facilitatorConfig?.protocolFamilies?.includes('near') ?? false;
+    const facilitatorSupportsXrpl = facilitatorConfig?.protocolFamilies?.includes('xrpl') ?? false;
 
     const serverConfig: ServerConfig = {
       port,
@@ -1644,6 +1707,10 @@ async function runTest() {
       nearPayTo: facilitatorSupportsNear ? (serverNearAddress || '') : '',
       nearAsset: process.env.SERVER_NEAR_ASSET,
       nearAmount: process.env.SERVER_NEAR_AMOUNT,
+      xrplPayTo: facilitatorSupportsXrpl ? (serverXrplAddress || '') : '',
+      xrplAsset: process.env.SERVER_XRPL_ASSET,
+      xrplAmount: process.env.SERVER_XRPL_AMOUNT,
+      xrplIssuer: process.env.SERVER_XRPL_ISSUER,
       networks,
       facilitatorUrl,
       mockFacilitatorUrl,
@@ -1909,8 +1976,10 @@ async function runTest() {
     facilitatorStopPromises.push(manager.stop());
   }
   log('  🛑 Stopping mock facilitator');
-  mockFacilitatorProcess.kill();
-  await Promise.all(facilitatorStopPromises);
+  await Promise.all([
+    stopMockFacilitator(mockFacilitatorProcess, mockFacilitatorUrl),
+    ...facilitatorStopPromises,
+  ]);
 
   // Calculate totals
   const passed = testResults.filter(r => r.passed).length;
@@ -2073,12 +2142,13 @@ async function runTest() {
   }
 
   // Close logger
-  closeLogger();
-
-  if (failed > 0 || discoveryFailed) {
-    process.exit(1);
-  }
+  await closeLogger();
+  process.exit(failed > 0 || discoveryFailed ? 1 : 0);
 }
 
 // Run the test
-runTest().catch(error => errorLog(error));
+runTest().catch(async error => {
+  errorLog(String(error));
+  await closeLogger();
+  process.exit(1);
+});

@@ -13,6 +13,7 @@
     "tvm",
     "near",
     "ccd",
+    "xrpl",
     "cardano"
   ],
   "x402Versions": [1, 2],
@@ -60,6 +61,8 @@
       "NEAR_RELAYER_PRIVATE_KEY",
       "NEAR_NETWORK",
       "NEAR_RPC_URL",
+      "XRPL_NETWORK",
+      "XRPL_WS_URL",
       "CCD_FACILITATOR_PRIVATE_KEY",
       "CCD_FACILITATOR_ADDRESS"
     ]

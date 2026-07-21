@@ -124,7 +124,7 @@ When the Resource Server responds with a `402 Payment Required`, the body of the
       "scheme": "exact",
       "network": "cardano:mainnet", // cardano:preprod or cardano:preview for public testnets
       "amount": "10000", // 1 USDM = 1000000000
-      "asset": "c48cbb3d5e57ed56e276bc45f99ab39abe94e6cd7ac39fb402da47ad.0014df105553444d", // ${policyId}.${assetName} The policy id in this example is the USDM policy id on Cardano Mainnet - use 16a55b2a349361ff88c03788f93e1e966e5d689605d044fef722ddde for USDM on Preprod. The asset name is the hex representation of '(333) USDM'
+      "asset": "c48cbb3d5e57ed56e276bc45f99ab39abe94e6cd7ac39fb402da47ad.0014df105553444d", // ${policyId}.${assetName} The policy id in this example is the USDM policy id on Cardano Mainnet - use e675b46e4d2242c991a8932a99db3044e80515ae14b4c4ccf6b3f4c9 for USDM on Preprod. The asset name is the hex representation of '(333) USDM'
       "payTo": "addr1...",
       "maxTimeoutSeconds": 600, // Has to be set to a higher amount of time because of the Cardano Network speed
       "extra": {
