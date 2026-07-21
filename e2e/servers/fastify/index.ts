@@ -59,6 +59,11 @@ const HEDERA_PAYEE_ADDRESS = process.env.HEDERA_PAYEE_ADDRESS as string | undefi
 const KEETA_PAYEE_ADDRESS = process.env.KEETA_PAYEE_ADDRESS as string | undefined;
 const STELLAR_PAYEE_ADDRESS = process.env.STELLAR_PAYEE_ADDRESS as string | undefined;
 const CARDANO_PAYEE_ADDRESS = process.env.CARDANO_PAYEE_ADDRESS as string | undefined;
+// Asset the Cardano endpoint charges in; defaults to lovelace (tADA) so the e2e
+// is faucet-fundable. Set CARDANO_ASSET to a `policyId.assetNameHex` unit to run
+// the same endpoint against a native token.
+const CARDANO_ASSET = process.env.CARDANO_ASSET || "lovelace";
+const CARDANO_AMOUNT = process.env.CARDANO_AMOUNT || "5000000";
 const TVM_PAYEE_ADDRESS = process.env.TVM_PAYEE_ADDRESS as string | undefined;
 const NEAR_NETWORK = (process.env.NEAR_NETWORK || "near:testnet") as `${string}:${string}`;
 const NEAR_PAYEE_ADDRESS = process.env.NEAR_PAYEE_ADDRESS as string | undefined;
@@ -723,7 +728,7 @@ paymentMiddleware(
             accepts: {
               payTo: CARDANO_PAYEE_ADDRESS!,
               scheme: "exact",
-              price: "$0.001",
+              price: { amount: CARDANO_AMOUNT, asset: CARDANO_ASSET },
               network: CARDANO_NETWORK,
             },
             extensions: {

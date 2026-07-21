@@ -128,6 +128,8 @@ export interface ServerConfig {
   stellarPayTo: string;
   tvmPayTo: string;
   cardanoPayTo: string;
+  cardanoAsset?: string;
+  cardanoAmount?: string;
   nearPayTo: string;
   nearAsset?: string;
   nearAmount?: string;

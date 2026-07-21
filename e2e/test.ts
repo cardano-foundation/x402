@@ -1704,6 +1704,8 @@ async function runTest() {
       stellarPayTo: facilitatorSupportsStellar ? (serverStellarAddress || '') : '',
       tvmPayTo: facilitatorSupportsTvm ? (serverTvmAddress || '') : '',
       cardanoPayTo: facilitatorSupportsCardano ? (serverCardanoAddress || '') : '',
+      cardanoAsset: process.env.SERVER_CARDANO_ASSET,
+      cardanoAmount: process.env.SERVER_CARDANO_AMOUNT,
       nearPayTo: facilitatorSupportsNear ? (serverNearAddress || '') : '',
       nearAsset: process.env.SERVER_NEAR_ASSET,
       nearAmount: process.env.SERVER_NEAR_AMOUNT,

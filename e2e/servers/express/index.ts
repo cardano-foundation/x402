@@ -12,7 +12,7 @@ import { KEETA_TESTNET_CAIP2 } from "@x402/keeta";
 import { ExactKeetaScheme } from "@x402/keeta/exact/server";
 import { ExactStellarScheme } from "@x402/stellar/exact/server";
 import { ExactCardanoScheme } from "@x402/cardano/exact/server";
-import { masumiContractAddress, getDefaultUsdmAsset } from "@x402/cardano";
+import { masumiContractAddress } from "@x402/cardano";
 import { ExactTvmScheme } from "@x402/tvm/exact/server";
 import { ExactNearScheme } from "@x402/near/exact/server";
 import type { XrplAssetTransferMethod } from "@x402/xrpl";
@@ -59,6 +59,13 @@ const HEDERA_PAYEE_ADDRESS = process.env.HEDERA_PAYEE_ADDRESS as string | undefi
 const KEETA_PAYEE_ADDRESS = process.env.KEETA_PAYEE_ADDRESS as string | undefined;
 const STELLAR_PAYEE_ADDRESS = process.env.STELLAR_PAYEE_ADDRESS as string | undefined;
 const CARDANO_PAYEE_ADDRESS = process.env.CARDANO_PAYEE_ADDRESS as string | undefined;
+// Asset the Cardano endpoints charge in. Defaults to lovelace (tADA) so the e2e
+// is faucet-fundable; set CARDANO_ASSET to a `policyId.assetNameHex` unit (e.g.
+// getDefaultUsdmAsset(CARDANO_NETWORK)) to run the same methods against a native
+// token. CARDANO_AMOUNT is in the asset's smallest unit and must clear the
+// masumi escrow's min-UTXO when paying lovelace.
+const CARDANO_ASSET = process.env.CARDANO_ASSET || "lovelace";
+const CARDANO_AMOUNT = process.env.CARDANO_AMOUNT || "5000000";
 // Script (assetTransferMethod=script) fixture: a minimal always-succeeds Plutus
 // V3 validator and its enterprise (preprod/preview) script address. The
 // facilitator reconstructs this address from the script in `extra` and verifies
@@ -785,13 +792,14 @@ app.use(
         : {}),
       ...(CARDANO_PAYEE_ADDRESS
         ? {
-          // One endpoint per Cardano assetTransferMethod; all pay lovelace
-          // (tADA) so the e2e is faucet-fundable (preprod USDM is not).
+          // One endpoint per Cardano assetTransferMethod. The asset is a config
+          // axis (CARDANO_ASSET), not a separate endpoint, so the same three
+          // methods run unchanged against tADA or a native token.
           "GET /exact/cardano/default": {
             accepts: {
               payTo: CARDANO_PAYEE_ADDRESS!,
               scheme: "exact",
-              price: { amount: "2000000", asset: "lovelace" },
+              price: { amount: CARDANO_AMOUNT, asset: CARDANO_ASSET },
               network: CARDANO_NETWORK,
               extra: { assetTransferMethod: "default" },
             },
@@ -799,11 +807,13 @@ app.use(
           },
           "GET /exact/cardano/masumi": {
             accepts: {
-              // Locks ADA into the vested_pay escrow (Web3CardanoV2): payTo is
-              // the escrow script address, seller is the payee.
+              // Locks into the vested_pay escrow (Web3CardanoV2): payTo is the
+              // escrow script address, seller is the payee. For a native-token
+              // lock the escrow output also carries structural lovelace
+              // (min-UTXO + collateral), which the client signer funds itself.
               payTo: masumiContractAddress(CARDANO_NETWORK),
               scheme: "exact",
-              price: { amount: "5000000", asset: "lovelace" },
+              price: { amount: CARDANO_AMOUNT, asset: CARDANO_ASSET },
               network: CARDANO_NETWORK,
               extra: {
                 assetTransferMethod: "masumi",
@@ -825,40 +835,13 @@ app.use(
             },
             extensions: { ...CARDANO_DISCOVERY },
           },
-          "GET /exact/cardano/masumi-usdm": {
-            accepts: {
-              // Masumi lock paying a native token (tUSDM) instead of ADA. The
-              // escrow output also carries structural lovelace (min-UTXO +
-              // collateral), which the client signer funds automatically. The
-              // buyer wallet must hold tUSDM (preprod) plus ~4 ADA for the lock.
-              payTo: masumiContractAddress(CARDANO_NETWORK),
-              scheme: "exact",
-              price: { amount: "1000000", asset: getDefaultUsdmAsset(CARDANO_NETWORK) },
-              network: CARDANO_NETWORK,
-              extra: {
-                assetTransferMethod: "masumi",
-                paymentType: "Web3CardanoV2",
-                contractAddress: masumiContractAddress(CARDANO_NETWORK),
-                sellerAddress: CARDANO_PAYEE_ADDRESS!,
-                agentIdentifier: "deadbeefdeadbeefdeadbeefdeadbeef",
-                inputHash: "9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08",
-                collateralReturnLovelace: "0",
-                referenceKey: "aa".repeat(32),
-                referenceSignature: "bb".repeat(64),
-                sellerNonce: "cc".repeat(32),
-                identifierFromPurchaser: "dd".repeat(32),
-                ...CARDANO_MASUMI_TIMES,
-              },
-            },
-            extensions: { ...CARDANO_DISCOVERY },
-          },
           "GET /exact/cardano/script": {
             accepts: {
               // payTo is the script address the facilitator reconstructs from
               // the script descriptor below and verifies it matches.
               payTo: CARDANO_SCRIPT_ADDRESS,
               scheme: "exact",
-              price: { amount: "2000000", asset: "lovelace" },
+              price: { amount: CARDANO_AMOUNT, asset: CARDANO_ASSET },
               network: CARDANO_NETWORK,
               extra: {
                 assetTransferMethod: "script",
@@ -1132,7 +1115,6 @@ if (CARDANO_PAYEE_ADDRESS) {
     [
       "/exact/cardano/default",
       "/exact/cardano/masumi",
-      "/exact/cardano/masumi-usdm",
       "/exact/cardano/script",
     ],
     (req, res) => {
@@ -1253,7 +1235,6 @@ app.listen(parseInt(PORT), () => {
 ║  • GET  /exact/stellar                        (Stellar)       ║
 ║  • GET  /exact/cardano/default                (Cardano)       ║
 ║  • GET  /exact/cardano/masumi                 (Cardano)       ║
-║  • GET  /exact/cardano/masumi-usdm            (Cardano)       ║
 ║  • GET  /exact/cardano/script                 (Cardano)       ║
 ║  • GET  /exact/tvm                            (TVM)           ║
 ║  • GET  /health                (no payment required)       ║

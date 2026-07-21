@@ -86,6 +86,26 @@ export function masumiMinUtxoLovelace(
 }
 
 /**
+ * Lovelace a native-token lock must put on the escrow output. The requested
+ * amount is the token, so this lovelace is purely structural: it has to clear
+ * the post-result min-UTXO and still cover the collateral the seller reclaims,
+ * hence the larger of the two.
+ *
+ * @param lockDatumBytes - Byte length of the current (empty-result) lock datum.
+ * @param collateralLovelace - The datum's `collateral_return_lovelace`.
+ * @param coinsPerUtxoByte - Live `coinsPerUtxoByte` protocol parameter.
+ * @returns The lovelace to attach to the escrow output.
+ */
+export function masumiTokenLockLovelace(
+  lockDatumBytes: number,
+  collateralLovelace: bigint,
+  coinsPerUtxoByte: bigint,
+): bigint {
+  const floor = masumiMinUtxoLovelace(lockDatumBytes, 1, coinsPerUtxoByte);
+  return floor > collateralLovelace ? floor : collateralLovelace;
+}
+
+/**
  * Resolves the address of Masumi's canonical `vested_pay` escrow for a network.
  * Fallback convenience only — the authoritative escrow address comes from the
  * purchase via `extra.contractAddress`; a server on a different deployment

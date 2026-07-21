@@ -22,7 +22,7 @@ import {
   LOVELACE_ASSET,
   normalizeCardanoNetwork,
 } from "./constants";
-import { masumiMinUtxoLovelace } from "./exact/masumi/constants";
+import { masumiTokenLockLovelace } from "./exact/masumi/constants";
 import { buildMasumiLockInline } from "./exact/masumi/lock";
 import { buildScriptDatumInline } from "./exact/script/datum";
 import type { CardanoExtra, CardanoExtraMasumi, CardanoExtraScript } from "./types";
@@ -417,10 +417,9 @@ export function toClientCardanoSigner(config: ClientCardanoSignerConfig): Client
         const collateral = masumiExtra.collateralReturnLovelace
           ? BigInt(masumiExtra.collateralReturnLovelace)
           : 0n;
-        const floor = masumiMinUtxoLovelace(datumBytes, 1, coinsPerUtxoByte);
         const { policyId, assetNameHex } = parseAssetUnit(input.asset);
         outputAssets = Assets.addByHex(
-          Assets.fromLovelace(floor > collateral ? floor : collateral),
+          Assets.fromLovelace(masumiTokenLockLovelace(datumBytes, collateral, coinsPerUtxoByte)),
           policyId,
           assetNameHex,
           BigInt(input.amount),

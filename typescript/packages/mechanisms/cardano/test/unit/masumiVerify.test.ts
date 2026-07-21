@@ -3,7 +3,11 @@ import { Data } from "@evolution-sdk/evolution";
 import type { PaymentRequirements } from "@x402/core/types";
 
 import { buildMasumiLockDatum, type MasumiLockDatumInput } from "../../src/exact/masumi/datum";
-import { masumiContractAddress } from "../../src/exact/masumi/constants";
+import {
+  masumiContractAddress,
+  masumiMinUtxoLovelace,
+  masumiTokenLockLovelace,
+} from "../../src/exact/masumi/constants";
 import { verifyMasumiLock } from "../../src/exact/masumi/verify";
 import { CARDANO_PREPROD_CAIP2, USDM_PREPROD_ASSET } from "../../src/constants";
 import type { CardanoExtraMasumi, DecodedCardanoTransaction } from "../../src/types";
@@ -314,5 +318,53 @@ describe("verifyMasumiLock", () => {
         datum: datumHex({ sellerReturnAddress: BUYER }),
       }).ok,
     ).toBe(false);
+  });
+});
+
+// A native-token lock's lovelace is purely structural: the client signer funds it
+// itself as max(post-result min-UTXO, collateral) rather than from the requested
+// amount. These pin that rule to the floor the facilitator derives independently
+// from the decoded datum — if the two ever diverge, a correctly built lock is
+// rejected, or an underfunded one is accepted and strands the seller's payout.
+describe("masumi native-token structural lovelace", () => {
+  const COINS_PER_UTXO_BYTE = 4310n;
+  const TOKEN_AMOUNT = 1_500_000n;
+
+  /** The funding the client signer attaches, via the same helper it calls. */
+  const clientFunding = (datum: string, collateral: bigint): bigint =>
+    masumiTokenLockLovelace(datum.length / 2, collateral, COINS_PER_UTXO_BYTE);
+
+  const lock = (datum: string, coin: bigint, extra: Partial<CardanoExtraMasumi> = {}) =>
+    run({
+      extra,
+      over: { asset: USDM_PREPROD_ASSET, amount: TOKEN_AMOUNT.toString() },
+      datum,
+      decode: { coin, assets: { [USDM_PREPROD_ASSET]: TOKEN_AMOUNT } },
+      coinsPerUtxoByte: COINS_PER_UTXO_BYTE,
+    });
+
+  it("funds enough lovelace to clear the facilitator's post-result min-UTXO", () => {
+    const datum = datumHex();
+    expect(lock(datum, clientFunding(datum, 0n))).toEqual({ ok: true });
+  });
+
+  it("funds no more than needed — one lovelace less is rejected", () => {
+    const datum = datumHex();
+    expect(lock(datum, clientFunding(datum, 0n) - 1n).ok).toBe(false);
+  });
+
+  it("raises the funding to the collateral when it exceeds the min-UTXO", () => {
+    const collateral = 6_000_000n;
+    const extra = { collateralReturnLovelace: collateral.toString() };
+    const datum = datumHex({ collateralReturnLovelace: collateral });
+    const floor = masumiMinUtxoLovelace(datum.length / 2, 1, COINS_PER_UTXO_BYTE);
+
+    // Guards the fixture: the collateral must actually dominate for this to test
+    // the max(), not just the min-UTXO branch again.
+    expect(collateral).toBeGreaterThan(floor);
+
+    expect(lock(datum, clientFunding(datum, collateral), extra)).toEqual({ ok: true });
+    // Funding the bare min-UTXO and ignoring the collateral bricks the payout.
+    expect(lock(datum, floor, extra).ok).toBe(false);
   });
 });
