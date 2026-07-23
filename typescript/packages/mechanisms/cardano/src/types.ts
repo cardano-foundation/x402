@@ -81,10 +81,10 @@ export interface CardanoExtraMasumi {
    */
   sellerReturnAddress?: string;
   /**
-   * datum `buyer_return_address`. **Buyer-supplied** — the resource server does
-   * not know the payer when it issues the 402 (the request is unauthenticated),
-   * so it normally omits this and the client fills it. Declared only by a server
-   * that already knows the purchase; the facilitator then matches it.
+   * datum `buyer_return_address`. **Buyer-chosen** — the resource server does
+   * not know the payer when it issues the 402, so the client fills it, and the
+   * facilitator never matches it against `extra` (unlike `sellerReturnAddress`).
+   * The buyer stays bound by the `buyer` = payer rule instead.
    */
   buyerReturnAddress?: string;
   /**

@@ -118,6 +118,21 @@ export function verifyMasumiLock(
   if (view.buyer.payment.isScript || view.seller.payment.isScript) {
     return fail(ERR_MASUMI_DATUM_INVALID);
   }
+  // No participant or return address may BE the escrow. Such a datum bricks the
+  // payout paths: a tagged payout would land back at the script address, where
+  // `vested_pay`'s continuation parsing (`expect new_datum: Datum` over every
+  // script-address output) aborts the whole spend. Anyone can lock this datum
+  // directly on-chain, so reject before a seller treats it as paid and works.
+  // Mirrors Masumi's own `decodeV2ContractDatum` rejection.
+  const escrow = addressCredentials(extra.contractAddress);
+  if (
+    sameCredentials(view.buyer, escrow) ||
+    sameCredentials(view.seller, escrow) ||
+    (view.buyerReturnAddress !== null && sameCredentials(view.buyerReturnAddress, escrow)) ||
+    (view.sellerReturnAddress !== null && sameCredentials(view.sellerReturnAddress, escrow))
+  ) {
+    return fail(ERR_MASUMI_DATUM_INVALID);
+  }
   // reference_signature: >= 16 bytes (32 hex chars).
   if (view.referenceSignature.length < 32) return fail(ERR_MASUMI_DATUM_INVALID);
   // Time ordering: pay_by <= submit_result <= unlock <= external_dispute_unlock.

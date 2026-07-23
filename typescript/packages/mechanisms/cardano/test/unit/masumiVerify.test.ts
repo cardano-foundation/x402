@@ -167,6 +167,19 @@ describe("verifyMasumiLock", () => {
     expect(run({ datum: withField(datumHex(), 17, Data.int(5n)) }).ok).toBe(false);
   });
 
+  // Masumi's own decodeV2ContractDatum rejects a datum in which any participant
+  // or return address IS the escrow: a tagged payout would land back at the
+  // script, where vested_pay's continuation parsing aborts the spend.
+  it("rejects a return address that is the escrow itself", () => {
+    expect(run({ datum: datumHex({ buyerReturnAddress: CONTRACT }) }).ok).toBe(false);
+    expect(
+      run({
+        extra: { sellerReturnAddress: CONTRACT },
+        datum: datumHex({ sellerReturnAddress: CONTRACT }),
+      }).ok,
+    ).toBe(false);
+  });
+
   it("rejects a non-empty result_hash on a fresh lock", () => {
     expect(run({ datum: withField(datumHex(), 11, Data.bytearray("aa".repeat(32))) }).ok).toBe(
       false,
@@ -348,6 +361,29 @@ describe("verifyMasumiLock", () => {
         datum: datumHex({ buyerReturnAddress: SELLER }),
       }),
     ).toEqual({ ok: true });
+  });
+});
+
+// Cross-implementation min-UTXO fixture — must stay in sync with the Java
+// facilitator's twin (MasumiTransferVerifierTest / MasumiConstants fixture):
+// the SAME 367-byte Evolution-encoded 19-field lock datum at coinsPerUtxoByte
+// 4310 must yield the SAME floor in both implementations. TS re-serializes the
+// datum to measure it while Java reads the raw wire bytes, so this fixture also
+// pins that Evolution's encoding is round-trip stable — the precondition for
+// the two measurements agreeing on canonical encodings.
+describe("cross-implementation min-UTXO fixture", () => {
+  const FIXTURE_BYTES = 367;
+  const CPB = 4310n;
+
+  it("the base lock datum encodes to exactly the fixture size, stable under re-encoding", () => {
+    const hex = datumHex();
+    expect(hex.length / 2).toBe(FIXTURE_BYTES);
+    expect(Data.toCBORHex(Data.fromCBORHex(hex))).toBe(hex);
+  });
+
+  it("computes the pinned floors the Java implementation must reproduce", () => {
+    expect(masumiMinUtxoLovelace(FIXTURE_BYTES, 0, CPB)).toBe(3_124_750n);
+    expect(masumiMinUtxoLovelace(FIXTURE_BYTES, 1, CPB)).toBe(3_340_250n);
   });
 });
 
