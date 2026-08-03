@@ -44,38 +44,44 @@ sequenceDiagram
     %% Client Prepares Payment
     Note over Client: 3. Client selects payment option,<br/>creates and <br/> signs a Transaction
 
+    %% Optional Client Submission
+    opt Client Submission
+        Client->>Cardano: 4a. Submit signed transaction
+        Cardano-->>Client: 4b. Transaction accepted by mempool or block
+    end
+
     %% Request with Payment
-    Client->>Server: 4. HTTP GET /api<br/>Header: PAYMENT-SIGNATURE (signed transaction)
+    Client->>Server: 5. HTTP GET /api<br/>Header: PAYMENT-SIGNATURE (signed transaction)
     Note right of Client: Retries with payment header
 
     %% Server Verification
     alt Server Verification
-        Server->>Server: 5. Verify transaction locally
+        Server->>Server: 6. Verify transaction locally
     else Remote Verification (via Facilitator)
-        Server->>Facilitator: 5. POST /verify<br/>(Payment Payload + Requirements)
+        Server->>Facilitator: 6. POST /verify<br/>(Payment Payload + Requirements)
         Note right of Facilitator: Facilitator validates:<br/>- Payment amount<br/>- Correct recipient<br/>- Nonce in Transaction
     end
 
-    %% Server Verification
-    alt Server Submission
-        Server->>Cardano: 6a. Submit signed transaction
+    %% Settlement
+    alt Client Submission
+        Server->>Cardano: 7a. Query exact submitted transaction
+        Cardano-->>Server: 7b. Transaction hash + confirmation
+    else Server Submission
+        Server->>Cardano: 7a. Submit signed transaction
         Note right of Cardano: Transaction included in mempool or block
-        Cardano-->>Server: 6b. Transaction hash + confirmation
-    else Client Submission
-        Client->>Cardano: 6a. Submit signed transaction
-        Cardano-->>Server: 6b. Server observes exact transaction
+        Cardano-->>Server: 7b. Transaction hash + confirmation
     else Remote Submission (via Facilitator)
-      Server->>Facilitator: 6a. POST /settle<br/>(Payment details)
-      Facilitator->>Cardano: 6b. Submit signed transaction
+      Server->>Facilitator: 7a. POST /settle<br/>(Payment details)
+      Facilitator->>Cardano: 7b. Submit signed transaction
       Note right of Cardano: Transaction included in mempool or block
-      Cardano-->>Facilitator: 6c. Transaction hash + confirmation
-      Facilitator->>Server: 6d. Settlement Response<br/>(txHash, status)
+      Cardano-->>Facilitator: 7c. Transaction hash + confirmation
+      Facilitator->>Server: 7d. Settlement Response<br/>(transaction, status)
     end
 
-    Note right of Server: 7. Receives transaction hash and status
+    Note right of Server: 8. Receives transaction hash and status
 
     %% Final Response
-    Server->>Client: 8. HTTP 200 OK + Resource<br/>Header: PAYMENT-RESPONSE
+    Server->>Client: 9. HTTP 200 OK + Resource<br/>Header: PAYMENT-RESPONSE
     Note left of Server: Returns requested resource<br/>with transaction confirmation:<br/>- transaction: "2f9a7b3c..."<br/>- network: "cardano:mainnet"<br/>- success: true
 ```
 
@@ -88,24 +94,26 @@ The protocol flow for `exact` on Cardano is client-driven.
     - If using Address-To-Address payments, the `payTo` field will contain the address to which the payment must be sent.
     - If using Script payments, the `extra` field will contain parameters to be applied to scripts during transaction building.
 
-3.  **Client** constructs the transaction body, signs it, and returns it to the **Resource Server** via the `PAYMENT-SIGNATURE` header.
+3.  **Client** constructs and signs the transaction. In client mode, it submits the transaction before it sends the paid retry. In server mode, it leaves the transaction unsubmitted.
 
-4.  **Resource Server** verifies the transaction is valid:
+4.  **Client** returns the signed transaction to the **Resource Server** via the `PAYMENT-SIGNATURE` header.
+
+5.  **Resource Server** verifies the transaction is valid:
     - **Local verification**: The server validates the transaction structure, amount, and recipient address directly.
     - **Remote verification**: The server forwards the `PAYMENT-SIGNATURE` header and `paymentRequirements` to a **Facilitator's** `/verify` endpoint to check if the transaction is valid.
 
-5.  After successful verification, the signed transaction is submitted to the Cardano blockchain:
-    - **Client submission**: The **Client** submits the transaction and the Resource Server verifies settlement evidence for that exact transaction.
+6.  After successful verification, the transaction is settled:
+    - **Client submission**: The **Resource Server** or **Facilitator** verifies settlement evidence for the exact transaction that the Client already submitted.
     - **Server submission**: The **Resource Server** submits the transaction directly to the Cardano blockchain.
     - **Facilitator submission**: The **Resource Server** sends the transaction to the **Facilitator's** `/settle` endpoint, which then submits it to the blockchain.
 
-6.  The Cardano blockchain includes the transaction in the mempool or a block and returns the transaction hash and confirmation status.
+7.  The Cardano blockchain includes the transaction in the mempool or a block and returns the transaction hash and confirmation status.
 
-7.  **Resource Server** receives the transaction hash and status:
+8.  **Resource Server** receives the transaction hash and status:
     - If submitted via the **Facilitator**, it receives a settlement response containing the `transaction` hash and `extra.status`.
     - Cardano uses Ouroboros Praos, which has probabilistic finality. A transaction that appears in the mempool or even in a recent block can be rolled back. Granting access upon mempool inclusion (`status: "mempool"`) is therefore **strongly discouraged** and SHOULD NOT be used for any resource with real economic value. Servers that choose to accept mempool status MUST document this risk and accept full liability for rolled-back transactions.
 
-8.  **Resource Server** grants the **Client** access to the requested resource, returning an HTTP 200 OK response with a `PAYMENT-RESPONSE` header containing:
+9.  **Resource Server** grants the **Client** access to the requested resource, returning an HTTP 200 OK response with a `PAYMENT-RESPONSE` header containing:
     - `success`: Whether settlement succeeded
     - `transaction`: The Cardano transaction hash
     - `network`: The Cardano network (e.g., `cardano:mainnet`)
@@ -361,7 +369,7 @@ A `sellerAddress` with a script payment credential is invalid. The last check is
 
 > **TL;DR:** A non-empty signed `agentIdentifier` makes a registry claim. An omitted, `null`, or empty value means that the seller is unregistered.
 
-A non-empty `agentIdentifier` makes a Masumi registry claim. The client and facilitator **MUST** validate that V2 registry claim independently — asset, seller authorization, metadata, endpoint, network and price — and a registered price MUST resolve to the signed top-level `amount` and `asset`. A registered price that requires more than one asset is invalid for this scheme.
+A non-empty `agentIdentifier` makes a Masumi registry claim. Its first 56 hexadecimal characters MUST equal the global Masumi V2 registry policy ID `67ab0c92c4ac1610895a1c965ee50aba41a8f1513b15240723b3bd0b`; another policy is not a Masumi V2 registry. The client and facilitator **MUST** validate the asset on the selected network independently — seller authorization, metadata, endpoint, network and price — and a registered price MUST resolve to the signed top-level `amount` and `asset`. A registered price that requires more than one asset is invalid for this scheme.
 
 An omitted, `null`, or empty `agentIdentifier` means that the seller is unregistered. The datum's `agent_identifier` is empty bytes and no component may claim registry identity or reputation. These forms select the same identity mode, but they remain different signed wire values: client and facilitator reconstruct `signedTerms` without omitting, inserting, or replacing the field.
 
@@ -833,7 +841,7 @@ A facilitator MUST enforce all of the following rules before accepting a payment
 
 4. **Asset Verification**: The asset unit in the transaction MUST exactly match `PaymentRequirements.asset` (format: `${policyId}.${assetNameHex}`). The facilitator MUST NOT accept a different asset, even one of equal market value.
 
-5. **Nonce / Replay Prevention**: The `payload.nonce` MUST be a valid UTXO reference (`txHash#index`) that is included as an input in the transaction. In server mode, the facilitator MUST verify that this UTXO exists in the current on-chain UTXO set and has not been spent. In client mode, authenticated settlement evidence MUST bind its spend to the exact submitted transaction. This ensures uniqueness and prevents replay attacks.
+5. **Nonce / Replay Prevention**: The `payload.nonce` MUST be a valid UTXO reference (`txHash#index`) included as an input in the transaction. The selected settlement ledger is Cardano L1 unless a Masumi payload selects Hydra. In server mode, before submission, the facilitator MUST verify that the nonce is unspent in the selected ledger: the current L1 UTXO set for L1, or the authenticated current UTXO state of the verified `headId` for Hydra. In client mode, authenticated settlement evidence MUST prove that the exact submitted transaction consumed the nonce in that same ledger. Hydra evidence requires a verified `SnapshotConfirmed` transition for the exact transaction and head; an unauthenticated `GetUTxO`, `HeadIsOpen` event, or snapshot from another head is not sufficient. This ensures uniqueness without requiring a Hydra UTXO to exist on L1.
 
 6. **Submission Check**: An absent `payload.submissionMode` normalizes to `server`. The normalized mode MUST match `submissionPolicy`. In server mode, the facilitator submits only after verification. In client mode, it MUST verify authenticated evidence for the exact transaction and MUST NOT submit it again.
 
@@ -849,14 +857,14 @@ A facilitator MUST enforce all of the following rules before accepting a payment
 - **Commitment.** Every part digest and `inputCommitment.digest` recompute correctly, and `terms.inputHash` equals `inputCommitment.digest`.
 - **Seller authorization.** `signedTerms` reconstructs from `terms` plus the projected `PaymentRequirements` fields, `termsDigest` recomputes, and both COSE objects decode and verify against it — including `Blake2b-224(publicKey)` equal to the seller's payment-key credential. A `sellerAddress` with a script payment credential is rejected.
 - **Escrow address.** The verifier applies the canonical (or explicitly allowed custom) deployment parameters to the canonical blueprint, derives the validator hash and network address itself, and requires it to equal `payTo`. `payTo` MUST also equal `signedTerms.contractAddress` and the contract address decoded from `blockchainIdentifier`. There is **exactly one** escrow output at `payTo`.
-- **Identity.** A non-empty `terms.agentIdentifier` requires independent V2 registry validation (asset, seller authorization, metadata, endpoint, network, exact price), and the registered price resolves to the signed `amount`/`asset`. An omitted, `null`, or empty value requires empty datum agent bytes and makes no registry claim.
+- **Identity.** A non-empty `terms.agentIdentifier` MUST start with the global Masumi V2 registry policy ID `67ab0c92c4ac1610895a1c965ee50aba41a8f1513b15240723b3bd0b` and requires independent validation on the selected network (asset, seller authorization, metadata, endpoint, network, exact price). The registered price resolves to the signed `amount`/`asset`. An omitted, `null`, or empty value requires empty datum agent bytes and makes no registry claim.
 - The output paying `payTo` carries an **inline datum** decoding against the `masumi.vested_pay.v2` schema, with `state == FundsLocked`, empty `result_hash`, and **both cooldown timers `0`**; the output carries **no reference script**.
 - `seller` equals `terms.sellerAddress`, and the payment credential in `buyer` **controls the input named by `payload.nonce`** with a valid witness present. Both are **public-key** credential addresses.
 - Neither participant nor either return address equals the escrow address, and the effective buyer payout target differs from the effective seller payout target (see the lock invariants above).
 - `reference_key`, `reference_signature`, `seller_nonce`, `buyer_nonce`, `agent_identifier`, `input_hash` and the four time bounds in the datum match the signed terms exactly, and `reference_signature` is at least 16 bytes. `buyer_return_address` is buyer-chosen and is **not** matched; `seller_return_address` matches the signed terms exactly (declared ⇒ present with matching credentials; omitted ⇒ `None`).
 - **Value.** `lockedLovelace` equals `requestedLovelace + collateral_return_lovelace`, where `requestedLovelace` is `amount` for a lovelace payment and `0` for a native-token payment; a native token MUST match `amount` exactly. The escrow output MUST carry **exactly** the requested asset set — no extra native tokens. `collateral_return_lovelace` MUST be `0` or ≥ **1,435,230**, and MUST be large enough that `lockedLovelace` clears the post-`SubmitResult` min-UTXO.
 - **Deadline.** The transaction MUST carry a validity upper bound (TTL) whose slot time is on/before `pay_by_time`, and the four deadlines MUST clear the minimum intervals in the lock invariants.
-- **Settlement.** `settlementPolicy` MUST allow `payload.settlementLayer`. For L1, the nonce and exact transaction MUST have authenticated evidence at or above `confirmationPolicy`: mempool or stronger canonical evidence for `-1`, and canonical inclusion/depth for `0..20`. For Hydra, the verifier MUST validate the suitable head, seller-participant binding, nonce state, exact transaction, canonical protocol `headId`, and `SnapshotConfirmed` evidence.
+- **Settlement.** `settlementPolicy` MUST allow `payload.settlementLayer`. For L1, the nonce and exact transaction MUST have authenticated evidence at or above `confirmationPolicy`: mempool or stronger canonical evidence for `-1`, and canonical inclusion/depth for `0..20`. For Hydra server submission, the nonce MUST be unspent in the authenticated current UTXO state of the verified head before broadcast. For either submission mode, a verified `SnapshotConfirmed` transition for the canonical protocol `headId` MUST prove that the exact transaction consumed that nonce. The verifier also validates the suitable head and seller-participant binding.
 - **Minimum UTXO.** The escrow output MUST hold enough lovelace for the protocol min-UTXO of the datum **after `SubmitResult`** (32-byte `result_hash` + non-zero cooldowns), so the seller's later spend stays above min-UTXO. Rule 8's carve-out applies: a facilitator without live protocol parameters MAY skip this check and rely on the node's own min-UTXO rejection at submission.
 
 A single Masumi payment locks **one** asset — lovelace, or one native token plus its structural lovelace (which covers the collateral and min-UTXO). `PaymentRequirements` carries a single `asset`/`amount`, so a multi-asset basket is out of scope for this scheme.
