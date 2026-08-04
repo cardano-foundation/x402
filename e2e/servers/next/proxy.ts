@@ -53,6 +53,9 @@ export const CARDANO_NETWORK = (process.env.CARDANO_NETWORK ||
 // the same endpoints against a native token.
 export const CARDANO_ASSET = process.env.CARDANO_ASSET || "lovelace";
 export const CARDANO_AMOUNT = process.env.CARDANO_AMOUNT || "5000000";
+// Canonical block inclusion is the bar for the e2e: the spec default of 1 would
+// make every Cardano scenario wait an extra ~20s block for no added signal.
+export const CARDANO_CONFIRMATION_POLICY = { l1Confirmations: 0 };
 export const TVM_NETWORK = (process.env.TVM_NETWORK || "tvm:-3") as `${string}:${string}`;
 export const NEAR_PAYEE_ADDRESS = process.env.NEAR_PAYEE_ADDRESS as string | undefined;
 export const NEAR_NETWORK = (process.env.NEAR_NETWORK || "near:testnet") as `${string}:${string}`;
@@ -111,10 +114,18 @@ if (!facilitatorUrl) {
 }
 
 // Create facilitator clients (mock facilitator as fallback for startup validation)
-const facilitatorClients = [new HTTPFacilitatorClient({ url: facilitatorUrl })];
+// Cardano settles on ~20-second blocks, so its `settle()` cannot finish inside
+// the 30s facilitator-client default. Raising the ceiling costs nothing on the
+// fast chains — they still return as soon as they are done.
+const FACILITATOR_TIMEOUT_MS = 180_000;
+const facilitatorClients = [
+  new HTTPFacilitatorClient({ url: facilitatorUrl, timeoutMs: FACILITATOR_TIMEOUT_MS }),
+];
 const mockFacilitatorUrl = process.env.MOCK_FACILITATOR_URL;
 if (mockFacilitatorUrl) {
-  facilitatorClients.push(new HTTPFacilitatorClient({ url: mockFacilitatorUrl }));
+  facilitatorClients.push(
+    new HTTPFacilitatorClient({ url: mockFacilitatorUrl, timeoutMs: FACILITATOR_TIMEOUT_MS }),
+  );
 }
 
 // Create x402 resource server with builder pattern (cleaner!)
@@ -439,6 +450,7 @@ export const proxy = paymentProxy(
               scheme: "exact",
               price: { amount: CARDANO_AMOUNT, asset: CARDANO_ASSET },
               network: CARDANO_NETWORK,
+              extra: { confirmationPolicy: CARDANO_CONFIRMATION_POLICY },
             },
             extensions: {
               ...declareDiscoveryExtension({

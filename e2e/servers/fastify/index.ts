@@ -45,6 +45,9 @@ const AVM_NETWORK = (process.env.AVM_NETWORK ||
 const KEETA_NETWORK = (process.env.KEETA_NETWORK || KEETA_TESTNET_CAIP2) as `${string}:${string}`;
 const STELLAR_NETWORK = (process.env.STELLAR_NETWORK || "stellar:testnet") as `${string}:${string}`;
 const CARDANO_NETWORK = (process.env.CARDANO_NETWORK || "cardano:preprod") as `${string}:${string}`;
+// Canonical block inclusion is the bar for the e2e: the spec default of 1 would
+// make every Cardano scenario wait an extra ~20s block for no added signal.
+const CARDANO_CONFIRMATION_POLICY = { l1Confirmations: 0 };
 const TVM_NETWORK = (process.env.TVM_NETWORK || "tvm:-3") as `${string}:${string}`;
 const CCD_NETWORK = (process.env.CCD_NETWORK ||
   "ccd:4221332d34e1694168c2a0c0b3fd0f27") as `${string}:${string}`;
@@ -130,7 +133,14 @@ if (!facilitatorUrl) {
 const app = Fastify();
 
 // Create HTTP facilitator client
-const facilitatorClient = new HTTPFacilitatorClient({ url: facilitatorUrl });
+// Cardano settles on ~20-second blocks, so its `settle()` cannot finish inside
+// the 30s facilitator-client default. Raising the ceiling costs nothing on the
+// fast chains — they still return as soon as they are done.
+const FACILITATOR_TIMEOUT_MS = 180_000;
+const facilitatorClient = new HTTPFacilitatorClient({
+  url: facilitatorUrl,
+  timeoutMs: FACILITATOR_TIMEOUT_MS,
+});
 
 // Create x402 resource server
 const server = new x402ResourceServer(facilitatorClient);
@@ -730,6 +740,7 @@ paymentMiddleware(
               scheme: "exact",
               price: { amount: CARDANO_AMOUNT, asset: CARDANO_ASSET },
               network: CARDANO_NETWORK,
+              extra: { confirmationPolicy: CARDANO_CONFIRMATION_POLICY },
             },
             extensions: {
               ...declareDiscoveryExtension({

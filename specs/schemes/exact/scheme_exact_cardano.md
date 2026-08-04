@@ -182,7 +182,7 @@ For all methods, the policy is a top-level `extra.confirmationPolicy` bound by t
 
 > **TL;DR:** The 402 response contains all seller terms. The buyer builds one Masumi V2 lock for one asset and sends it on the paid retry.
 
-This method supports Masumi V2 only. The buyer locks one requested asset in the deployed V2 `vested_pay` contract. x402 covers only the initial `FundsLocked` output. Later Masumi state transitions are outside this scheme.
+This method supports Masumi V2 only. The buyer locks one requested asset in the deployed V2 `vested_pay` contract. x402 covers only the initial `FundsLocked` output; later Masumi state transitions are outside this scheme (see [Lifecycle boundary](#lifecycle-boundary)).
 
 The initial request replaces `/start_job` only in the x402 flow. Native MIP-003 agents can continue to use `/start_job`. A resource server can use Masumi Payment Service, another SDK, or its own implementation.
 
@@ -292,6 +292,30 @@ Constraints for `terms`:
 | `settlementPolicy` | `auto`, `l1`, or `hydra` |
 
 The initial protected-resource request MAY omit a buyer nonce. An API can define one nonce source in the body, parameters, or an application header. The signed `terms.buyerNonce` field is always present and can be empty. The resource server extracts the same source on the paid retry and rejects a mismatch.
+
+##### Lifecycle boundary
+
+> **TL;DR:** The protected-resource request is the purchase order. Every `extra` field is issuer-derived; the buyer supplies only datum fields. x402 ends at the `FundsLocked` output.
+
+**There is no purchase-creation step.** A `masumi` 402 answers the buyer's ordinary protected-resource request — unauthenticated, first contact, no prior handshake and no stored purchase record to look up. The requirements issuer holds that request and derives the requirements from it directly; that is what replaces `/start_job` here. No field in the 402 depends on knowing the caller's identity: [Request commitment](#request-commitment) hashes the request as received instead of MIP-004's `identifierFromPurchaser`-keyed formula, and `terms.buyerNonce` is allowed to be empty for exactly this reason.
+
+Everything the buyer verifies before locking is issuer-derived:
+
+| Field | Origin |
+|---|---|
+| `inputCommitment`, `terms.inputHash` | digest over the request content as the issuer received it |
+| `terms.sellerNonce` | fresh CSPRNG value per requirements object |
+| the four `*Time` fields | chosen per request, anchored to issuance time |
+| `payTo` | derived from `deployment` against the canonical validator, never hand-supplied |
+| `referenceKey`, `referenceSignature` | seller authorization over `termsDigest` (see [Seller-signed terms](#seller-signed-terms)) |
+| `terms.sellerAddress`, `sellerReturnAddress`, `agentIdentifier` | seller configuration |
+| `submissionPolicy`, `confirmationPolicy` | issuer policy |
+
+The buyer contributes only datum fields, and none of them appear in `extra`: `buyer` is proven by the payment credential controlling `payload.nonce`, `buyer_return_address` is buyer-chosen and deliberately unmatched against `extra`, and `collateral_return_lovelace` is client-computed (see [Lock invariants](#lock-invariants)). Because `extra` and `terms` are closed objects, a buyer-supplied field in either is a rejection.
+
+Deadlines are issued per request, not per process. A `pay_by_time` fixed once at startup drifts out of its window and the payment is then rejected, since rule 7 bounds the TTL by `maxTimeoutSeconds` while the lock invariants bound the TTL by `pay_by_time`; reusing one requirements object across buyers also collides on `termsDigest` (see [Masumi logical replay](#masumi-logical-replay)). Within a single exchange the opposite applies: the issuer stores the object and replays it verbatim on the paid retry.
+
+**x402 ends at the `FundsLocked` output.** A settled `masumi` payment means the funds are locked in the escrow under terms both parties signed — not delivered to the seller. Releasing them runs the ordinary Masumi V2 lifecycle, which this scheme neither drives nor constrains: the seller submits a result hash (`ResultSubmitted`), the buyer may request a refund (`RefundRequested`), and a refund against a submitted result makes the escrow `Disputed` and reachable by the deployment's admin keys after `external_dispute_unlock_time` (see [Deployment and escrow address](#deployment-and-escrow-address)). The three later deadlines in the datum govern when each of those paths opens; `vested_pay` defines their exact effect, not this scheme. Masumi Payment Service, another SDK, or the resource server's own implementation drives the transitions. The deadlines and `input_hash` signed into the datum exist so that they, and any later arbitration, have a binding record of the job that was paid for.
 
 ##### Request commitment
 

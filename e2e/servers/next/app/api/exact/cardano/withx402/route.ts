@@ -7,6 +7,7 @@ import {
   CARDANO_NETWORK,
   CARDANO_ASSET,
   CARDANO_AMOUNT,
+  CARDANO_CONFIRMATION_POLICY,
 } from "@/proxy";
 
 /**
@@ -32,6 +33,7 @@ export const GET = CARDANO_PAYEE_ADDRESS
           scheme: "exact",
           price: { amount: CARDANO_AMOUNT, asset: CARDANO_ASSET },
           network: CARDANO_NETWORK,
+          extra: { confirmationPolicy: CARDANO_CONFIRMATION_POLICY },
         },
         extensions: {
           ...declareDiscoveryExtension({
