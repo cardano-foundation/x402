@@ -109,9 +109,18 @@ export class NextAdapter implements HTTPAdapter {
    */
   async getBody(): Promise<unknown> {
     try {
-      return await this.req.json();
+      return await this.req.clone().json();
     } catch {
       return undefined;
     }
+  }
+
+  /**
+   * Gets exact request-body bytes without consuming the Next.js request stream.
+   *
+   * @returns Promise resolving to exact request-body bytes
+   */
+  async getRawBody(): Promise<Uint8Array> {
+    return new Uint8Array(await this.req.clone().arrayBuffer());
   }
 }

@@ -114,9 +114,12 @@ export class ExactCardanoScheme implements SchemeNetworkClient {
     // A signer that ignored client mode would leave the transaction
     // unbroadcast, and the facilitator — which must not submit it — would find
     // no evidence for it.
-    if (result.submissionMode !== undefined && result.submissionMode !== submissionMode) {
+    if (
+      (submissionMode === "client" && result.submissionMode !== "client") ||
+      (result.submissionMode !== undefined && result.submissionMode !== submissionMode)
+    ) {
       throw new Error(
-        `Cardano signer honoured submissionMode ${result.submissionMode}, expected ${submissionMode}`,
+        `Cardano signer honoured submissionMode ${String(result.submissionMode)}, expected ${submissionMode}`,
       );
     }
 

@@ -281,6 +281,9 @@ export const ERR_VALIDITY_NOT_YET_VALID = "invalid_exact_cardano_payload_not_yet
 export const ERR_CHAIN_LOOKUP_FAILED = "exact_cardano_facilitator_chain_lookup_failed";
 /** Error: settlement failed when submitting the transaction. */
 export const ERR_SETTLEMENT_FAILED = "exact_cardano_settlement_failed";
+/** Error: the node definitively rejected the transaction before ledger acceptance. */
+export const ERR_SETTLEMENT_DEFINITIVELY_REJECTED =
+  "exact_cardano_settlement_definitively_rejected";
 /** Error: facilitator declined a `mempool`-only settlement and `acceptMempool` is disabled. */
 export const ERR_SETTLEMENT_NOT_CONFIRMED = "exact_cardano_settlement_not_confirmed";
 /** Error: duplicate settlement detected within the cache window. */

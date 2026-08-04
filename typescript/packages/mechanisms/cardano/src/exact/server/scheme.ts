@@ -5,6 +5,7 @@ import type {
   Network,
   PaymentRequirements,
   Price,
+  SchemePaymentRequiredContext,
   SchemeNetworkServer,
   SchemeServerHooks,
   SupportedKind,
@@ -15,19 +16,22 @@ import { randomBytes } from "node:crypto";
 import {
   CANONICAL_CARDANO_ASSET_REGEX,
   POSITIVE_CANONICAL_AMOUNT_REGEX,
+  ERR_SETTLEMENT_DEFINITIVELY_REJECTED,
   getDefaultUsdmAsset,
   isCardanoNetwork,
   SCHEME_EXACT,
   USDM_DEFAULT_DECIMALS,
 } from "../../constants";
-import type { CardanoExtraMasumi } from "../../types";
-import { decodeCardanoTransaction, slotToPosixMs } from "../../utils";
 import {
   InMemoryCardanoOperationStore,
   type CardanoOperationStore,
   type CardanoStoredResponse,
   type InMemoryCardanoOperationStoreOptions,
 } from "../../idempotency";
+import { DEFAULT_CARDANO_REPLAY_BODY_BYTES } from "../../limits";
+import { normalizeSubmissionMode } from "../../policy";
+import type { CardanoExtraMasumi } from "../../types";
+import { decodeCardanoTransaction } from "../../utils";
 import { buildSignedTerms, computeTermsDigest } from "../masumi/digests";
 import { jcs } from "../masumi/jcs";
 
@@ -45,7 +49,8 @@ interface ReplayTransportContext {
       getMethod?(): string;
       getUrl?(): string;
       getHeader?(name: string): string | undefined;
-      getBody?(): unknown;
+      getBody?(): unknown | Promise<unknown>;
+      getRawBody?(): Uint8Array | undefined | Promise<Uint8Array | undefined>;
     };
   };
   responseBody?: Buffer;
@@ -57,7 +62,10 @@ interface ReplayTransportContext {
 const NON_REPLAYABLE_RESPONSE_HEADERS = new Set([
   "authentication-info",
   "cache-control",
+  "content-encoding",
   "content-length",
+  "content-md5",
+  "digest",
   "payment-response",
   "proxy-authenticate",
   "set-cookie",
@@ -67,6 +75,9 @@ const NON_REPLAYABLE_RESPONSE_HEADERS = new Set([
 ]);
 
 const DEFAULT_REQUEST_BINDING_HEADERS = ["authorization", "cookie", "x-api-key"] as const;
+const CARDANO_REPLAY_EXTENSION_KEY = "cardanoReplayProtection";
+const REPLAY_CHALLENGE_HEX = /^[0-9a-f]{64}$/;
+const DEFAULT_REPLAY_CHALLENGE_TTL_MS = 15 * 60 * 1000;
 
 /** Request data available to an application-specific replay-binding callback. */
 export interface CardanoReplayBindingContext {
@@ -74,24 +85,41 @@ export interface CardanoReplayBindingContext {
   url: string;
   contentType: string;
   body: unknown;
+  rawBody?: Uint8Array;
   getHeader(name: string): string | undefined;
 }
 
 /** Cardano resource-server replay configuration. */
 export interface ExactCardanoServerConfig {
   /**
-   * Atomic idempotency store. A shared implementation is required when the
-   * resource server runs in more than one worker or process.
+   * Atomic durable idempotency store shared by every worker and deployment.
+   * Replay tombstones must survive process restarts.
    */
   operationStore?: CardanoOperationStore;
-  /** Capacity settings for the default process-local store. */
+  /**
+   * Capacity settings for an explicitly selected process-local store. Supplying
+   * this opts into volatile replay state and is suitable only for tests and
+   * disposable development servers.
+   */
   inMemoryStore?: InMemoryCardanoOperationStoreOptions;
   /**
    * Returns the authenticated principal/tenant binding for a paid request.
-   * Authentication must run before the x402 middleware. When absent, the
-   * standard authorization, cookie and x-api-key headers are bound instead.
+   * Authentication must run before the x402 middleware. Header values remain
+   * part of the request fingerprint, but never prove authentication by
+   * themselves when this callback is absent.
    */
   requestBinding?: (context: CardanoReplayBindingContext) => string | Promise<string>;
+  /**
+   * Returns exact bytes to bind when an adapter cannot expose `getRawBody()` and
+   * its parsed body is not plain JSON. The default rejects unsupported values.
+   */
+  requestBodyBytes?: (
+    context: CardanoReplayBindingContext,
+  ) => Uint8Array | string | Promise<Uint8Array | string>;
+  /** Maximum raw or canonical request-body bytes covered by one fingerprint. */
+  maxRequestBodyBytes?: number;
+  /** Minimum lifetime of an opaque challenge issued in a 402 response. */
+  replayChallengeTtlMs?: number;
 }
 
 /**
@@ -102,6 +130,80 @@ export interface ExactCardanoServerConfig {
  */
 function bytesToHex(bytes: Uint8Array): string {
   return Buffer.from(bytes).toString("hex").toLowerCase();
+}
+
+/**
+ * Validates one positive safe-integer configuration value.
+ *
+ * @param value - Candidate setting.
+ * @param name - Setting name used in the error.
+ * @returns The validated value.
+ */
+function positiveSafeInteger(value: number, name: string): number {
+  if (!Number.isSafeInteger(value) || value <= 0) {
+    throw new Error(`${name} must be a positive safe integer`);
+  }
+  return value;
+}
+
+/** Maximum nesting accepted by the default parsed-JSON replay serializer. */
+const MAX_REPLAY_JSON_DEPTH = 64;
+/** Maximum values visited by the default parsed-JSON replay serializer. */
+const MAX_REPLAY_JSON_VALUES = 100_000;
+
+/**
+ * Rejects values whose JSON meaning is ambiguous across adapters. This also
+ * prevents cycles and pathological nesting before JCS recursion begins.
+ *
+ * @param root - Parsed request body.
+ * @param maxBytes - Maximum aggregate UTF-8 bytes.
+ */
+function assertPlainJson(root: unknown, maxBytes: number): void {
+  const pending: Array<{ value: unknown; depth: number }> = [{ value: root, depth: 0 }];
+  const seen = new WeakSet<object>();
+  let visited = 0;
+  let bytes = 0;
+
+  while (pending.length > 0) {
+    const { value, depth } = pending.pop()!;
+    visited++;
+    if (visited > MAX_REPLAY_JSON_VALUES) {
+      throw new Error("request body exceeds the JSON value limit");
+    }
+    if (depth > MAX_REPLAY_JSON_DEPTH) {
+      throw new Error("request body exceeds the JSON nesting limit");
+    }
+    if (typeof value === "string") {
+      bytes += Buffer.byteLength(value, "utf8");
+      if (bytes > maxBytes) throw new Error("request body exceeds the byte limit");
+      continue;
+    }
+    if (
+      value === null ||
+      typeof value === "boolean" ||
+      (typeof value === "number" && Number.isFinite(value))
+    ) {
+      continue;
+    }
+    if (typeof value !== "object") {
+      throw new Error(`request body contains unsupported ${typeof value} value`);
+    }
+    if (seen.has(value)) throw new Error("request body contains a cycle");
+    seen.add(value);
+    if (Array.isArray(value)) {
+      for (const item of value) pending.push({ value: item, depth: depth + 1 });
+      continue;
+    }
+    const prototype = Object.getPrototypeOf(value);
+    if (prototype !== Object.prototype && prototype !== null) {
+      throw new Error("request body must contain only plain JSON objects");
+    }
+    for (const [key, item] of Object.entries(value as Record<string, unknown>)) {
+      bytes += Buffer.byteLength(key, "utf8");
+      if (bytes > maxBytes) throw new Error("request body exceeds the byte limit");
+      pending.push({ value: item, depth: depth + 1 });
+    }
+  }
 }
 
 /**
@@ -118,6 +220,9 @@ export class ExactCardanoScheme implements SchemeNetworkServer {
   private readonly moneyParsers: MoneyParser[] = [];
   private readonly operationStore: CardanoOperationStore;
   private readonly requestBinding?: ExactCardanoServerConfig["requestBinding"];
+  private readonly requestBodyBytes?: ExactCardanoServerConfig["requestBodyBytes"];
+  private readonly maxRequestBodyBytes: number;
+  private readonly replayChallengeTtlMs: number;
   private readonly replayOwners = new WeakMap<object, HandlerReplayOwner>();
 
   /**
@@ -126,14 +231,90 @@ export class ExactCardanoScheme implements SchemeNetworkServer {
    * @param config - Replay persistence, capacity and requester-binding options.
    */
   constructor(config: ExactCardanoServerConfig = {}) {
-    this.operationStore =
-      config.operationStore ?? new InMemoryCardanoOperationStore(config.inMemoryStore);
+    if (config.operationStore) {
+      this.operationStore = config.operationStore;
+    } else if (config.inMemoryStore) {
+      this.operationStore = new InMemoryCardanoOperationStore(config.inMemoryStore);
+    } else {
+      throw new Error(
+        "Cardano resource servers require a durable operationStore; pass inMemoryStore explicitly only for tests or disposable development",
+      );
+    }
     this.requestBinding = config.requestBinding;
+    this.requestBodyBytes = config.requestBodyBytes;
+    this.maxRequestBodyBytes = positiveSafeInteger(
+      config.maxRequestBodyBytes ?? DEFAULT_CARDANO_REPLAY_BODY_BYTES,
+      "maxRequestBodyBytes",
+    );
+    this.replayChallengeTtlMs = positiveSafeInteger(
+      config.replayChallengeTtlMs ?? DEFAULT_REPLAY_CHALLENGE_TTL_MS,
+      "replayChallengeTtlMs",
+    );
     this.schemeHooks = {
-      onAfterVerify: async context => this.claimProtectedOperation(context),
+      onAfterVerify: async context => {
+        try {
+          return await this.claimProtectedOperation(context);
+        } catch {
+          return {
+            abort: true,
+            reason: "payment_replay_store_unavailable",
+            message: "Cardano replay protection is unavailable",
+            status: 503,
+          };
+        }
+      },
       onAfterSettle: async context => this.storeProtectedResult(context),
       onSettleFailure: async context => this.storeProtectedResult(context),
-      onVerifiedPaymentCanceled: async context => this.releaseProtectedOperation(context),
+      onVerifiedPaymentCanceled: async context => this.cancelProtectedOperation(context),
+    };
+  }
+
+  /**
+   * Adds an opaque request-bound challenge to each Cardano 402. Normal x402 v2
+   * clients echo top-level extensions in the paid retry. A fresh challenge is
+   * issued for every unpaid response, so another caller cannot fetch the same
+   * capability by repeating an anonymous request.
+   *
+   * @param context - Payment-required response being built.
+   */
+  async enrichPaymentRequiredResponse(context: SchemePaymentRequiredContext): Promise<void> {
+    const transport = this.asReplayTransport(context.transportContext);
+    if (!transport) return;
+
+    const binding = await this.requestFingerprint(transport);
+    const requirementsFingerprint = this.requirementsFingerprint(context.requirement);
+    const echoedChallenge = this.replayChallenge(
+      context.paymentPayload?.extensions,
+      requirementsFingerprint,
+    );
+    let challenge = echoedChallenge;
+    if (!challenge) {
+      const timeoutMs = context.requirement.maxTimeoutSeconds * 1000;
+      if (!Number.isSafeInteger(timeoutMs) || timeoutMs <= 0) {
+        throw new Error("Cardano maxTimeoutSeconds cannot produce a safe challenge lifetime");
+      }
+      const lifetime = Math.max(this.replayChallengeTtlMs, timeoutMs);
+      const expiresAt = Date.now() + lifetime;
+      if (!Number.isSafeInteger(expiresAt)) {
+        throw new Error("Cardano replay challenge expiry exceeds the safe integer range");
+      }
+      const issued = await this.operationStore.issueChallenge({
+        fingerprint: binding.fingerprint,
+        requirementsFingerprint,
+        expiresAt,
+      });
+      if (issued.status === "capacity-exceeded") {
+        throw new Error("Cardano replay challenge store is at capacity");
+      }
+      challenge = issued.challenge;
+    }
+
+    const current = this.replayExtension(context.paymentRequiredResponse.extensions);
+    context.paymentRequiredResponse.extensions = {
+      ...context.paymentRequiredResponse.extensions,
+      [CARDANO_REPLAY_EXTENSION_KEY]: {
+        challenges: { ...current, [requirementsFingerprint]: challenge },
+      },
     };
   }
 
@@ -235,7 +416,7 @@ export class ExactCardanoScheme implements SchemeNetworkServer {
     const transport = this.asReplayTransport(context.transportContext);
     if (!transport) return;
 
-    let identity: { key: string; txHash: string; expiresAt: number };
+    let identity: { key: string; txHash: string };
     try {
       identity = this.paymentIdentity(context.paymentPayload, context.requirements);
     } catch (cause) {
@@ -245,11 +426,30 @@ export class ExactCardanoScheme implements SchemeNetworkServer {
         message: cause instanceof Error ? cause.message : String(cause),
       };
     }
-    const fingerprint = await this.requestFingerprint(transport);
+    const binding = await this.requestFingerprint(transport);
+    const requirementsFingerprint = this.requirementsFingerprint(context.requirements);
+    const replayChallenge = this.replayChallenge(
+      context.paymentPayload.extensions,
+      requirementsFingerprint,
+    );
+    const submissionMode = normalizeSubmissionMode(
+      (context.paymentPayload.payload as { submissionMode?: unknown }).submissionMode,
+    );
+    if (submissionMode === "client" && !binding.isRequesterAuthenticated) {
+      return {
+        abort: true,
+        reason: "payment_replay_binding_required",
+        message: "client-submitted Cardano payments require an authenticated requester binding",
+        status: 403,
+      };
+    }
     const ownerToken = randomBytes(16).toString("hex");
     const claim = await this.operationStore.claim({
       ...identity,
-      fingerprint,
+      fingerprint: binding.fingerprint,
+      requirementsFingerprint,
+      ...(replayChallenge ? { replayChallenge } : {}),
+      requireReplayChallenge: submissionMode === "client" || !binding.isRequesterAuthenticated,
       ownerToken,
     });
     switch (claim.status) {
@@ -285,6 +485,13 @@ export class ExactCardanoScheme implements SchemeNetworkServer {
           message: "the paid operation completed but its response was too large to retain",
           status: 409,
         };
+      case "challenge-invalid":
+        return {
+          abort: true,
+          reason: "payment_replay_binding_required",
+          message: "Cardano payment requires the opaque replay challenge from its original 402",
+          status: 403,
+        };
       case "capacity-exceeded":
         return {
           abort: true,
@@ -297,6 +504,13 @@ export class ExactCardanoScheme implements SchemeNetworkServer {
           abort: true,
           reason: "duplicate_settlement",
           message: "the protected operation for this Cardano payment is already in progress",
+          status: 409,
+        };
+      case "ambiguous":
+        return {
+          abort: true,
+          reason: "payment_replay_outcome_ambiguous",
+          message: "the protected operation may have completed and requires reconciliation",
           status: 409,
         };
       case "claimed":
@@ -312,13 +526,24 @@ export class ExactCardanoScheme implements SchemeNetworkServer {
    *
    * @param context - Core after-settle hook context.
    * @param context.transportContext - Transport carrying the buffered handler response.
+   * @param context.result - Settlement result, when this is a failure hook.
+   * @param context.result.errorReason - Stable settlement failure reason.
    */
-  private async storeProtectedResult(context: { transportContext?: unknown }): Promise<void> {
+  private async storeProtectedResult(context: {
+    transportContext?: unknown;
+    result?: { errorReason?: string };
+  }): Promise<void> {
     const transport = this.asReplayTransport(context.transportContext);
     if (!transport) return;
     const owner = this.replayOwner(transport);
     const claimOwner = this.replayOwners.get(owner);
-    if (!claimOwner || !transport.responseBody) return;
+    if (!claimOwner) return;
+    if (context.result?.errorReason === ERR_SETTLEMENT_DEFINITIVELY_REJECTED) {
+      await this.operationStore.markAmbiguous(claimOwner.key, claimOwner.ownerToken);
+      this.replayOwners.delete(owner);
+      return;
+    }
+    if (!transport.responseBody) return;
 
     const responseHeaders = transport.responseHeaders ?? {};
     const contentType =
@@ -332,31 +557,25 @@ export class ExactCardanoScheme implements SchemeNetworkServer {
           !NON_REPLAYABLE_RESPONSE_HEADERS.has(name.toLowerCase()),
       ),
     );
-    const isJson = contentType.toLowerCase().includes("application/json");
-    let body: Buffer | unknown = Buffer.from(transport.responseBody);
-    if (isJson) {
-      try {
-        body = JSON.parse(transport.responseBody.toString("utf8"));
-      } catch {
-        // A malformed JSON response must still replay byte-for-byte.
-      }
-    }
     const response: CardanoStoredResponse = {
       status: transport.responseStatus ?? 200,
       contentType,
       headers: replayHeaders,
-      body,
-      isRaw: !isJson || Buffer.isBuffer(body),
+      body: Buffer.from(transport.responseBody),
+      isRaw: true,
     };
     const responseBytes =
       transport.responseBody.byteLength + Buffer.byteLength(JSON.stringify(replayHeaders), "utf8");
-    await this.operationStore.complete(
+    const outcome = await this.operationStore.complete(
       claimOwner.key,
       claimOwner.ownerToken,
       response,
       responseBytes,
     );
     this.replayOwners.delete(owner);
+    if (outcome === "not-owner") {
+      throw new Error("Cardano operation claim ownership was lost before completion");
+    }
   }
 
   /**
@@ -365,7 +584,7 @@ export class ExactCardanoScheme implements SchemeNetworkServer {
    *
    * @param context - Verified-payment cancellation context.
    */
-  private async releaseProtectedOperation(
+  private async cancelProtectedOperation(
     context: Parameters<NonNullable<SchemeServerHooks["onVerifiedPaymentCanceled"]>>[0],
   ): Promise<void> {
     const transport = this.asReplayTransport(context.transportContext);
@@ -373,7 +592,11 @@ export class ExactCardanoScheme implements SchemeNetworkServer {
     const owner = this.replayOwner(transport);
     const claimOwner = this.replayOwners.get(owner);
     if (!claimOwner) return;
-    await this.operationStore.release(claimOwner.key, claimOwner.ownerToken);
+    if (context.reason === "after_verify_aborted") {
+      await this.operationStore.release(claimOwner.key, claimOwner.ownerToken);
+    } else {
+      await this.operationStore.markAmbiguous(claimOwner.key, claimOwner.ownerToken);
+    }
     this.replayOwners.delete(owner);
   }
 
@@ -400,18 +623,18 @@ export class ExactCardanoScheme implements SchemeNetworkServer {
   }
 
   /**
-   * Computes the logical replay key, canonical transaction id and retention.
+   * Computes the logical replay key and canonical transaction id.
    *
    * @param paymentPayload - Verified Cardano payment.
    * @param requirements - Canonical requirements.
-   * @returns Replay identity and expiry.
+   * @returns Replay identity.
    */
   private paymentIdentity(
     paymentPayload: Parameters<
       NonNullable<SchemeServerHooks["onAfterVerify"]>
     >[0]["paymentPayload"],
     requirements: Parameters<NonNullable<SchemeServerHooks["onAfterVerify"]>>[0]["requirements"],
-  ): { key: string; txHash: string; expiresAt: number } {
+  ): { key: string; txHash: string } {
     const transaction = (paymentPayload.payload as { transaction?: unknown }).transaction;
     if (typeof transaction !== "string") throw new Error("Cardano transaction is missing");
     const decoded = decodeCardanoTransaction(transaction);
@@ -425,20 +648,7 @@ export class ExactCardanoScheme implements SchemeNetworkServer {
             ),
           )}`
         : `transaction:${decoded.txHash}`;
-    const now = Date.now();
-    const fallback = now + requirements.maxTimeoutSeconds * 1000 + 600_000;
-    let expiresAt = fallback;
-    if (decoded.ttlSlot !== undefined) {
-      try {
-        expiresAt = Math.max(
-          fallback,
-          slotToPosixMs(requirements.network, decoded.ttlSlot) + 600_000,
-        );
-      } catch {
-        // The verified facilitator already validated the network and TTL.
-      }
-    }
-    return { key, txHash: decoded.txHash, expiresAt };
+    return { key, txHash: decoded.txHash };
   }
 
   /**
@@ -447,45 +657,134 @@ export class ExactCardanoScheme implements SchemeNetworkServer {
    * @param transport - Transport carrying request data.
    * @returns Lowercase SHA-256 fingerprint.
    */
-  private async requestFingerprint(transport: ReplayTransportContext): Promise<string> {
+  private async requestFingerprint(
+    transport: ReplayTransportContext,
+  ): Promise<{ fingerprint: string; isRequesterAuthenticated: boolean }> {
     const adapter = transport.request?.adapter;
     const method = transport.request?.method ?? adapter?.getMethod?.() ?? "";
     const url = adapter?.getUrl?.() ?? "";
     const contentType = adapter?.getHeader?.("content-type") ?? "";
-    const body = adapter?.getBody?.();
+    const rawBody = await adapter?.getRawBody?.();
+    const body = rawBody === undefined ? await adapter?.getBody?.() : undefined;
     const getHeader = (name: string): string | undefined => adapter?.getHeader?.(name);
     const bindingContext: CardanoReplayBindingContext = {
       method,
       url,
       contentType,
       body,
+      ...(rawBody !== undefined ? { rawBody } : {}),
       getHeader,
     };
+    const defaultBindingValues = DEFAULT_REQUEST_BINDING_HEADERS.map(name => ({
+      name,
+      value: getHeader(name) ?? "",
+    }));
     const requesterBinding = this.requestBinding
       ? await this.requestBinding(bindingContext)
-      : DEFAULT_REQUEST_BINDING_HEADERS.map(name => `${name}:${getHeader(name) ?? ""}`).join("\n");
-    let canonicalBody = "";
-    if (body !== undefined) {
-      try {
-        canonicalBody = jcs(body);
-      } catch {
-        try {
-          canonicalBody =
-            JSON.stringify(body, (_key, value) =>
-              typeof value === "bigint" ? value.toString() : value,
-            ) ?? String(body);
-        } catch {
-          canonicalBody = Object.prototype.toString.call(body);
-        }
-      }
-    }
-    return bytesToHex(
-      sha256(
-        new TextEncoder().encode(
-          `${method.toUpperCase()}\n${url}\n${contentType}\n${canonicalBody}\n${requesterBinding}`,
+      : defaultBindingValues.map(({ name, value }) => `${name}:${value}`).join("\n");
+    // Header presence still contributes to the fingerprint, but only an explicit
+    // callback run after upstream authentication proves a requester identity.
+    const isRequesterAuthenticated = this.requestBinding
+      ? requesterBinding.trim().length > 0
+      : false;
+    const canonicalBody = await this.canonicalRequestBody(bindingContext);
+    const bodyDigest = bytesToHex(sha256(canonicalBody));
+    return {
+      fingerprint: bytesToHex(
+        sha256(
+          new TextEncoder().encode(
+            jcs({
+              method: method.toUpperCase(),
+              url,
+              contentType,
+              bodyDigest,
+              requesterBinding,
+            }),
+          ),
         ),
       ),
+      isRequesterAuthenticated,
+    };
+  }
+
+  /**
+   * Returns the canonical fingerprint of one advertised requirement.
+   *
+   * @param requirements - Requirement to fingerprint.
+   * @returns Canonical SHA-256 fingerprint.
+   */
+  private requirementsFingerprint(requirements: PaymentRequirements): string {
+    return bytesToHex(sha256(new TextEncoder().encode(jcs(requirements))));
+  }
+
+  /**
+   * Reads a challenge for one requirement from the reserved extension.
+   *
+   * @param extensions - Paid-payload extensions.
+   * @param requirementsFingerprint - Requirement fingerprint lookup key.
+   * @returns A valid challenge, if present.
+   */
+  private replayChallenge(
+    extensions: Readonly<Record<string, unknown>> | undefined,
+    requirementsFingerprint: string,
+  ): string | undefined {
+    const challenges = this.replayExtension(extensions);
+    const challenge = challenges[requirementsFingerprint];
+    return typeof challenge === "string" && REPLAY_CHALLENGE_HEX.test(challenge)
+      ? challenge
+      : undefined;
+  }
+
+  /**
+   * Reads the closed challenge map from an extension value.
+   *
+   * @param extensions - Extension object to inspect.
+   * @returns Valid challenge entries only.
+   */
+  private replayExtension(
+    extensions: Readonly<Record<string, unknown>> | undefined,
+  ): Record<string, string> {
+    const value = extensions?.[CARDANO_REPLAY_EXTENSION_KEY];
+    if (typeof value !== "object" || value === null || Array.isArray(value)) return {};
+    const challenges = (value as { challenges?: unknown }).challenges;
+    if (typeof challenges !== "object" || challenges === null || Array.isArray(challenges)) {
+      return {};
+    }
+    return Object.fromEntries(
+      Object.entries(challenges).filter(
+        (entry): entry is [string, string] =>
+          typeof entry[1] === "string" && REPLAY_CHALLENGE_HEX.test(entry[1]),
+      ),
     );
+  }
+
+  /**
+   * Returns unambiguous request-body bytes. Raw bytes win; otherwise a custom
+   * serializer or strict plain-JSON canonicalization is required.
+   *
+   * @param context - Request data available to the replay binder.
+   * @returns Exact bytes covered by the request fingerprint.
+   */
+  private async canonicalRequestBody(context: CardanoReplayBindingContext): Promise<Uint8Array> {
+    let result: Uint8Array;
+    if (context.rawBody) {
+      result = Uint8Array.from(context.rawBody);
+    } else if (this.requestBodyBytes) {
+      const custom = await this.requestBodyBytes(context);
+      result =
+        typeof custom === "string" ? new TextEncoder().encode(custom) : Uint8Array.from(custom);
+    } else if (context.body === undefined) {
+      result = new Uint8Array();
+    } else if (context.body instanceof Uint8Array) {
+      result = Uint8Array.from(context.body);
+    } else {
+      assertPlainJson(context.body, this.maxRequestBodyBytes);
+      result = new TextEncoder().encode(jcs(context.body));
+    }
+    if (result.length > this.maxRequestBodyBytes) {
+      throw new Error("request body exceeds the replay fingerprint byte limit");
+    }
+    return result;
   }
 
   /**

@@ -13,7 +13,10 @@ vi.mock("../../src/utils", async original => {
 });
 
 import { decodeCardanoTransaction } from "../../src/utils";
-import { ExactCardanoScheme as ExactCardanoFacilitator } from "../../src/exact/facilitator/scheme";
+import {
+  ExactCardanoScheme as ExactCardanoFacilitatorBase,
+  type ExactCardanoFacilitatorConfig,
+} from "../../src/exact/facilitator/scheme";
 import {
   CARDANO_MAINNET_CAIP2,
   CARDANO_MAINNET_CIP34,
@@ -24,6 +27,13 @@ import type { PaymentRequirements } from "@x402/core/types";
 
 const TX_HASH = "a".repeat(64);
 const RECIPIENT = "addr1qxytestrecipientaddress00";
+
+/** Test-only facilitator with explicit volatile replay storage. */
+class ExactCardanoFacilitator extends ExactCardanoFacilitatorBase {
+  constructor(signer: FacilitatorCardanoSigner, config: ExactCardanoFacilitatorConfig = {}) {
+    super(signer, { inMemorySettlementStoreMaxEntries: 4096, ...config });
+  }
+}
 
 const buildRequirements = (extra: Record<string, unknown> = {}): PaymentRequirements => ({
   scheme: "exact",
@@ -72,6 +82,71 @@ describe("Cardano facilitator security", () => {
     scriptWitnessCount: 0,
     redeemerCount: 0,
     signaturesValid: true,
+  });
+
+  it("rejects excessive input fan-out before any provider lookup", async () => {
+    const getUtxo = vi.fn(stubSigner.getUtxo);
+    const inputs = [
+      `${TX_HASH}#0`,
+      ...Array.from(
+        { length: 256 },
+        (_, index) => `${(index + 1).toString(16).padStart(64, "0")}#0`,
+      ),
+    ];
+    vi.mocked(decodeCardanoTransaction).mockReturnValueOnce({ ...decodedPayment(), inputs });
+
+    const requirements = buildRequirements();
+    const result = await new ExactCardanoFacilitator({ ...stubSigner, getUtxo }).verify(
+      {
+        x402Version: 2,
+        accepted: requirements,
+        payload: { transaction: "AAAA", nonce: `${TX_HASH}#0` },
+      },
+      requirements,
+    );
+
+    expect(result.invalidReason).toBe("invalid_exact_cardano_payload_phase1_invalid");
+    expect(getUtxo).not.toHaveBeenCalled();
+  });
+
+  it("limits concurrent provider lookups for transaction inputs", async () => {
+    let active = 0;
+    let maximumActive = 0;
+    const getUtxo = vi.fn(async () => {
+      active++;
+      maximumActive = Math.max(maximumActive, active);
+      await new Promise(resolve => setTimeout(resolve, 1));
+      active--;
+      return {
+        exists: true,
+        address: "addr1qpayer00",
+        coin: 0n,
+        assets: { [USDM_MAINNET_ASSET.toLowerCase()]: 10_000n },
+        paymentKeyHash: "payer",
+      };
+    });
+    const inputs = [
+      `${TX_HASH}#0`,
+      ...Array.from(
+        { length: 19 },
+        (_, index) => `${(index + 1).toString(16).padStart(64, "0")}#0`,
+      ),
+    ];
+    vi.mocked(decodeCardanoTransaction).mockReturnValueOnce({ ...decodedPayment(), inputs });
+
+    const requirements = buildRequirements();
+    const result = await new ExactCardanoFacilitator({ ...stubSigner, getUtxo }).verify(
+      {
+        x402Version: 2,
+        accepted: requirements,
+        payload: { transaction: "AAAA", nonce: `${TX_HASH}#0` },
+      },
+      requirements,
+    );
+
+    expect(result.isValid).toBe(true);
+    expect(getUtxo).toHaveBeenCalledTimes(20);
+    expect(maximumActive).toBeLessThanOrEqual(8);
   });
 
   it("reads assetTransferMethod from canonical requirements, not client-echoed accepted", async () => {

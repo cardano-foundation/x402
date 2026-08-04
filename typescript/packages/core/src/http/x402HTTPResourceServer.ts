@@ -77,9 +77,16 @@ export interface HTTPAdapter {
    * Get the parsed request body
    * Framework adapters should parse JSON/form data appropriately
    *
-   * @returns The parsed request body
+   * @returns The parsed request body, synchronously or asynchronously
    */
-  getBody?(): unknown;
+  getBody?(): unknown | Promise<unknown>;
+
+  /**
+   * Get the exact request-body bytes without consuming the request stream.
+   *
+   * @returns Exact request-body bytes, or undefined when unavailable
+   */
+  getRawBody?(): Uint8Array | undefined | Promise<Uint8Array | undefined>;
 }
 
 /**
@@ -577,6 +584,7 @@ export class x402HTTPResourceServer {
       !paymentPayload ? "Payment required" : undefined,
       extensions,
       transportContext,
+      paymentPayload ?? undefined,
     );
 
     // If no payment provided

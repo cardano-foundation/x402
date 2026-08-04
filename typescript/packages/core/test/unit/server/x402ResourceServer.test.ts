@@ -2219,6 +2219,7 @@ describe("x402ResourceServer", () => {
       const paymentPayload = buildPaymentPayload();
       const enrich = vi.fn(async ctx => {
         expect(ctx.paymentPayload).toBe(paymentPayload);
+        expect(ctx.requirement).toBe(ctx.requirements[0]);
         ctx.requirements[0].extra.ChannelState = { channelId: "0x123" };
       });
       scheme.enrichPaymentRequiredResponse = enrich;

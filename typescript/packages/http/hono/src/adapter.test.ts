@@ -25,20 +25,26 @@ function createMockContext(
   const url = new URL(options.url || "https://example.com/api/test");
   const headers = options.headers || {};
   const query = options.query || {};
+  const method = options.method || "GET";
+  const raw = new Request(url, {
+    method,
+    headers,
+    ...(options.body === undefined ? {} : { body: JSON.stringify(options.body) }),
+  });
 
   const mockContext = {
     req: {
       header: vi.fn((name: string) => headers[name]),
-      method: options.method || "GET",
+      method,
       path: url.pathname,
       url: url.toString(),
+      raw,
       query: vi.fn((name?: string) => {
         if (name === undefined) {
           return query;
         }
         return query[name];
       }),
-      json: vi.fn().mockResolvedValue(options.body),
     },
   } as unknown as Context;
 
@@ -143,7 +149,7 @@ describe("HonoAdapter", () => {
   describe("getBody", () => {
     it("returns parsed JSON body", async () => {
       const body = { data: "test" };
-      const c = createMockContext({ body });
+      const c = createMockContext({ method: "POST", body });
       const adapter = new HonoAdapter(c);
       expect(await adapter.getBody()).toEqual(body);
     });
@@ -151,11 +157,25 @@ describe("HonoAdapter", () => {
     it("returns undefined when body parsing fails", async () => {
       const mockContext = {
         req: {
-          json: vi.fn().mockRejectedValue(new Error("Invalid JSON")),
+          raw: {
+            clone: vi.fn(() => ({
+              json: vi.fn().mockRejectedValue(new Error("Invalid JSON")),
+            })),
+          },
         },
       } as unknown as Context;
       const adapter = new HonoAdapter(mockContext);
       expect(await adapter.getBody()).toBeUndefined();
+    });
+  });
+
+  describe("getRawBody", () => {
+    it("returns exact bytes without consuming the request", async () => {
+      const c = createMockContext({ method: "POST", body: { data: "test" } });
+      const adapter = new HonoAdapter(c);
+
+      expect(new TextDecoder().decode(await adapter.getRawBody())).toBe('{"data":"test"}');
+      expect(await adapter.getBody()).toEqual({ data: "test" });
     });
   });
 });

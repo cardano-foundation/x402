@@ -31,6 +31,7 @@ import {
 } from "./exact/masumi/verify";
 import { isKeyCredentialAddressOn, validateMasumiExtra } from "./exact/masumi/schema";
 import { buildScriptDatumInline } from "./exact/script/datum";
+import { DEFAULT_CARDANO_PROVIDER_TIMEOUT_MS } from "./limits";
 import type {
   CardanoExtra,
   CardanoExtraMasumi,
@@ -38,7 +39,7 @@ import type {
   CardanoSettlementLayer,
   CardanoSubmissionMode,
 } from "./types";
-import { parseAssetUnit, parseUtxoRef } from "./utils";
+import { decodeCardanoTransactionBytes, parseAssetUnit, parseUtxoRef } from "./utils";
 
 /**
  * Provider connection used by the reference signers. Exactly one of
@@ -46,8 +47,16 @@ import { parseAssetUnit, parseUtxoRef } from "./utils";
  * Evolution SDK provider configs.
  */
 export type CardanoProviderConfig =
-  | { blockfrost: { baseUrl: string; projectId?: string }; koios?: never }
-  | { koios: { baseUrl: string; token?: string }; blockfrost?: never };
+  | {
+      blockfrost: { baseUrl: string; projectId?: string };
+      koios?: never;
+      requestTimeoutMs?: number;
+    }
+  | {
+      koios: { baseUrl: string; token?: string };
+      blockfrost?: never;
+      requestTimeoutMs?: number;
+    };
 
 /**
  * Resolves an x402 Cardano network identifier to an Evolution SDK chain preset.
@@ -756,7 +765,7 @@ export interface FacilitatorCardanoSignerConfig {
  * @param provider - The signer's provider connection config.
  * @returns The Blockfrost query helpers.
  */
-function blockfrostQueries(provider: CardanoProviderConfig): {
+export function blockfrostQueries(provider: CardanoProviderConfig): {
   enabled: boolean;
   evidence(txHash: string): Promise<CardanoSettlementEvidence>;
   spentUtxoAddress(txHash: string, index: number): Promise<{ address?: string }>;
@@ -771,6 +780,10 @@ function blockfrostQueries(provider: CardanoProviderConfig): {
   }
   const baseUrl = config.baseUrl.replace(/\/$/, "");
   const headers = config.projectId ? { project_id: config.projectId } : undefined;
+  const timeoutMs = provider.requestTimeoutMs ?? DEFAULT_CARDANO_PROVIDER_TIMEOUT_MS;
+  if (!Number.isSafeInteger(timeoutMs) || timeoutMs <= 0 || timeoutMs > 120_000) {
+    throw new Error("Cardano provider requestTimeoutMs must be an integer from 1 to 120000");
+  }
 
   /**
    * Performs one Blockfrost GET.
@@ -779,7 +792,10 @@ function blockfrostQueries(provider: CardanoProviderConfig): {
    * @returns The parsed body, or `null` on 404.
    */
   const get = async (path: string): Promise<Record<string, unknown> | null> => {
-    const response = await fetch(`${baseUrl}${path}`, { ...(headers ? { headers } : {}) });
+    const response = await fetch(`${baseUrl}${path}`, {
+      ...(headers ? { headers } : {}),
+      signal: AbortSignal.timeout(timeoutMs),
+    });
     if (response.status === 404) return null;
     if (!response.ok) {
       throw new Error(`Blockfrost ${path} failed: ${response.status} ${response.statusText}`);
@@ -814,17 +830,13 @@ function blockfrostQueries(provider: CardanoProviderConfig): {
     },
 
     async spentUtxoAddress(txHash: string, index: number): Promise<{ address?: string }> {
-      try {
-        const utxos = await get(`/txs/${txHash}/utxos`);
-        const outputs = (utxos?.outputs ?? []) as Array<{
-          output_index?: number;
-          address?: string;
-        }>;
-        const output = outputs.find(o => o.output_index === index);
-        return output?.address ? { address: output.address } : {};
-      } catch {
-        return {};
-      }
+      const utxos = await get(`/txs/${txHash}/utxos`);
+      const outputs = (utxos?.outputs ?? []) as Array<{
+        output_index?: number;
+        address?: string;
+      }>;
+      const output = outputs.find(o => o.output_index === index);
+      return output?.address ? { address: output.address } : {};
     },
   };
 }
@@ -955,9 +967,7 @@ export function toFacilitatorCardanoSigner(
       network: string,
     ): Promise<CardanoSubmissionResult> {
       assertNetwork(network);
-      const tx = Transaction.fromCBORBytes(
-        Uint8Array.from(Buffer.from(signedTransactionBase64, "base64")),
-      );
+      const tx = Transaction.fromCBORBytes(decodeCardanoTransactionBytes(signedTransactionBase64));
       const hash = await client.submitTx(tx);
       const txHash = Buffer.from(hash.hash).toString("hex").toLowerCase();
       if (config.awaitConfirmation === false) {
@@ -982,9 +992,7 @@ export function toFacilitatorCardanoSigner(
 
     async evaluateTransaction(signedTransactionBase64: string, network: string): Promise<void> {
       assertNetwork(network);
-      const tx = Transaction.fromCBORBytes(
-        Uint8Array.from(Buffer.from(signedTransactionBase64, "base64")),
-      );
+      const tx = Transaction.fromCBORBytes(decodeCardanoTransactionBytes(signedTransactionBase64));
       await client.evaluateTx(tx);
     },
 

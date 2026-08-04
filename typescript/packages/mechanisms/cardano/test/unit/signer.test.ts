@@ -1,6 +1,10 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { preprod, PrivateKey } from "@evolution-sdk/evolution";
-import { toClientCardanoSigner, toFacilitatorCardanoSigner } from "../../src/signer";
+import {
+  blockfrostQueries,
+  toClientCardanoSigner,
+  toFacilitatorCardanoSigner,
+} from "../../src/signer";
 import {
   CARDANO_MAINNET_CAIP2,
   CARDANO_PREPROD_CAIP2,
@@ -88,6 +92,53 @@ describe("toFacilitatorCardanoSigner", () => {
       provider: { blockfrost: { baseUrl: "http://offline.invalid" } },
     });
     expect(providerOnly.getAddresses()).toEqual([]);
+  });
+
+  it("attaches a bounded timeout to direct Blockfrost evidence requests", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(new Response(null, { status: 404 }));
+    vi.stubGlobal("fetch", fetchMock);
+    try {
+      const signer = toFacilitatorCardanoSigner({
+        network: CARDANO_PREPROD_CAIP2,
+        provider: {
+          blockfrost: { baseUrl: "https://cardano-preprod.blockfrost.io/api/v0" },
+          requestTimeoutMs: 25,
+        },
+      });
+      await expect(
+        signer.getTransactionEvidence!("a".repeat(64), CARDANO_PREPROD_CAIP2),
+      ).resolves.toEqual({ status: "unknown", confirmations: -2 });
+      expect(fetchMock.mock.calls[0][1].signal).toBeInstanceOf(AbortSignal);
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it("propagates provider failures while resolving a spent UTxO", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(new Response(null, { status: 503 }));
+    vi.stubGlobal("fetch", fetchMock);
+    try {
+      const queries = blockfrostQueries({
+        blockfrost: { baseUrl: "https://cardano-preprod.blockfrost.io/api/v0" },
+      });
+      await expect(queries.spentUtxoAddress("a".repeat(64), 0)).rejects.toThrow(
+        /Blockfrost \/txs\/.+\/utxos failed: 503/,
+      );
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it("rejects invalid provider timeout configuration", () => {
+    expect(() =>
+      toFacilitatorCardanoSigner({
+        network: CARDANO_PREPROD_CAIP2,
+        provider: {
+          blockfrost: { baseUrl: "http://offline.invalid" },
+          requestTimeoutMs: 0,
+        },
+      }),
+    ).toThrow(/requestTimeoutMs/);
   });
 });
 

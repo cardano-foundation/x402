@@ -1,5 +1,11 @@
 import LZString from "lz-string";
 
+import {
+  MAX_MASUMI_IDENTIFIER_COMPRESSED_BYTES,
+  MAX_MASUMI_IDENTIFIER_TEXT_CHARS,
+} from "../../limits";
+import { decompressLzStringBounded } from "./boundedLz";
+
 /**
  * The Masumi compatibility identifier — a lookup key that lets Masumi tooling
  * locate an x402 payment.
@@ -55,7 +61,14 @@ export function buildIdentifierText(parts: MasumiIdentifierParts): string {
  * @returns Lowercase hex of the LZString-compressed identifier text.
  */
 export function encodeBlockchainIdentifier(parts: MasumiIdentifierParts): string {
-  const compressed = LZString.compressToUint8Array(buildIdentifierText(parts));
+  const text = buildIdentifierText(parts);
+  if (text.length > MAX_MASUMI_IDENTIFIER_TEXT_CHARS) {
+    throw new Error("Masumi identifier text exceeds the character limit");
+  }
+  const compressed = LZString.compressToUint8Array(text);
+  if (compressed.length > MAX_MASUMI_IDENTIFIER_COMPRESSED_BYTES) {
+    throw new Error("Masumi identifier exceeds the compressed byte limit");
+  }
   return Buffer.from(compressed).toString("hex").toLowerCase();
 }
 
@@ -71,17 +84,19 @@ export function encodeBlockchainIdentifier(parts: MasumiIdentifierParts): string
 export function decodeBlockchainIdentifier(
   blockchainIdentifier: string,
 ): MasumiIdentifierParts | null {
-  if (blockchainIdentifier.length === 0 || blockchainIdentifier.length % 2 !== 0) return null;
-  if (!/^[0-9a-f]+$/.test(blockchainIdentifier)) return null;
-  let text: string | null;
-  try {
-    text = LZString.decompressFromUint8Array(
-      Uint8Array.from(Buffer.from(blockchainIdentifier, "hex")),
-    );
-  } catch {
+  if (
+    blockchainIdentifier.length === 0 ||
+    blockchainIdentifier.length % 2 !== 0 ||
+    blockchainIdentifier.length / 2 > MAX_MASUMI_IDENTIFIER_COMPRESSED_BYTES
+  ) {
     return null;
   }
-  if (!text) return null;
+  if (!/^[0-9a-f]+$/.test(blockchainIdentifier)) return null;
+  const text = decompressLzStringBounded(
+    Uint8Array.from(Buffer.from(blockchainIdentifier, "hex")),
+    MAX_MASUMI_IDENTIFIER_TEXT_CHARS,
+  );
+  if (!text || text.length > MAX_MASUMI_IDENTIFIER_TEXT_CHARS) return null;
   const segments = text.split(".");
   if (segments.length !== 5) return null;
   const [sellerIdentifier, buyerNonce, referenceSignature, referenceKey, contractAddress] =

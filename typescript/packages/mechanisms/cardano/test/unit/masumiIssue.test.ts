@@ -7,6 +7,7 @@ import { issueMasumiRequirements, toMasumiSellerSigner } from "../../src/exact/m
 import { validateMasumiExtra } from "../../src/exact/masumi/schema";
 import { verifyMasumiAuthorization } from "../../src/exact/masumi/verify";
 import type { CardanoExtraMasumi } from "../../src/types";
+import { MAX_MASUMI_COMMITMENT_PARTS } from "../../src/limits";
 
 const NETWORK = CARDANO_PREPROD_CAIP2;
 const PAY_BY_TIME = 1_785_756_000_000n;
@@ -73,6 +74,21 @@ describe("issueMasumiRequirements", () => {
     const second = (await issue()).requirements.extra as unknown as CardanoExtraMasumi;
     expect(first.terms.sellerNonce).toMatch(/^[0-9a-f]{64}$/);
     expect(first.terms.sellerNonce).not.toBe(second.terms.sellerNonce);
+  });
+
+  it("rejects requirements that exceed Masumi collection budgets", async () => {
+    const { requirements } = await issue();
+    const extra = structuredClone(requirements.extra) as unknown as CardanoExtraMasumi;
+    extra.inputCommitment.parts = Array.from(
+      { length: MAX_MASUMI_COMMITMENT_PARTS + 1 },
+      (_, index) => ({
+        name: `part-${index}`,
+        canonicalization: "jcs" as const,
+        content: index,
+        digest: "00".repeat(32),
+      }),
+    );
+    expect(validateMasumiExtra(extra, NETWORK)).toMatchObject({ ok: false });
   });
 
   it("keeps inputHash stable when a part's content is not echoed on the wire", async () => {

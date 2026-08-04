@@ -873,6 +873,7 @@ export class x402ResourceServer {
 
       const context: SchemePaymentRequiredContext = {
         requirements: workingAccepts,
+        requirement: accept,
         paymentPayload,
         resourceInfo,
         error,

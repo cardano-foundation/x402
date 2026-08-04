@@ -12,9 +12,19 @@ import {
 } from "@x402/core/types";
 
 import { ExactCardanoScheme as ExactCardanoClient } from "../../src/exact/client/scheme";
-import { ExactCardanoScheme as ExactCardanoFacilitator } from "../../src/exact/facilitator/scheme";
-import { ExactCardanoScheme as ExactCardanoServer } from "../../src/exact/server/scheme";
-import { toClientCardanoSigner, toFacilitatorCardanoSigner } from "../../src/signer";
+import {
+  ExactCardanoScheme as ExactCardanoFacilitatorBase,
+  type ExactCardanoFacilitatorConfig,
+} from "../../src/exact/facilitator/scheme";
+import {
+  ExactCardanoScheme as ExactCardanoServerBase,
+  type ExactCardanoServerConfig,
+} from "../../src/exact/server/scheme";
+import {
+  toClientCardanoSigner,
+  toFacilitatorCardanoSigner,
+  type FacilitatorCardanoSigner,
+} from "../../src/signer";
 import { LOVELACE_ASSET, USDM_PREPROD_ASSET } from "../../src/constants";
 import { buildScriptDatumInline } from "../../src/exact/script/datum";
 import { decodeCardanoTransaction, slotToPosixMs } from "../../src/utils";
@@ -33,6 +43,20 @@ import {
   stubFacilitatorSigner,
   TTL_SLOT,
 } from "../helpers/stubs";
+
+/** Test-only facilitator with explicit volatile replay storage. */
+class ExactCardanoFacilitator extends ExactCardanoFacilitatorBase {
+  constructor(signer: FacilitatorCardanoSigner, config: ExactCardanoFacilitatorConfig = {}) {
+    super(signer, { inMemorySettlementStoreMaxEntries: 4096, ...config });
+  }
+}
+
+/** Test-only resource server with explicit volatile replay storage. */
+class ExactCardanoServer extends ExactCardanoServerBase {
+  constructor(config: ExactCardanoServerConfig = {}) {
+    super({ inMemoryStore: {}, ...config });
+  }
+}
 
 /**
  * Wraps the x402Facilitator for use with x402ResourceServer.

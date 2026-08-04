@@ -175,6 +175,8 @@ export type SchemeEnrichSettlementResponseHook = (
 
 export interface SchemePaymentRequiredContext {
   requirements: PaymentRequirements[];
+  /** Requirement currently being enriched by the matched scheme implementation. */
+  requirement: PaymentRequirements;
   paymentPayload?: DeepReadonly<PaymentPayload>;
   resourceInfo: ResourceInfo;
   error?: string;

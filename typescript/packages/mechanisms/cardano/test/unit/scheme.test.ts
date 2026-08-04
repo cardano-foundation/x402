@@ -1,10 +1,14 @@
 import { beforeAll, describe, expect, it } from "vitest";
 import { ExactCardanoScheme as ExactCardanoClient } from "../../src/exact/client/scheme";
 import {
-  ExactCardanoScheme as ExactCardanoFacilitator,
+  ExactCardanoScheme as ExactCardanoFacilitatorBase,
   supportedCardanoNetworks,
+  type ExactCardanoFacilitatorConfig,
 } from "../../src/exact/facilitator/scheme";
-import { ExactCardanoScheme as ExactCardanoServer } from "../../src/exact/server/scheme";
+import {
+  ExactCardanoScheme as ExactCardanoServerBase,
+  type ExactCardanoServerConfig,
+} from "../../src/exact/server/scheme";
 import {
   CARDANO_MAINNET_CAIP2,
   CARDANO_NETWORKS,
@@ -20,7 +24,7 @@ import {
 } from "../../src/idempotency";
 import { validateMasumiExtra } from "../../src/exact/masumi/schema";
 import { issueMasumiRequirements } from "../helpers/masumi";
-import type { PaymentRequirements } from "@x402/core/types";
+import type { PaymentPayload, PaymentRequired, PaymentRequirements } from "@x402/core/types";
 import { buildSignedTx } from "../helpers/buildSignedTx";
 import {
   freshPreprodAddress,
@@ -30,6 +34,20 @@ import {
 } from "../helpers/stubs";
 
 const PREPROD = CARDANO_PREPROD_CAIP2;
+
+/** Test-only facilitator with explicit volatile replay storage. */
+class ExactCardanoFacilitator extends ExactCardanoFacilitatorBase {
+  constructor(signer: FacilitatorCardanoSigner, config: ExactCardanoFacilitatorConfig = {}) {
+    super(signer, { inMemorySettlementStoreMaxEntries: 4096, ...config });
+  }
+}
+
+/** Test-only resource server with explicit volatile replay storage. */
+class ExactCardanoServer extends ExactCardanoServerBase {
+  constructor(config: ExactCardanoServerConfig = {}) {
+    super({ inMemoryStore: {}, ...config });
+  }
+}
 
 const TX_HASH = "a".repeat(64);
 
@@ -53,6 +71,82 @@ const stubSigner: ClientCardanoSigner = {
     nonce: `${TX_HASH}#0`,
   }),
 };
+
+async function serverReplayFixture(body: unknown = { job: 1 }) {
+  const payTo = await freshPreprodAddress();
+  const built = await buildSignedTx({
+    payTo,
+    asset: LOVELACE_ASSET,
+    amount: 2_000_000n,
+    nonceUtxoRef: NONCE_REF,
+    ttlSlot: TTL_SLOT,
+    network: PREPROD,
+  });
+  const requirements = buildRequirements({
+    network: PREPROD,
+    payTo,
+    asset: LOVELACE_ASSET,
+    amount: "2000000",
+  });
+  const paymentPayload: PaymentPayload = {
+    x402Version: 2,
+    accepted: requirements,
+    payload: { transaction: built.transaction, nonce: built.nonce },
+  };
+  const transportContext = {
+    request: {
+      method: "POST",
+      adapter: {
+        getMethod: () => "POST",
+        getUrl: () => "https://example.com/jobs",
+        getHeader: (name: string) =>
+          name === "content-type"
+            ? "application/json"
+            : name === "authorization"
+              ? "Bearer owner-token"
+              : undefined,
+        getBody: () => body,
+      },
+    },
+  };
+  return {
+    context: {
+      paymentPayload,
+      requirements,
+      declaredExtensions: {},
+      transportContext,
+      result: { isValid: true, payer: "addr_test1payer" },
+    },
+    transportContext,
+  };
+}
+
+async function attachReplayChallenge(
+  server: ExactCardanoServer,
+  fixture: Awaited<ReturnType<typeof serverReplayFixture>>,
+): Promise<string> {
+  const paymentRequiredResponse: PaymentRequired = {
+    x402Version: 2,
+    resource: { url: "https://example.com/jobs" },
+    accepts: [fixture.context.requirements],
+  };
+  await server.enrichPaymentRequiredResponse({
+    requirements: [fixture.context.requirements],
+    requirement: fixture.context.requirements,
+    resourceInfo: paymentRequiredResponse.resource,
+    paymentRequiredResponse,
+    transportContext: fixture.transportContext,
+  });
+  fixture.context.paymentPayload.extensions = paymentRequiredResponse.extensions;
+  const challenge = (
+    paymentRequiredResponse.extensions?.cardanoReplayProtection as {
+      challenges?: Record<string, string>;
+    }
+  )?.challenges;
+  const value = challenge && Object.values(challenge)[0];
+  if (!value) throw new Error("test replay challenge was not issued");
+  return value;
+}
 
 const stubFacilitatorSigner: FacilitatorCardanoSigner = {
   getAddresses: () => ["addr1qfacilitator00"],
@@ -188,6 +282,20 @@ describe("ExactCardanoScheme client", () => {
     ).rejects.toThrow(/honoured submissionMode server, expected client/);
   });
 
+  it("rejects a signer that omits client-submission mode", async () => {
+    const omittingSigner: ClientCardanoSigner = {
+      getAddress: () => "addr1qxsomeaddress00",
+      buildAndSignPaymentTransaction: () => ({
+        transaction: "AAAA",
+        nonce: `${TX_HASH}#0`,
+      }),
+    };
+    const c = new ExactCardanoClient(omittingSigner);
+    await expect(
+      c.createPaymentPayload(2, buildRequirements({ extra: { submissionPolicy: "client" } })),
+    ).rejects.toThrow(/honoured submissionMode undefined, expected client/);
+  });
+
   it("rejects signer responses with invalid nonce", async () => {
     const badSigner: ClientCardanoSigner = {
       getAddress: () => "addr1q",
@@ -201,6 +309,12 @@ describe("ExactCardanoScheme client", () => {
 });
 
 describe("ExactCardanoScheme facilitator", () => {
+  it("requires replay persistence unless volatile storage is explicit", () => {
+    expect(() => new ExactCardanoFacilitatorBase(stubFacilitatorSigner)).toThrow(
+      /durable settlementStore/,
+    );
+  });
+
   it("declares CAIP family and scheme identifier", () => {
     const facilitator = new ExactCardanoFacilitator(stubFacilitatorSigner);
     expect(facilitator.scheme).toBe("exact");
@@ -236,6 +350,21 @@ describe("ExactCardanoScheme facilitator", () => {
     expect(extra.l1Confirmations).toEqual({
       server: { minimum: 0, maximum: 20 },
       client: { minimum: 0, maximum: 20 },
+    });
+  });
+
+  it("advertises mempool evidence when the operator enables it", () => {
+    const facilitator = new ExactCardanoFacilitator(
+      {
+        ...stubFacilitatorSigner,
+        getTransactionEvidence: async () => ({ status: "mempool" as const, confirmations: -1 }),
+      },
+      { acceptMempool: true },
+    );
+    const extra = facilitator.getExtra(CARDANO_PREPROD_CAIP2)!;
+    expect(extra.l1Confirmations).toEqual({
+      server: { minimum: -1, maximum: 20 },
+      client: { minimum: -1, maximum: 20 },
     });
   });
 
@@ -552,7 +681,7 @@ describe("ExactCardanoScheme facilitator", () => {
       expect(submits).toBe(1);
     });
 
-    it("frees the claim when the transaction never reached the ledger", async () => {
+    it("tombstones a transaction after definitive pre-ledger rejection", async () => {
       let submits = 0;
       const facilitator = new FakeOk(
         stubFacilitator({
@@ -567,12 +696,15 @@ describe("ExactCardanoScheme facilitator", () => {
       );
       const failed = await facilitator.settle(payloadFor(), reqs);
       expect(failed.success).toBe(false);
-      expect(failed.errorReason).toBe("exact_cardano_settlement_failed");
+      expect(failed.errorReason).toBe("exact_cardano_settlement_definitively_rejected");
       expect(failed.errorMessage).toContain("BadInputsUTxO");
 
-      // Nothing landed, so a retry is allowed to attempt submission again.
-      await facilitator.settle(payloadFor(), reqs);
-      expect(submits).toBe(2);
+      // The handler already ran before settlement. Reusing or replacing this
+      // payment could bind that result to different bytes, so the quote is now
+      // terminal and the rejected transaction is never broadcast again.
+      const retry = await facilitator.settle(payloadFor(), reqs);
+      expect(retry.errorReason).toBe("exact_cardano_settlement_definitively_rejected");
+      expect(submits).toBe(1);
     });
 
     it("retains the claim after an ambiguous submission failure", async () => {
@@ -720,6 +852,29 @@ describe("ExactCardanoScheme facilitator", () => {
 });
 
 describe("ExactCardanoScheme server", () => {
+  it("requires replay persistence unless volatile storage is explicit", () => {
+    expect(() => new ExactCardanoServerBase()).toThrow(/durable operationStore/);
+  });
+
+  it("awaits asynchronous bodies and prefers exact raw bytes", async () => {
+    const asyncBody = await serverReplayFixture();
+    const asyncAdapter = asyncBody.transportContext.request.adapter;
+    asyncAdapter.getBody = async () => ({ job: 1 });
+    const asyncServer = new ExactCardanoServer({ requestBinding: () => "test-requester" });
+    expect(await asyncServer.schemeHooks.onAfterVerify!(asyncBody.context)).toBeUndefined();
+
+    const rawBody = await serverReplayFixture();
+    const rawAdapter = rawBody.transportContext.request.adapter as typeof asyncAdapter & {
+      getRawBody(): Promise<Uint8Array>;
+    };
+    rawAdapter.getBody = () => {
+      throw new Error("parsed body must not be read when raw bytes are available");
+    };
+    rawAdapter.getRawBody = async () => new TextEncoder().encode('{ "job": 1 }');
+    const rawServer = new ExactCardanoServer({ requestBinding: () => "test-requester" });
+    expect(await rawServer.schemeHooks.onAfterVerify!(rawBody.context)).toBeUndefined();
+  });
+
   it("claims the payment before the handler and replays its stored result", async () => {
     const payTo = await freshPreprodAddress();
     const built = await buildSignedTx({
@@ -761,8 +916,10 @@ describe("ExactCardanoScheme server", () => {
     });
 
     const operationStore = new InMemoryCardanoOperationStore();
-    const server = new ExactCardanoServer({ operationStore });
-    const peerServer = new ExactCardanoServer({ operationStore });
+    const requestBinding = ({ getHeader }: { getHeader(name: string): string | undefined }) =>
+      getHeader("authorization") ?? "";
+    const server = new ExactCardanoServer({ operationStore, requestBinding });
+    const peerServer = new ExactCardanoServer({ operationStore, requestBinding });
     const hooks = server.schemeHooks;
     const peerHooks = peerServer.schemeHooks;
     const requesterHeaders = {
@@ -821,8 +978,8 @@ describe("ExactCardanoScheme server", () => {
         status: 201,
         contentType: "application/json",
         headers: { "x-job": "job-1" },
-        body: { jobId: "job-1" },
-        isRaw: false,
+        body: Buffer.from('{"jobId":"job-1"}'),
+        isRaw: true,
       },
     });
     expect(
@@ -842,6 +999,135 @@ describe("ExactCardanoScheme server", () => {
       abort: true,
       reason: "payment_replay_conflict",
       status: 409,
+    });
+  });
+
+  it("replays an anonymous result only with the original 402 challenge", async () => {
+    const fixture = await serverReplayFixture();
+    const adapter = fixture.transportContext.request.adapter;
+    adapter.getHeader = name => (name === "content-type" ? "application/json" : undefined);
+    const server = new ExactCardanoServer();
+    const originalChallenge = await attachReplayChallenge(server, fixture);
+
+    expect(await server.schemeHooks.onAfterVerify!(fixture.context)).toBeUndefined();
+    await server.schemeHooks.onAfterSettle!({
+      ...fixture.context,
+      transportContext: {
+        ...fixture.transportContext,
+        responseBody: Buffer.from('{"jobId":"job-1"}'),
+        responseHeaders: { "content-type": "application/json" },
+        responseStatus: 200,
+      },
+      result: { success: true, transaction: "abc", network: PREPROD },
+    });
+
+    const retry = await server.schemeHooks.onAfterVerify!(fixture.context);
+    expect(retry).toMatchObject({
+      skipHandler: true,
+      response: { status: 200, body: Buffer.from('{"jobId":"job-1"}'), isRaw: true },
+    });
+
+    const attackerChallenge = await attachReplayChallenge(server, fixture);
+    expect(attackerChallenge).not.toBe(originalChallenge);
+    expect(await server.schemeHooks.onAfterVerify!(fixture.context)).toMatchObject({
+      abort: true,
+      reason: "payment_replay_binding_required",
+      status: 403,
+    });
+  });
+
+  it("does not treat arbitrary authorization headers as authenticated request binding", async () => {
+    const fixture = await serverReplayFixture();
+    fixture.context.paymentPayload.payload.submissionMode = "client";
+
+    const operationStore = new InMemoryCardanoOperationStore();
+    const server = new ExactCardanoServer({ operationStore });
+    expect(await server.schemeHooks.onAfterVerify!(fixture.context)).toMatchObject({
+      abort: true,
+      reason: "payment_replay_binding_required",
+      status: 403,
+    });
+
+    await attachReplayChallenge(server, fixture);
+    expect(await server.schemeHooks.onAfterVerify!(fixture.context)).toMatchObject({
+      abort: true,
+      reason: "payment_replay_binding_required",
+      status: 403,
+    });
+
+    const authenticatedServer = new ExactCardanoServer({
+      operationStore,
+      requestBinding: () => "validated-owner",
+    });
+    await attachReplayChallenge(authenticatedServer, fixture);
+    expect(await authenticatedServer.schemeHooks.onAfterVerify!(fixture.context)).toBeUndefined();
+  });
+
+  it("retains an ambiguous tombstone when a handler throws or fails", async () => {
+    const fixture = await serverReplayFixture();
+    const server = new ExactCardanoServer({ requestBinding: () => "test-requester" });
+    expect(await server.schemeHooks.onAfterVerify!(fixture.context)).toBeUndefined();
+    await server.schemeHooks.onVerifiedPaymentCanceled!({
+      ...fixture.context,
+      reason: "handler_threw",
+    });
+
+    expect(await server.schemeHooks.onAfterVerify!(fixture.context)).toMatchObject({
+      abort: true,
+      reason: "payment_replay_outcome_ambiguous",
+      status: 409,
+    });
+  });
+
+  it("makes a definitive settlement rejection terminal for the protected operation", async () => {
+    const fixture = await serverReplayFixture();
+    const server = new ExactCardanoServer({ requestBinding: () => "test-requester" });
+    expect(await server.schemeHooks.onAfterVerify!(fixture.context)).toBeUndefined();
+
+    await server.schemeHooks.onSettleFailure!({
+      ...fixture.context,
+      transportContext: {
+        ...fixture.transportContext,
+        responseBody: Buffer.from('{"jobId":"job-1"}'),
+        responseHeaders: { "content-type": "application/json" },
+        responseStatus: 200,
+      },
+      result: {
+        success: false,
+        transaction: "abc",
+        network: PREPROD,
+        errorReason: "exact_cardano_settlement_definitively_rejected",
+      },
+    });
+
+    expect(await server.schemeHooks.onAfterVerify!(fixture.context)).toMatchObject({
+      abort: true,
+      reason: "payment_replay_outcome_ambiguous",
+      status: 409,
+    });
+  });
+
+  it("fails closed when replay persistence or body canonicalization fails", async () => {
+    const fixture = await serverReplayFixture(new Map([["job", 1]]));
+    const invalidBodyServer = new ExactCardanoServer();
+    expect(await invalidBodyServer.schemeHooks.onAfterVerify!(fixture.context)).toMatchObject({
+      abort: true,
+      reason: "payment_replay_store_unavailable",
+      status: 503,
+    });
+
+    const unavailableStore = new InMemoryCardanoOperationStore();
+    unavailableStore.claim = async () => {
+      throw new Error("database unavailable");
+    };
+    const unavailableServer = new ExactCardanoServer({
+      operationStore: unavailableStore,
+      requestBinding: () => "test-requester",
+    });
+    expect(await unavailableServer.schemeHooks.onAfterVerify!(fixture.context)).toMatchObject({
+      abort: true,
+      reason: "payment_replay_store_unavailable",
+      status: 503,
     });
   });
 

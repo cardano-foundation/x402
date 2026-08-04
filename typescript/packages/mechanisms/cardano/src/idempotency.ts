@@ -1,3 +1,5 @@
+import { randomBytes } from "node:crypto";
+
 import type { CardanoSubmissionMode } from "./types";
 
 /** Response retained after a protected Cardano operation completes. */
@@ -14,8 +16,10 @@ export interface CardanoOperationClaim {
   key: string;
   txHash: string;
   fingerprint: string;
+  requirementsFingerprint: string;
+  replayChallenge?: string;
+  requireReplayChallenge: boolean;
   ownerToken: string;
-  expiresAt: number;
 }
 
 /** Result of attempting to claim a protected operation. */
@@ -24,17 +28,32 @@ export type CardanoOperationClaimResult =
   | { status: "transaction-conflict" }
   | { status: "request-conflict" }
   | { status: "in-progress" }
+  | { status: "ambiguous" }
   | { status: "completed"; response: CardanoStoredResponse }
   | { status: "completed-without-response" }
+  | { status: "challenge-invalid" }
+  | { status: "capacity-exceeded" };
+
+/** Binding stored for an opaque challenge issued in a 402 response. */
+export interface CardanoReplayChallengeBinding {
+  fingerprint: string;
+  requirementsFingerprint: string;
+  expiresAt: number;
+}
+
+/** Result of issuing a replay challenge. */
+export type CardanoReplayChallengeResult =
+  | { status: "issued"; challenge: string }
   | { status: "capacity-exceeded" };
 
 /**
  * Persistence boundary for protected-operation idempotency.
  *
- * Implementations used by multiple workers or pods MUST make `claim()` an
- * atomic compare-and-set operation in shared durable storage.
+ * Production implementations MUST make `claim()` an atomic compare-and-set
+ * operation in durable storage shared by every worker and deployment.
  */
 export interface CardanoOperationStore {
+  issueChallenge(binding: CardanoReplayChallengeBinding): Promise<CardanoReplayChallengeResult>;
   claim(claim: CardanoOperationClaim): Promise<CardanoOperationClaimResult>;
   complete(
     key: string,
@@ -42,26 +61,34 @@ export interface CardanoOperationStore {
     response: CardanoStoredResponse,
     responseBytes: number,
   ): Promise<"stored" | "response-too-large" | "not-owner">;
+  markAmbiguous(key: string, ownerToken: string): Promise<"stored" | "not-owner">;
   release(key: string, ownerToken: string): Promise<void>;
 }
 
 /** Capacity controls for the process-local protected-operation store. */
 export interface InMemoryCardanoOperationStoreOptions {
   maxEntries?: number;
+  maxChallenges?: number;
   maxResponseBytes?: number;
   maxTotalResponseBytes?: number;
 }
 
 interface OperationRecord extends CardanoOperationClaim {
-  completed: boolean;
+  state: "in-progress" | "ambiguous" | "completed";
   response?: CardanoStoredResponse;
   responseBytes: number;
+}
+
+interface ReplayChallengeRecord extends CardanoReplayChallengeBinding {
+  claimedKey?: string;
 }
 
 /** Bounded process-local store for tests and explicitly single-process servers. */
 export class InMemoryCardanoOperationStore implements CardanoOperationStore {
   private readonly records = new Map<string, OperationRecord>();
+  private readonly challenges = new Map<string, ReplayChallengeRecord>();
   private readonly maxEntries: number;
+  private readonly maxChallenges: number;
   private readonly maxResponseBytes: number;
   private readonly maxTotalResponseBytes: number;
   private totalResponseBytes = 0;
@@ -73,6 +100,7 @@ export class InMemoryCardanoOperationStore implements CardanoOperationStore {
    */
   constructor(options: InMemoryCardanoOperationStoreOptions = {}) {
     this.maxEntries = positiveInteger(options.maxEntries ?? 4096, "maxEntries");
+    this.maxChallenges = positiveInteger(options.maxChallenges ?? 4096, "maxChallenges");
     this.maxResponseBytes = nonNegativeInteger(
       options.maxResponseBytes ?? 2 * 1024 * 1024,
       "maxResponseBytes",
@@ -84,23 +112,78 @@ export class InMemoryCardanoOperationStore implements CardanoOperationStore {
   }
 
   /**
+   * Issues a fresh opaque challenge bound to one protected request and quote.
+   *
+   * @param binding - Request, requirements and expiry binding.
+   * @returns The challenge, or a capacity failure.
+   */
+  async issueChallenge(
+    binding: CardanoReplayChallengeBinding,
+  ): Promise<CardanoReplayChallengeResult> {
+    if (!Number.isSafeInteger(binding.expiresAt) || binding.expiresAt <= Date.now()) {
+      throw new Error("replay challenge expiry must be a future safe integer");
+    }
+    this.pruneExpiredChallenges();
+    if (this.challenges.size >= this.maxChallenges) return { status: "capacity-exceeded" };
+    let challenge: string;
+    do {
+      challenge = randomBytes(32).toString("hex");
+    } while (this.challenges.has(challenge));
+    this.challenges.set(challenge, { ...binding });
+    return { status: "issued", challenge };
+  }
+
+  /**
    * Atomically claims an operation or returns its existing state.
    *
-   * @param claim - Payment, request, owner and expiry binding.
+   * @param claim - Payment, request and owner binding.
    * @returns The claim outcome.
    */
   async claim(claim: CardanoOperationClaim): Promise<CardanoOperationClaimResult> {
-    this.prune(Date.now());
     const existing = this.records.get(claim.key);
     if (existing) {
+      if (
+        existing.replayChallenge !== undefined
+          ? existing.replayChallenge !== claim.replayChallenge
+          : claim.requireReplayChallenge
+      ) {
+        return { status: "challenge-invalid" };
+      }
       if (existing.txHash !== claim.txHash) return { status: "transaction-conflict" };
       if (existing.fingerprint !== claim.fingerprint) return { status: "request-conflict" };
-      if (!existing.completed) return { status: "in-progress" };
+      if (existing.state === "in-progress") return { status: "in-progress" };
+      if (existing.state === "ambiguous") return { status: "ambiguous" };
       if (!existing.response) return { status: "completed-without-response" };
       return { status: "completed", response: cloneResponse(existing.response) };
     }
+    let replayChallenge: string | undefined;
+    if (claim.replayChallenge !== undefined || claim.requireReplayChallenge) {
+      const challenge =
+        claim.replayChallenge === undefined
+          ? undefined
+          : this.challenges.get(claim.replayChallenge);
+      if (
+        !challenge ||
+        challenge.expiresAt <= Date.now() ||
+        challenge.fingerprint !== claim.fingerprint ||
+        challenge.requirementsFingerprint !== claim.requirementsFingerprint ||
+        (challenge.claimedKey !== undefined && challenge.claimedKey !== claim.key)
+      ) {
+        return { status: "challenge-invalid" };
+      }
+      replayChallenge = claim.replayChallenge;
+    }
     if (this.records.size >= this.maxEntries) return { status: "capacity-exceeded" };
-    this.records.set(claim.key, { ...claim, completed: false, responseBytes: 0 });
+    this.records.set(claim.key, {
+      ...claim,
+      ...(replayChallenge ? { replayChallenge } : {}),
+      state: "in-progress",
+      responseBytes: 0,
+    });
+    if (replayChallenge) {
+      const challenge = this.challenges.get(replayChallenge);
+      if (challenge) challenge.claimedKey = claim.key;
+    }
     return { status: "claimed" };
   }
 
@@ -120,8 +203,10 @@ export class InMemoryCardanoOperationStore implements CardanoOperationStore {
     responseBytes: number,
   ): Promise<"stored" | "response-too-large" | "not-owner"> {
     const record = this.records.get(key);
-    if (!record || record.ownerToken !== ownerToken) return "not-owner";
-    record.completed = true;
+    if (!record || record.ownerToken !== ownerToken || record.state !== "in-progress") {
+      return "not-owner";
+    }
+    record.state = "completed";
     if (
       responseBytes > this.maxResponseBytes ||
       this.totalResponseBytes - record.responseBytes + responseBytes > this.maxTotalResponseBytes
@@ -139,6 +224,26 @@ export class InMemoryCardanoOperationStore implements CardanoOperationStore {
   }
 
   /**
+   * Permanently retains an owned claim when the handler may have produced side
+   * effects but no response can be replayed safely.
+   *
+   * @param key - Logical payment key.
+   * @param ownerToken - Claimant's owner token.
+   * @returns Whether the owned claim was retained.
+   */
+  async markAmbiguous(key: string, ownerToken: string): Promise<"stored" | "not-owner"> {
+    const record = this.records.get(key);
+    if (!record || record.ownerToken !== ownerToken || record.state !== "in-progress") {
+      return "not-owner";
+    }
+    record.state = "ambiguous";
+    record.response = undefined;
+    this.totalResponseBytes -= record.responseBytes;
+    record.responseBytes = 0;
+    return "stored";
+  }
+
+  /**
    * Releases a claim only when the owner token matches.
    *
    * @param key - Logical payment key.
@@ -146,17 +251,8 @@ export class InMemoryCardanoOperationStore implements CardanoOperationStore {
    */
   async release(key: string, ownerToken: string): Promise<void> {
     const record = this.records.get(key);
-    if (record?.ownerToken === ownerToken) this.delete(key, record);
-  }
-
-  /**
-   * Removes expired records.
-   *
-   * @param now - Current epoch milliseconds.
-   */
-  private prune(now: number): void {
-    for (const [key, record] of this.records) {
-      if (record.expiresAt <= now) this.delete(key, record);
+    if (record?.ownerToken === ownerToken && record.state === "in-progress") {
+      this.delete(key, record);
     }
   }
 
@@ -170,6 +266,14 @@ export class InMemoryCardanoOperationStore implements CardanoOperationStore {
     this.totalResponseBytes -= record.responseBytes;
     this.records.delete(key);
   }
+
+  /** Removes expired, unused quote challenges before capacity checks. */
+  private pruneExpiredChallenges(): void {
+    const now = Date.now();
+    for (const [challenge, binding] of this.challenges) {
+      if (binding.expiresAt <= now) this.challenges.delete(challenge);
+    }
+  }
 }
 
 /** Atomic claim for a canonical Cardano transaction. */
@@ -177,32 +281,40 @@ export interface CardanoSubmissionClaim {
   txHash: string;
   mode: CardanoSubmissionMode;
   ownerToken: string;
-  expiresAt: number;
 }
+
+/** One atomic facilitator claim for transaction and optional Masumi terms. */
+export interface CardanoSettlementClaim extends CardanoSubmissionClaim {
+  termsDigest?: string;
+}
+
+/** Result of claiming a facilitator settlement. */
+export type CardanoSettlementClaimResult =
+  | "fresh"
+  | "in-flight"
+  | "submitted"
+  | "rejected"
+  | "mode-conflict"
+  | "terms-conflict"
+  | "capacity-exceeded";
 
 /** Persistence boundary for facilitator transaction and Masumi-terms claims. */
 export interface CardanoSettlementStore {
-  claimTerms(input: {
-    digest: string;
-    txHash: string;
-    expiresAt: number;
-  }): Promise<"claimed" | "same-transaction" | "transaction-conflict" | "capacity-exceeded">;
-  claimSubmission(
-    claim: CardanoSubmissionClaim,
-  ): Promise<"fresh" | "in-flight" | "submitted" | "mode-conflict" | "capacity-exceeded">;
+  claimSettlement(claim: CardanoSettlementClaim): Promise<CardanoSettlementClaimResult>;
   markSubmitted(txHash: string, ownerToken: string): Promise<void>;
-  releaseSubmission(txHash: string, ownerToken: string): Promise<void>;
+  markRejected(txHash: string, ownerToken: string): Promise<void>;
 }
 
-interface SubmissionRecord extends CardanoSubmissionClaim {
+interface SubmissionRecord extends CardanoSettlementClaim {
   inFlight: boolean;
   submitted: boolean;
+  rejected: boolean;
 }
 
-/** Bounded process-local facilitator store. Use a shared implementation in a cluster. */
+/** Bounded process-local facilitator store for tests and disposable development. */
 export class InMemoryCardanoSettlementStore implements CardanoSettlementStore {
   private readonly submissions = new Map<string, SubmissionRecord>();
-  private readonly terms = new Map<string, { txHash: string; expiresAt: number }>();
+  private readonly terms = new Map<string, { txHash: string }>();
   private readonly maxEntries: number;
 
   /**
@@ -215,51 +327,42 @@ export class InMemoryCardanoSettlementStore implements CardanoSettlementStore {
   }
 
   /**
-   * Binds a Masumi terms digest to one transaction.
+   * Atomically claims one canonical transaction, submission mode and optional
+   * Masumi terms digest. No partial terms binding is left on failure.
    *
-   * @param input - Digest, transaction and expiry binding.
-   * @param input.digest - Canonical Masumi terms digest.
-   * @param input.txHash - Canonical Cardano transaction ID.
-   * @param input.expiresAt - Claim expiry in epoch milliseconds.
+   * @param claim - Transaction, mode and owner binding.
    * @returns The claim outcome.
    */
-  async claimTerms(input: {
-    digest: string;
-    txHash: string;
-    expiresAt: number;
-  }): Promise<"claimed" | "same-transaction" | "transaction-conflict" | "capacity-exceeded"> {
-    this.prune(Date.now());
-    const existing = this.terms.get(input.digest);
-    if (existing) {
-      return existing.txHash === input.txHash ? "same-transaction" : "transaction-conflict";
-    }
-    if (this.entryCount() >= this.maxEntries) return "capacity-exceeded";
-    this.terms.set(input.digest, { txHash: input.txHash, expiresAt: input.expiresAt });
-    return "claimed";
-  }
+  async claimSettlement(claim: CardanoSettlementClaim): Promise<CardanoSettlementClaimResult> {
+    const existingTerms = claim.termsDigest ? this.terms.get(claim.termsDigest) : undefined;
+    if (existingTerms && existingTerms.txHash !== claim.txHash) return "terms-conflict";
 
-  /**
-   * Atomically claims one canonical transaction and submission mode.
-   *
-   * @param claim - Transaction, mode, owner and expiry binding.
-   * @returns The claim outcome.
-   */
-  async claimSubmission(
-    claim: CardanoSubmissionClaim,
-  ): Promise<"fresh" | "in-flight" | "submitted" | "mode-conflict" | "capacity-exceeded"> {
-    this.prune(Date.now());
     const existing = this.submissions.get(claim.txHash);
     if (existing) {
       if (existing.mode !== claim.mode) return "mode-conflict";
-      return existing.inFlight ? "in-flight" : "submitted";
+      if (existing.termsDigest !== claim.termsDigest) return "terms-conflict";
     }
-    if (this.entryCount() >= this.maxEntries) return "capacity-exceeded";
-    this.submissions.set(claim.txHash, {
-      ...claim,
-      inFlight: true,
-      submitted: false,
-    });
-    return "fresh";
+
+    const requiredEntries = (existing ? 0 : 1) + (claim.termsDigest && !existingTerms ? 1 : 0);
+    if (this.entryCount() + requiredEntries > this.maxEntries) return "capacity-exceeded";
+
+    if (claim.termsDigest && !existingTerms) {
+      this.terms.set(claim.termsDigest, { txHash: claim.txHash });
+    }
+    if (!existing) {
+      this.submissions.set(claim.txHash, {
+        txHash: claim.txHash,
+        mode: claim.mode,
+        ...(claim.termsDigest ? { termsDigest: claim.termsDigest } : {}),
+        ownerToken: claim.ownerToken,
+        inFlight: true,
+        submitted: false,
+        rejected: false,
+      });
+      return "fresh";
+    }
+    if (existing.rejected) return "rejected";
+    return existing.inFlight ? "in-flight" : "submitted";
   }
 
   /**
@@ -273,18 +376,24 @@ export class InMemoryCardanoSettlementStore implements CardanoSettlementStore {
     if (record?.ownerToken === ownerToken) {
       record.inFlight = false;
       record.submitted = true;
+      record.rejected = false;
     }
   }
 
   /**
-   * Releases an owned transaction claim.
+   * Permanently records a definitive pre-ledger rejection. Retaining this
+   * tombstone prevents a paid retry from resubmitting the same invalid bytes.
    *
    * @param txHash - Canonical transaction ID.
    * @param ownerToken - Claimant's owner token.
    */
-  async releaseSubmission(txHash: string, ownerToken: string): Promise<void> {
+  async markRejected(txHash: string, ownerToken: string): Promise<void> {
     const record = this.submissions.get(txHash);
-    if (record?.ownerToken === ownerToken) this.submissions.delete(txHash);
+    if (record?.ownerToken === ownerToken) {
+      record.inFlight = false;
+      record.submitted = false;
+      record.rejected = true;
+    }
   }
 
   /**
@@ -294,20 +403,6 @@ export class InMemoryCardanoSettlementStore implements CardanoSettlementStore {
    */
   private entryCount(): number {
     return this.submissions.size + this.terms.size;
-  }
-
-  /**
-   * Removes expired terms and submission records.
-   *
-   * @param now - Current epoch milliseconds.
-   */
-  private prune(now: number): void {
-    for (const [key, record] of this.submissions) {
-      if (record.expiresAt <= now) this.submissions.delete(key);
-    }
-    for (const [key, record] of this.terms) {
-      if (record.expiresAt <= now) this.terms.delete(key);
-    }
   }
 }
 

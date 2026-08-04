@@ -14,6 +14,7 @@ import {
 } from "../../constants";
 import type { MasumiDeployment } from "../../types";
 import { unwrapCborByteString } from "../../utils";
+import { MAX_MASUMI_SCRIPT_HASH_CACHE_ENTRIES } from "../../limits";
 import { MASUMI_VESTED_PAY_COMPILED_CODE } from "./blueprintCode";
 
 /**
@@ -93,6 +94,10 @@ export function masumiEscrowScriptHash(deployment: MasumiDeployment): string {
   ]);
   const script = new PlutusV3.PlutusV3({ bytes: unwrapCborByteString(applied) });
   const hash = ScriptHash.toHex(ScriptHash.fromScript(script)).toLowerCase();
+  if (scriptHashCache.size >= MAX_MASUMI_SCRIPT_HASH_CACHE_ENTRIES) {
+    const oldest = scriptHashCache.keys().next().value;
+    if (oldest !== undefined) scriptHashCache.delete(oldest);
+  }
   scriptHashCache.set(cacheKey, hash);
   return hash;
 }

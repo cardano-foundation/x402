@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 
 import type { CardanoExtraScript } from "../../src/types";
 import { buildScriptDatumInline } from "../../src/exact/script/datum";
+import { MAX_CARDANO_DATUM_BYTES } from "../../src/limits";
 
 /** Builds a script `extra` block with the supplied optional datum. */
 function scriptExtra(datum?: string): CardanoExtraScript {
@@ -30,5 +31,11 @@ describe("buildScriptDatumInline", () => {
 
   it("throws on a datum that is not valid CBOR hex", () => {
     expect(() => buildScriptDatumInline(scriptExtra("zznothex"))).toThrow(/not valid CBOR hex/);
+  });
+
+  it("rejects an oversized datum before decoding CBOR", () => {
+    expect(() =>
+      buildScriptDatumInline(scriptExtra("00".repeat(MAX_CARDANO_DATUM_BYTES + 1))),
+    ).toThrow(/non-empty CBOR hex/);
   });
 });

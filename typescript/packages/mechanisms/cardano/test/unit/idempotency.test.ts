@@ -7,14 +7,13 @@ import {
   type CardanoStoredResponse,
 } from "../../src/idempotency";
 
-const future = (): number => Date.now() + 60_000;
-
 const operationClaim = (overrides: Partial<CardanoOperationClaim> = {}): CardanoOperationClaim => ({
   key: "transaction:abc",
   txHash: "abc",
   fingerprint: "request-a",
+  requirementsFingerprint: "requirements-a",
+  requireReplayChallenge: false,
   ownerToken: "owner-a",
-  expiresAt: future(),
   ...overrides,
 });
 
@@ -76,33 +75,183 @@ describe("Cardano idempotency stores", () => {
     ).toEqual({ status: "capacity-exceeded" });
   });
 
+  it("retains completed and ambiguous consumption tombstones", async () => {
+    const store = new InMemoryCardanoOperationStore();
+    await store.claim(operationClaim());
+    await store.complete("transaction:abc", "owner-a", response(), 10);
+    expect(await store.claim(operationClaim({ ownerToken: "owner-b" }))).toMatchObject({
+      status: "completed",
+    });
+
+    await store.claim(
+      operationClaim({ key: "transaction:def", txHash: "def", ownerToken: "owner-def" }),
+    );
+    expect(await store.markAmbiguous("transaction:def", "owner-def")).toBe("stored");
+    await store.release("transaction:def", "owner-def");
+    expect(
+      await store.claim(
+        operationClaim({ key: "transaction:def", txHash: "def", ownerToken: "owner-retry" }),
+      ),
+    ).toEqual({ status: "ambiguous" });
+  });
+
   it("shares owner-safe settlement claims across facilitator instances", async () => {
     const store = new InMemoryCardanoSettlementStore(2);
     expect(
-      await store.claimSubmission({
+      await store.claimSettlement({
         txHash: "abc",
         mode: "server",
         ownerToken: "owner-a",
-        expiresAt: future(),
       }),
     ).toBe("fresh");
     expect(
-      await store.claimSubmission({
+      await store.claimSettlement({
         txHash: "abc",
         mode: "server",
         ownerToken: "owner-b",
-        expiresAt: future(),
       }),
     ).toBe("in-flight");
 
-    await store.releaseSubmission("abc", "owner-b");
     expect(
-      await store.claimSubmission({
+      await store.claimSettlement({
         txHash: "abc",
         mode: "client",
         ownerToken: "owner-c",
-        expiresAt: future(),
       }),
     ).toBe("mode-conflict");
+  });
+
+  it("retains definitive submission rejections as terminal tombstones", async () => {
+    const store = new InMemoryCardanoSettlementStore();
+    await store.claimSettlement({ txHash: "abc", mode: "server", ownerToken: "owner-a" });
+    await store.markRejected("abc", "owner-a");
+
+    expect(
+      await store.claimSettlement({ txHash: "abc", mode: "server", ownerToken: "owner-b" }),
+    ).toBe("rejected");
+  });
+
+  it("keeps Masumi terms permanently bound to their first transaction", async () => {
+    const store = new InMemoryCardanoSettlementStore();
+    expect(
+      await store.claimSettlement({
+        txHash: "abc",
+        mode: "server",
+        ownerToken: "owner-a",
+        termsDigest: "terms",
+      }),
+    ).toBe("fresh");
+    expect(
+      await store.claimSettlement({
+        txHash: "def",
+        mode: "server",
+        ownerToken: "owner-b",
+        termsDigest: "terms",
+      }),
+    ).toBe("terms-conflict");
+    expect(
+      await store.claimSettlement({
+        txHash: "abc",
+        mode: "server",
+        ownerToken: "owner-c",
+        termsDigest: "terms",
+      }),
+    ).toBe("in-flight");
+  });
+
+  it("claims Masumi terms and transaction atomically", async () => {
+    const store = new InMemoryCardanoSettlementStore(1);
+    expect(
+      await store.claimSettlement({
+        txHash: "abc",
+        mode: "server",
+        ownerToken: "owner-a",
+        termsDigest: "terms",
+      }),
+    ).toBe("capacity-exceeded");
+    expect(
+      await store.claimSettlement({
+        txHash: "def",
+        mode: "server",
+        ownerToken: "owner-b",
+      }),
+    ).toBe("fresh");
+  });
+
+  it("binds replay challenges to one request and requirement", async () => {
+    const store = new InMemoryCardanoOperationStore();
+    const issued = await store.issueChallenge({
+      fingerprint: "request-a",
+      requirementsFingerprint: "requirements-a",
+      expiresAt: Date.now() + 60_000,
+    });
+    if (issued.status !== "issued") throw new Error("test challenge was not issued");
+
+    expect(
+      await store.claim(
+        operationClaim({ replayChallenge: issued.challenge, requireReplayChallenge: true }),
+      ),
+    ).toEqual({ status: "claimed" });
+    expect(
+      await store.claim(
+        operationClaim({
+          ownerToken: "owner-b",
+          replayChallenge: "b".repeat(64),
+          requireReplayChallenge: true,
+        }),
+      ),
+    ).toEqual({ status: "challenge-invalid" });
+  });
+
+  it("rejects missing, expired, or misbound replay challenges", async () => {
+    const store = new InMemoryCardanoOperationStore();
+    const issued = await store.issueChallenge({
+      fingerprint: "request-a",
+      requirementsFingerprint: "requirements-a",
+      expiresAt: Date.now() + 60_000,
+    });
+    if (issued.status !== "issued") throw new Error("test challenge was not issued");
+
+    expect(await store.claim(operationClaim({ requireReplayChallenge: true }))).toEqual({
+      status: "challenge-invalid",
+    });
+    expect(
+      await store.claim(
+        operationClaim({
+          key: "transaction:def",
+          txHash: "def",
+          fingerprint: "request-b",
+          replayChallenge: issued.challenge,
+          requireReplayChallenge: true,
+        }),
+      ),
+    ).toEqual({ status: "challenge-invalid" });
+  });
+
+  it("allows one challenge to claim only one canonical operation", async () => {
+    const store = new InMemoryCardanoOperationStore();
+    const issued = await store.issueChallenge({
+      fingerprint: "request-a",
+      requirementsFingerprint: "requirements-a",
+      expiresAt: Date.now() + 60_000,
+    });
+    if (issued.status !== "issued") throw new Error("test challenge was not issued");
+
+    expect(
+      await store.claim(
+        operationClaim({ replayChallenge: issued.challenge, requireReplayChallenge: true }),
+      ),
+    ).toEqual({ status: "claimed" });
+    expect(
+      await store.claim(
+        operationClaim({
+          key: "transaction:def",
+          txHash: "def",
+          ownerToken: "owner-b",
+          replayChallenge: issued.challenge,
+          requireReplayChallenge: true,
+        }),
+      ),
+    ).toEqual({ status: "challenge-invalid" });
   });
 });
