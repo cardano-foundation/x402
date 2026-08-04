@@ -10,14 +10,35 @@ import type { CardanoExtraMasumi } from "../../src/types";
 import { MAX_MASUMI_COMMITMENT_PARTS } from "../../src/limits";
 
 const NETWORK = CARDANO_PREPROD_CAIP2;
-// The issuer enforces absolute deadline floors against its own clock, so the
-// happy-path fixture has to be anchored to now rather than to a fixed instant.
-// `payByTime` sits inside `maxTimeoutSeconds` (10 minutes) while
-// `submitResultTime` clears the 15-minute lead Masumi requires.
-const PAY_BY_TIME = BigInt(Date.now() + 9 * 60 * 1000);
-const SUBMIT_RESULT_TIME = PAY_BY_TIME + 7n * 60n * 1000n;
-const UNLOCK_TIME = SUBMIT_RESULT_TIME + 20n * 60n * 1000n;
-const EXTERNAL_DISPUTE_UNLOCK_TIME = UNLOCK_TIME + 20n * 60n * 1000n;
+
+/**
+ * Deadlines anchored to the clock at the moment they are read, not at module
+ * load. The issuer enforces absolute floors against its own `Date.now()`, and
+ * `payByTime` has only a minute of slack inside `maxTimeoutSeconds`, so
+ * computing these once at import would make the suite fail whenever enough time
+ * passed between loading this file and running a case.
+ *
+ * `payByTime` sits inside `maxTimeoutSeconds` (10 minutes) while
+ * `submitResultTime` clears the 15-minute lead Masumi requires.
+ *
+ * @returns The four nominal deadlines.
+ */
+function nominalDeadlines(): {
+  payByTime: bigint;
+  submitResultTime: bigint;
+  unlockTime: bigint;
+  externalDisputeUnlockTime: bigint;
+} {
+  const payByTime = BigInt(Date.now() + 9 * 60 * 1000);
+  const submitResultTime = payByTime + 7n * 60n * 1000n;
+  const unlockTime = submitResultTime + 20n * 60n * 1000n;
+  return {
+    payByTime,
+    submitResultTime,
+    unlockTime,
+    externalDisputeUnlockTime: unlockTime + 20n * 60n * 1000n,
+  };
+}
 
 /**
  * Issues a 402 with a mnemonic-backed seller, i.e. the way a resource server
@@ -31,6 +52,7 @@ async function issue(overrides: Record<string, unknown> = {}) {
     mnemonic: PrivateKey.generateMnemonic(),
     network: NETWORK,
   });
+  const deadlines = nominalDeadlines();
   const requirements = await issueMasumiRequirements({
     network: NETWORK,
     asset: LOVELACE_ASSET,
@@ -46,10 +68,10 @@ async function issue(overrides: Record<string, unknown> = {}) {
         content: { days: 3, units: "metric" },
       },
     ],
-    payByTime: PAY_BY_TIME.toString(),
-    submitResultTime: SUBMIT_RESULT_TIME.toString(),
-    unlockTime: UNLOCK_TIME.toString(),
-    externalDisputeUnlockTime: EXTERNAL_DISPUTE_UNLOCK_TIME.toString(),
+    payByTime: deadlines.payByTime.toString(),
+    submitResultTime: deadlines.submitResultTime.toString(),
+    unlockTime: deadlines.unlockTime.toString(),
+    externalDisputeUnlockTime: deadlines.externalDisputeUnlockTime.toString(),
     ...overrides,
   });
   return { requirements, sellerAddress: seller.sellerAddress };
@@ -162,14 +184,15 @@ describe("issueMasumiRequirements", () => {
   // the difference between an immediate error and a 402 no buyer will ever pay.
   describe("issuer-side policy", () => {
     it("rejects deadline gaps below the minimum", async () => {
-      await expect(issue({ submitResultTime: (PAY_BY_TIME + 60_000n).toString() })).rejects.toThrow(
-        /deadline intervals are below the minimum/,
-      );
+      const deadlines = nominalDeadlines();
       await expect(
-        issue({ unlockTime: (SUBMIT_RESULT_TIME + 60_000n).toString() }),
+        issue({ submitResultTime: (deadlines.payByTime + 60_000n).toString() }),
       ).rejects.toThrow(/deadline intervals are below the minimum/);
       await expect(
-        issue({ externalDisputeUnlockTime: (UNLOCK_TIME + 60_000n).toString() }),
+        issue({ unlockTime: (deadlines.submitResultTime + 60_000n).toString() }),
+      ).rejects.toThrow(/deadline intervals are below the minimum/);
+      await expect(
+        issue({ externalDisputeUnlockTime: (deadlines.unlockTime + 60_000n).toString() }),
       ).rejects.toThrow(/deadline intervals are below the minimum/);
     });
 
@@ -222,6 +245,68 @@ describe("issueMasumiRequirements", () => {
       await expect(issue({ externalDisputeUnlockTime: farOut.toString() })).rejects.toThrow(
         /deadlines extend beyond the accepted horizon/,
       );
+    });
+
+    // `signTerms` can sit behind a hardware wallet or a human approval, so the
+    // clock-relative rules are re-checked after it resolves. Expiry is the one
+    // that can newly fail: the `maxTimeoutSeconds` ceiling moves forward with
+    // the clock, but `payByTime` does not.
+    it("rejects a 402 whose payByTime expired while the seller was signing", async () => {
+      const seller = toMasumiSellerSigner({
+        mnemonic: PrivateKey.generateMnemonic(),
+        network: NETWORK,
+      });
+      const payByTime = BigInt(Date.now() + 2_000);
+      const submitResultTime = payByTime + 16n * 60n * 1000n;
+      await expect(
+        issueMasumiRequirements({
+          network: NETWORK,
+          asset: LOVELACE_ASSET,
+          amount: "50000000",
+          maxTimeoutSeconds: 600,
+          sellerAddress: seller.sellerAddress,
+          commitment: [{ name: "body", canonicalization: "jcs", content: { days: 3 } }],
+          payByTime: payByTime.toString(),
+          submitResultTime: submitResultTime.toString(),
+          unlockTime: (submitResultTime + 20n * 60n * 1000n).toString(),
+          externalDisputeUnlockTime: (submitResultTime + 40n * 60n * 1000n).toString(),
+          signTerms: async (address, digest) => {
+            await new Promise(resolve => setTimeout(resolve, 2_500));
+            return seller.signTerms(address, digest);
+          },
+        }),
+      ).rejects.toThrow(/payByTime must be in the future/);
+    });
+
+    it("honours a configured deadline horizon", async () => {
+      const farOut = BigInt(Date.now() + 100 * 24 * 60 * 60 * 1000);
+      await expect(issue({ externalDisputeUnlockTime: farOut.toString() })).rejects.toThrow(
+        /deadlines extend beyond the accepted horizon/,
+      );
+      await expect(
+        issue({
+          externalDisputeUnlockTime: farOut.toString(),
+          maxDeadlineHorizonMs: BigInt(200 * 24 * 60 * 60 * 1000),
+        }),
+      ).resolves.toBeDefined();
+    });
+
+    // A truthy non-boolean from untyped config must not disable the checks.
+    it("only skips policy checks for the literal boolean true", async () => {
+      const past = BigInt(Date.now() - 60_000);
+      const expired = {
+        payByTime: past.toString(),
+        submitResultTime: (past + 7n * 60n * 1000n).toString(),
+        unlockTime: (past + 27n * 60n * 1000n).toString(),
+        externalDisputeUnlockTime: (past + 47n * 60n * 1000n).toString(),
+      };
+      await expect(issue({ ...expired, unsafeSkipPolicyChecks: "yes" })).rejects.toThrow(
+        /payByTime must be in the future/,
+      );
+      await expect(issue({ ...expired, unsafeSkipPolicyChecks: 1 })).rejects.toThrow(
+        /payByTime must be in the future/,
+      );
+      await expect(issue({ ...expired, unsafeSkipPolicyChecks: true })).resolves.toBeDefined();
     });
 
     // Named rejections, not a raw `SyntaxError` escaping from `BigInt`.

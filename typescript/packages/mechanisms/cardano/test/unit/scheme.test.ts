@@ -1291,6 +1291,68 @@ describe("ExactCardanoScheme server", () => {
     ).rejects.toThrow(/did not advertise submissionModes/);
   });
 
+  // `auto` lets the buyer pick, but this scheme can only authenticate L1 — a
+  // Hydra payload is refused in verifyMasumiLock — so a Hydra-only facilitator
+  // must not satisfy it.
+  it("rejects Masumi auto settlement against a Hydra-only facilitator", async () => {
+    const { requirements } = await issueMasumiRequirements({
+      network: CARDANO_PREPROD_CAIP2,
+      asset: LOVELACE_ASSET,
+      amount: "5000000",
+      payByTimeMs: BigInt(Date.now() + 5 * 60 * 1000),
+      settlementPolicy: "auto",
+      confirmationPolicy: { l1Confirmations: 0 },
+    });
+    const server = new ExactCardanoServer();
+    const capabilities = (layers: string[]) => ({
+      x402Version: 2 as const,
+      scheme: "exact",
+      network: CARDANO_PREPROD_CAIP2,
+      extra: {
+        assetTransferMethods: ["default", "masumi"],
+        settlementLayers: layers,
+        submissionModes: ["server"],
+        l1Confirmations: { server: { minimum: 0, maximum: 20 } },
+      },
+    });
+
+    await expect(
+      server.enhancePaymentRequirements(requirements, capabilities(["hydra"]), []),
+    ).rejects.toThrow(/does not support Masumi auto settlement/);
+    await expect(
+      server.enhancePaymentRequirements(requirements, capabilities(["l1"]), []),
+    ).resolves.toBeDefined();
+  });
+
+  it("rejects an explicit Masumi hydra policy the facilitator does not advertise", async () => {
+    const { requirements } = await issueMasumiRequirements({
+      network: CARDANO_PREPROD_CAIP2,
+      asset: LOVELACE_ASSET,
+      amount: "5000000",
+      payByTimeMs: BigInt(Date.now() + 5 * 60 * 1000),
+      settlementPolicy: "hydra",
+      confirmationPolicy: { l1Confirmations: 0 },
+    });
+    const server = new ExactCardanoServer();
+    await expect(
+      server.enhancePaymentRequirements(
+        requirements,
+        {
+          x402Version: 2,
+          scheme: "exact",
+          network: CARDANO_PREPROD_CAIP2,
+          extra: {
+            assetTransferMethods: ["default", "masumi"],
+            settlementLayers: ["l1"],
+            submissionModes: ["server"],
+            l1Confirmations: { server: { minimum: 0, maximum: 20 } },
+          },
+        },
+        [],
+      ),
+    ).rejects.toThrow(/does not support Masumi hydra settlement/);
+  });
+
   it("accepts requirements when the facilitator advertises no capabilities at all", async () => {
     const server = new ExactCardanoServer();
     const enhanced = await server.enhancePaymentRequirements(

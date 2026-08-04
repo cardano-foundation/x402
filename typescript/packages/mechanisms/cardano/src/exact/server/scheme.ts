@@ -504,9 +504,15 @@ export class ExactCardanoScheme implements SchemeNetworkServer {
       if (!Array.isArray(advertisedLayers)) {
         throw new Error("Cardano facilitator did not advertise settlementLayers");
       }
+      // `auto` lets the buyer choose, and the only layer this scheme can
+      // actually authenticate is L1 — a Hydra payload is refused outright in
+      // `verifyMasumiLock`. Accepting `auto` against a Hydra-only facilitator
+      // would serve a 402 whose every payment is rejected at verification.
+      // An explicit `hydra` policy still defers to the advertisement, so a
+      // subclass that does implement Hydra keeps working.
       const supported =
         settlementPolicy === "auto"
-          ? advertisedLayers.includes("l1") || advertisedLayers.includes("hydra")
+          ? advertisedLayers.includes("l1")
           : advertisedLayers.includes(settlementPolicy);
       if (!supported) {
         throw new Error(
