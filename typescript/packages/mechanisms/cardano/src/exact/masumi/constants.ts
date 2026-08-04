@@ -40,6 +40,35 @@ export const MASUMI_MIN_UNLOCK_TO_DISPUTE_MS = 15n * 60n * 1000n;
 export const MASUMI_MIN_SUBMIT_RESULT_LEAD_MS = 15n * 60n * 1000n;
 
 /**
+ * How far past issuance the last escrow deadline may sit.
+ *
+ * The minimum gaps stop a seller from making the window uselessly short; this
+ * stops the opposite attack. `vested_pay` gates the buyer's `WithdrawRefund` on
+ * `must_start_after(validity_range, submit_result_time)`, so until that deadline
+ * passes the buyer cannot recover the payment **or** its collateral. Without a
+ * ceiling a hostile 402 can name a deadline years out and freeze the buyer's
+ * funds for that long while passing every other check.
+ *
+ * 30 days is far beyond any legitimate agent settlement — Masumi's own defaults
+ * are `submitResultTime + 6h` and `+ 12h` — and is overridable per call.
+ */
+export const MASUMI_MAX_DEADLINE_HORIZON_MS = 30n * 24n * 60n * 60n * 1000n;
+
+/**
+ * Default ceiling on `collateral_return_lovelace` a client will lock.
+ *
+ * The collateral is derived from the datum size, and the datum carries the
+ * seller's `reference_key` and `reference_signature` verbatim — each allowed up
+ * to `MAX_MASUMI_COSE_BYTES`. A seller who pads them inflates the min-UTXO the
+ * escrow must clear and therefore the buyer's own locked funds. A realistic lock
+ * is a ~450-byte datum needing at most ~3.7 ADA of collateral; padding toward
+ * the ledger's transaction limit pushes that above 50 ADA.
+ *
+ * The ceiling sits well above legitimate use and far below the attack range.
+ */
+export const MASUMI_DEFAULT_MAX_COLLATERAL_LOVELACE = 15_000_000n;
+
+/**
  * Whether the four escrow deadlines are ordered and clear the minimum gaps.
  *
  * This is the single copy of the rule: the issuer applies it to what it is about

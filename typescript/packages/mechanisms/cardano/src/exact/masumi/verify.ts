@@ -29,6 +29,7 @@ import type {
 import { slotToPosixMs } from "../../utils";
 import { masumiEscrowAddress, resolveMasumiDeployment } from "./blueprint";
 import {
+  MASUMI_MAX_DEADLINE_HORIZON_MS,
   MASUMI_MIN_COLLATERAL_LOVELACE,
   MASUMI_REGISTRY_POLICY_ID,
   masumiDeadlineIntervalsHold,
@@ -92,6 +93,8 @@ export interface MasumiVerifyContext {
   resource?: ResourceInfo;
   /** Explicit application approval for a non-canonical deployment. */
   validateCustomDeployment?: MasumiDeploymentValidator;
+  /** How far past now `external_dispute_unlock_time` may sit. */
+  maxDeadlineHorizonMs?: bigint;
 }
 
 /**
@@ -119,6 +122,13 @@ export interface MasumiAuthorizationOptions {
    * A facilitator leaves it `false`: it never sees the original request.
    */
   requireAllPartContent?: boolean;
+  /**
+   * How far past now `external_dispute_unlock_time` may sit. Defaults to
+   * {@link MASUMI_MAX_DEADLINE_HORIZON_MS}; raise it only for a counterparty
+   * whose long settlement window you accept, because until `submit_result_time`
+   * passes the buyer can recover neither the payment nor its collateral.
+   */
+  maxDeadlineHorizonMs?: bigint;
 }
 
 /**
@@ -273,21 +283,39 @@ export function verifyMasumiDatumInvariants(
 }
 
 /**
- * Checks the seller-signed deadline order before a client selects funds.
+ * Checks the seller-signed deadline order and horizon before a client selects
+ * funds.
+ *
+ * The horizon is the half of this the minimum gaps cannot express. `vested_pay`
+ * gates the buyer's `WithdrawRefund` on `must_start_after(validity_range,
+ * submit_result_time)`, so a 402 naming a deadline years out freezes the buyer's
+ * payment and collateral for that long while satisfying every other rule.
+ *
+ * Checking it against the verifier's own clock is deliberately permissive as
+ * time passes — a facilitator sees a later `now` than the client did, so it can
+ * only ever accept what the client already accepted, never newly reject it.
  *
  * @param terms - Schema-validated Masumi terms.
+ * @param maxDeadlineHorizonMs - How far past now the last deadline may sit.
  * @returns Success, or a deadline failure.
  */
-function verifyMasumiTermDeadlines(terms: CardanoExtraMasumi["terms"]): MasumiLockCheck {
+function verifyMasumiTermDeadlines(
+  terms: CardanoExtraMasumi["terms"],
+  maxDeadlineHorizonMs: bigint = MASUMI_MAX_DEADLINE_HORIZON_MS,
+): MasumiLockCheck {
+  const externalDisputeUnlockTime = BigInt(terms.externalDisputeUnlockTime);
   if (
     !masumiDeadlineIntervalsHold(
       BigInt(terms.payByTime),
       BigInt(terms.submitResultTime),
       BigInt(terms.unlockTime),
-      BigInt(terms.externalDisputeUnlockTime),
+      externalDisputeUnlockTime,
     )
   ) {
     return fail(ERR_MASUMI_DEADLINE, "deadline intervals below the minimum");
+  }
+  if (externalDisputeUnlockTime > BigInt(Date.now()) + maxDeadlineHorizonMs) {
+    return fail(ERR_MASUMI_DEADLINE, "deadlines extend beyond the accepted horizon");
   }
   return { ok: true };
 }
@@ -314,7 +342,7 @@ export async function verifyMasumiAuthorization(
 > {
   const { terms, inputCommitment } = extra;
 
-  const deadlines = verifyMasumiTermDeadlines(terms);
+  const deadlines = verifyMasumiTermDeadlines(terms, options.maxDeadlineHorizonMs);
   if (!deadlines.ok) return deadlines;
 
   // Commitment: every part digest must recompute. The issuer echoes the content
@@ -510,6 +538,9 @@ export async function verifyMasumiLock(
     ...(context.resource ? { resource: context.resource } : {}),
     ...(context.validateCustomDeployment
       ? { validateCustomDeployment: context.validateCustomDeployment }
+      : {}),
+    ...(context.maxDeadlineHorizonMs !== undefined
+      ? { maxDeadlineHorizonMs: context.maxDeadlineHorizonMs }
       : {}),
   });
   if (!authorization.ok) return authorization;

@@ -17,6 +17,7 @@ import type {
 } from "../../types";
 import { masumiEscrowAddress, resolveMasumiDeployment } from "./blueprint";
 import {
+  MASUMI_MAX_DEADLINE_HORIZON_MS,
   MASUMI_MIN_SUBMIT_RESULT_LEAD_MS,
   MASUMI_PAYMENT_SOURCE_TYPE,
   masumiDeadlineIntervalsHold,
@@ -176,6 +177,11 @@ function assertMasumiIssuePolicy(input: IssueMasumiRequirementsInput, nowMs: big
   }
   if (submitResultTime < nowMs + MASUMI_MIN_SUBMIT_RESULT_LEAD_MS) {
     throw new Error("Masumi submitResultTime must be at least 15 minutes away");
+  }
+  // A buyer refuses a window it cannot escape: until `submit_result_time` the
+  // contract lets it recover neither the payment nor its collateral.
+  if (BigInt(input.externalDisputeUnlockTime) > nowMs + MASUMI_MAX_DEADLINE_HORIZON_MS) {
+    throw new Error("Masumi deadlines extend beyond the accepted horizon");
   }
 
   // The buyer must be able to build, sign and land the lock inside the x402

@@ -23,6 +23,7 @@ import {
   LOVELACE_ASSET,
   normalizeCardanoNetwork,
 } from "./constants";
+import { MASUMI_DEFAULT_MAX_COLLATERAL_LOVELACE } from "./exact/masumi/constants";
 import { buildMasumiLock, type MasumiBuyerInput } from "./exact/masumi/lock";
 import { parseMasumiLockDatum } from "./exact/masumi/datum";
 import {
@@ -513,6 +514,23 @@ export interface ClientCardanoSignerConfig {
    * inspect the exact network, address and applied parameters.
    */
   validateCustomMasumiDeployment?: MasumiDeploymentValidator;
+  /**
+   * Ceiling on the `collateral_return_lovelace` this client will lock,
+   * defaulting to {@link MASUMI_DEFAULT_MAX_COLLATERAL_LOVELACE}.
+   *
+   * The collateral is derived from the datum size, and the datum carries the
+   * seller's `reference_key` and `reference_signature` verbatim — so a seller
+   * that pads them inflates the buyer's own locked funds. The collateral does
+   * come back, but not before `submit_result_time`.
+   */
+  masumiMaxCollateralLovelace?: bigint;
+  /**
+   * How far past now `external_dispute_unlock_time` may sit, defaulting to
+   * {@link MASUMI_MAX_DEADLINE_HORIZON_MS}. Until `submit_result_time` passes
+   * the buyer can recover neither the payment nor its collateral, so this bounds
+   * how long a 402 can hold the wallet's funds.
+   */
+  masumiMaxDeadlineHorizonMs?: bigint;
 }
 
 /**
@@ -603,6 +621,9 @@ export function toClientCardanoSigner(config: ClientCardanoSignerConfig): Client
             ...(config.validateCustomMasumiDeployment
               ? { validateCustomDeployment: config.validateCustomMasumiDeployment }
               : {}),
+            ...(config.masumiMaxDeadlineHorizonMs !== undefined
+              ? { maxDeadlineHorizonMs: config.masumiMaxDeadlineHorizonMs }
+              : {}),
           },
         );
         if (!authorization.ok) {
@@ -681,6 +702,18 @@ export function toClientCardanoSigner(config: ClientCardanoSignerConfig): Client
             `Masumi client preflight failed: ${datumInvariants.reason}${
               datumInvariants.detail ? ` (${datumInvariants.detail})` : ""
             }`,
+          );
+        }
+        // The collateral is the buyer's own money and follows the datum size,
+        // which the seller inflates by padding `reference_key` /
+        // `reference_signature`. Refuse before signing rather than lock it away
+        // until `submit_result_time`.
+        const maxCollateral =
+          config.masumiMaxCollateralLovelace ?? MASUMI_DEFAULT_MAX_COLLATERAL_LOVELACE;
+        if (lock.collateralLovelace > maxCollateral) {
+          throw new Error(
+            `Masumi client preflight failed: collateral ${lock.collateralLovelace} exceeds the ` +
+              `configured maximum ${maxCollateral}`,
           );
         }
         paymentDatum = lock.datum;

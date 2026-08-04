@@ -215,6 +215,15 @@ describe("issueMasumiRequirements", () => {
       );
     });
 
+    // `vested_pay` gates the buyer's WithdrawRefund on submit_result_time, so an
+    // unbounded deadline freezes the payment AND the collateral for that long.
+    it("rejects deadlines beyond the accepted horizon", async () => {
+      const farOut = BigInt(Date.now() + 400 * 24 * 60 * 60 * 1000);
+      await expect(issue({ externalDisputeUnlockTime: farOut.toString() })).rejects.toThrow(
+        /deadlines extend beyond the accepted horizon/,
+      );
+    });
+
     // Named rejections, not a raw `SyntaxError` escaping from `BigInt`.
     it("rejects unparseable deadlines with a named error", async () => {
       await expect(issue({ payByTime: "" })).rejects.toThrow(

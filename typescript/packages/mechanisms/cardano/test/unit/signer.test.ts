@@ -290,6 +290,30 @@ describe("client-side Masumi authorization", () => {
     ).rejects.toThrow(/deadline intervals below the minimum/);
   });
 
+  // The buyer cannot recover the payment or the collateral before
+  // `submit_result_time`, so a 402 naming a deadline a year out would freeze the
+  // wallet's funds for a year while satisfying every minimum-gap rule.
+  it("refuses deadlines beyond the accepted horizon before provider access", async () => {
+    const payByTime = BigInt(Date.now() + 5 * 60 * 1000);
+    const { requirements } = await issueMasumiRequirements({
+      network: CARDANO_PREPROD_CAIP2,
+      asset: LOVELACE_ASSET,
+      amount: "50000000",
+      payByTimeMs: payByTime,
+      externalDisputeUnlockTimeMs: payByTime + BigInt(400 * 24 * 60 * 60 * 1000),
+    });
+    await expect(
+      clientSigner().buildAndSignPaymentTransaction(signInput(requirements)),
+    ).rejects.toThrow(/deadlines extend beyond the accepted horizon/);
+
+    // An operator that genuinely accepts a long settlement window can raise it.
+    await expect(
+      clientSigner({
+        masumiMaxDeadlineHorizonMs: BigInt(500 * 24 * 60 * 60 * 1000),
+      }).buildAndSignPaymentTransaction(signInput(requirements)),
+    ).rejects.toThrow(/Blockfrost/);
+  });
+
   it("refuses a payByTime outside the x402 timeout before provider access", async () => {
     const { requirements } = await issueMasumiRequirements({
       network: CARDANO_PREPROD_CAIP2,
