@@ -196,8 +196,12 @@ function assertMasumiIssuePolicy(input: IssueMasumiRequirementsInput, nowMs: big
  * signer or a human approval, so an unbounded amount of time can pass between
  * the first check and the moment the requirements are actually served. Without a
  * second pass the issuer can emit a 402 whose `payByTime` has already expired,
- * or has drifted outside `maxTimeoutSeconds`, and the buyer would be the first
- * to notice.
+ * and the buyer would be the first to notice.
+ *
+ * Only the floors can newly fail on that second pass. The `maxTimeoutSeconds`
+ * ceiling is `now + maxTimeoutSeconds`, which moves forward with the clock, so
+ * a `payByTime` once inside it stays inside it; it is re-checked here only
+ * because this function is the whole window, not because it can trip late.
  *
  * @param deadlines - Deadlines already validated for shape and ordering.
  * @param deadlines.payByTime - Datum `pay_by_time`.

@@ -29,7 +29,6 @@ import type {
 import { slotToPosixMs } from "../../utils";
 import { masumiEscrowAddress, resolveMasumiDeployment } from "./blueprint";
 import {
-  MASUMI_MAX_DEADLINE_HORIZON_MS,
   MASUMI_MIN_COLLATERAL_LOVELACE,
   MASUMI_REGISTRY_POLICY_ID,
   masumiDeadlineIntervalsHold,
@@ -93,7 +92,12 @@ export interface MasumiVerifyContext {
   resource?: ResourceInfo;
   /** Explicit application approval for a non-canonical deployment. */
   validateCustomDeployment?: MasumiDeploymentValidator;
-  /** How far past now `external_dispute_unlock_time` may sit. */
+  /**
+   * How far past now `external_dispute_unlock_time` may sit. The base
+   * facilitator deliberately leaves this unset — see
+   * {@link MasumiAuthorizationOptions.maxDeadlineHorizonMs} — so it cannot
+   * reject a lock a client with a longer appetite already made.
+   */
   maxDeadlineHorizonMs?: bigint;
 }
 
@@ -123,10 +127,13 @@ export interface MasumiAuthorizationOptions {
    */
   requireAllPartContent?: boolean;
   /**
-   * How far past now `external_dispute_unlock_time` may sit. Defaults to
-   * {@link MASUMI_MAX_DEADLINE_HORIZON_MS}; raise it only for a counterparty
-   * whose long settlement window you accept, because until `submit_result_time`
-   * passes the buyer can recover neither the payment nor its collateral.
+   * How far past now `external_dispute_unlock_time` may sit. **Buyer policy: a
+   * client sets it, a verifier does not.** Omitting it skips the horizon check.
+   *
+   * Set it to `MASUMI_MAX_DEADLINE_HORIZON_MS` for the default appetite,
+   * or higher for a counterparty whose long settlement window you accept —
+   * until `submit_result_time` passes the buyer can recover neither the payment
+   * nor its collateral.
    */
   maxDeadlineHorizonMs?: bigint;
 }
@@ -283,25 +290,31 @@ export function verifyMasumiDatumInvariants(
 }
 
 /**
- * Checks the seller-signed deadline order and horizon before a client selects
- * funds.
+ * Checks the seller-signed deadline order, and optionally the horizon, before a
+ * client selects funds.
  *
- * The horizon is the half of this the minimum gaps cannot express. `vested_pay`
+ * The interval rule is a protocol rule and always applies. The horizon is
+ * **buyer policy** and applies only when a caller asks for it. `vested_pay`
  * gates the buyer's `WithdrawRefund` on `must_start_after(validity_range,
  * submit_result_time)`, so a 402 naming a deadline years out freezes the buyer's
- * payment and collateral for that long while satisfying every other rule.
+ * payment and collateral for that long — but how long a wait is acceptable is
+ * the payer's risk appetite, not something a third party can decide.
  *
- * Checking it against the verifier's own clock is deliberately permissive as
- * time passes — a facilitator sees a later `now` than the client did, so it can
- * only ever accept what the client already accepted, never newly reject it.
+ * A verifier therefore does not impose one. Once the funds are locked, rejecting
+ * the payment for a distant deadline unfreezes nothing; it only adds a failed
+ * settlement to a lock the buyer already chose to make. Worse, a facilitator
+ * applying its own horizon could reject exactly the payment a client with a
+ * raised horizon was willing to make — stranding the funds it was meant to
+ * protect.
  *
  * @param terms - Schema-validated Masumi terms.
- * @param maxDeadlineHorizonMs - How far past now the last deadline may sit.
+ * @param maxDeadlineHorizonMs - How far past now the last deadline may sit;
+ *   omit to skip the horizon check.
  * @returns Success, or a deadline failure.
  */
 function verifyMasumiTermDeadlines(
   terms: CardanoExtraMasumi["terms"],
-  maxDeadlineHorizonMs: bigint = MASUMI_MAX_DEADLINE_HORIZON_MS,
+  maxDeadlineHorizonMs?: bigint,
 ): MasumiLockCheck {
   const externalDisputeUnlockTime = BigInt(terms.externalDisputeUnlockTime);
   if (
@@ -314,7 +327,10 @@ function verifyMasumiTermDeadlines(
   ) {
     return fail(ERR_MASUMI_DEADLINE, "deadline intervals below the minimum");
   }
-  if (externalDisputeUnlockTime > BigInt(Date.now()) + maxDeadlineHorizonMs) {
+  if (
+    maxDeadlineHorizonMs !== undefined &&
+    externalDisputeUnlockTime > BigInt(Date.now()) + maxDeadlineHorizonMs
+  ) {
     return fail(ERR_MASUMI_DEADLINE, "deadlines extend beyond the accepted horizon");
   }
   return { ok: true };

@@ -13,6 +13,9 @@ import {
   LOVELACE_ASSET,
 } from "../../src/constants";
 import { MASUMI_DEFAULT_DEPLOYMENT } from "../../src/exact/masumi/blueprint";
+import { MASUMI_MAX_DEADLINE_HORIZON_MS } from "../../src/exact/masumi/constants";
+import { verifyMasumiAuthorization } from "../../src/exact/masumi/verify";
+import type { CardanoExtraMasumi } from "../../src/types";
 import { issueMasumiRequirements } from "../helpers/masumi";
 
 const makeSigner = (): ReturnType<typeof toFacilitatorCardanoSigner> =>
@@ -312,6 +315,19 @@ describe("client-side Masumi authorization", () => {
         masumiMaxDeadlineHorizonMs: BigInt(500 * 24 * 60 * 60 * 1000),
       }).buildAndSignPaymentTransaction(signInput(requirements)),
     ).rejects.toThrow(/Blockfrost/);
+
+    // The horizon is buyer policy, so a verifier does not impose one. If it did,
+    // it could reject exactly the lock a client with a raised horizon already
+    // made — stranding the funds the check exists to protect.
+    const extra = requirements.extra as unknown as CardanoExtraMasumi;
+    await expect(verifyMasumiAuthorization(extra, requirements)).resolves.toMatchObject({
+      ok: true,
+    });
+    await expect(
+      verifyMasumiAuthorization(extra, requirements, {
+        maxDeadlineHorizonMs: MASUMI_MAX_DEADLINE_HORIZON_MS,
+      }),
+    ).resolves.toMatchObject({ ok: false, detail: "deadlines extend beyond the accepted horizon" });
   });
 
   it("refuses a payByTime outside the x402 timeout before provider access", async () => {

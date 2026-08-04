@@ -23,7 +23,10 @@ import {
   LOVELACE_ASSET,
   normalizeCardanoNetwork,
 } from "./constants";
-import { MASUMI_DEFAULT_MAX_COLLATERAL_LOVELACE } from "./exact/masumi/constants";
+import {
+  MASUMI_DEFAULT_MAX_COLLATERAL_LOVELACE,
+  MASUMI_MAX_DEADLINE_HORIZON_MS,
+} from "./exact/masumi/constants";
 import { buildMasumiLock, type MasumiBuyerInput } from "./exact/masumi/lock";
 import { parseMasumiLockDatum } from "./exact/masumi/datum";
 import {
@@ -621,9 +624,10 @@ export function toClientCardanoSigner(config: ClientCardanoSignerConfig): Client
             ...(config.validateCustomMasumiDeployment
               ? { validateCustomDeployment: config.validateCustomMasumiDeployment }
               : {}),
-            ...(config.masumiMaxDeadlineHorizonMs !== undefined
-              ? { maxDeadlineHorizonMs: config.masumiMaxDeadlineHorizonMs }
-              : {}),
+            // Always set: the horizon is buyer policy, so the client is the
+            // side that applies it. A verifier leaves it unset.
+            maxDeadlineHorizonMs:
+              config.masumiMaxDeadlineHorizonMs ?? MASUMI_MAX_DEADLINE_HORIZON_MS,
           },
         );
         if (!authorization.ok) {
