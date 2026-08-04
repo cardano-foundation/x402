@@ -50,9 +50,10 @@ import {
   MASUMI_STATE_FUNDS_LOCKED,
   parseMasumiLockDatum,
   type MasumiAddressCredentials,
+  type MasumiDatumView,
 } from "./datum";
 
-type Check = { ok: true } | { ok: false; reason: string; detail?: string };
+export type MasumiLockCheck = { ok: true } | { ok: false; reason: string; detail?: string };
 
 /**
  * Builds a rejection result carrying the failure reason.
@@ -61,7 +62,11 @@ type Check = { ok: true } | { ok: false; reason: string; detail?: string };
  * @param detail - Optional human-readable detail.
  * @returns A failing check.
  */
-const fail = (reason: string, detail?: string): Check => ({ ok: false, reason, detail });
+const fail = (reason: string, detail?: string): MasumiLockCheck => ({
+  ok: false,
+  reason,
+  detail,
+});
 
 /**
  * Everything the Masumi lock check needs beyond the requirements and the
@@ -186,6 +191,80 @@ function returnAddressMatches(
 }
 
 /**
+ * Checks invariants that make a freshly built V2 datum safe to submit. This is
+ * shared by the client preflight and facilitator verification so client mode
+ * cannot broadcast a lock that the facilitator will reject afterwards.
+ *
+ * @param view - Parsed fresh-lock datum.
+ * @param escrowAddress - Derived Masumi V2 escrow address.
+ * @returns Success, or the first failed invariant.
+ */
+export function verifyMasumiDatumInvariants(
+  view: MasumiDatumView,
+  escrowAddress: string,
+): MasumiLockCheck {
+  if (view.state !== MASUMI_STATE_FUNDS_LOCKED) return fail(ERR_MASUMI_DATUM_INVALID, "state");
+  if (view.resultHash !== "") return fail(ERR_MASUMI_DATUM_INVALID, "result_hash");
+  if (view.sellerCooldownTime !== 0n || view.buyerCooldownTime !== 0n) {
+    return fail(ERR_MASUMI_DATUM_INVALID, "cooldown");
+  }
+  if (view.buyer.payment.isScript || view.seller.payment.isScript) {
+    return fail(ERR_MASUMI_DATUM_INVALID, "participant is a script credential");
+  }
+  if (view.buyerReturnAddress?.payment.isScript || view.sellerReturnAddress?.payment.isScript) {
+    return fail(ERR_MASUMI_DATUM_INVALID, "return address is a script credential");
+  }
+  if (view.referenceSignature.length < 32) {
+    return fail(ERR_MASUMI_DATUM_INVALID, "reference_signature shorter than 16 bytes");
+  }
+
+  const escrow = addressCredentials(escrowAddress);
+  const buyerTarget = view.buyerReturnAddress ?? view.buyer;
+  const sellerTarget = view.sellerReturnAddress ?? view.seller;
+  if (
+    sameCredentials(view.buyer, escrow) ||
+    sameCredentials(view.seller, escrow) ||
+    sameCredentials(buyerTarget, escrow) ||
+    sameCredentials(sellerTarget, escrow)
+  ) {
+    return fail(ERR_MASUMI_DATUM_INVALID, "datum address is the escrow");
+  }
+  if (sameCredentials(buyerTarget, sellerTarget)) {
+    return fail(ERR_MASUMI_DATUM_INVALID, "buyer and seller payout targets are equal");
+  }
+
+  if (
+    view.payByTime + MASUMI_MIN_PAY_TO_SUBMIT_MS > view.submitResultTime ||
+    view.submitResultTime + MASUMI_MIN_SUBMIT_TO_UNLOCK_MS > view.unlockTime ||
+    view.unlockTime + MASUMI_MIN_UNLOCK_TO_DISPUTE_MS > view.externalDisputeUnlockTime
+  ) {
+    return fail(ERR_MASUMI_DEADLINE, "deadline intervals below the minimum");
+  }
+  return { ok: true };
+}
+
+/**
+ * Checks the seller-signed deadline order before a client selects funds.
+ *
+ * @param terms - Schema-validated Masumi terms.
+ * @returns Success, or a deadline failure.
+ */
+function verifyMasumiTermDeadlines(terms: CardanoExtraMasumi["terms"]): MasumiLockCheck {
+  const payByTime = BigInt(terms.payByTime);
+  const submitResultTime = BigInt(terms.submitResultTime);
+  const unlockTime = BigInt(terms.unlockTime);
+  const externalDisputeUnlockTime = BigInt(terms.externalDisputeUnlockTime);
+  if (
+    payByTime + MASUMI_MIN_PAY_TO_SUBMIT_MS > submitResultTime ||
+    submitResultTime + MASUMI_MIN_SUBMIT_TO_UNLOCK_MS > unlockTime ||
+    unlockTime + MASUMI_MIN_UNLOCK_TO_DISPUTE_MS > externalDisputeUnlockTime
+  ) {
+    return fail(ERR_MASUMI_DEADLINE, "deadline intervals below the minimum");
+  }
+  return { ok: true };
+}
+
+/**
  * Verifies the seller authorization carried in `extra`: the request commitment
  * recomputes, the reconstructed `termsDigest` is what the seller's COSE
  * signature covers, and the compatibility identifier decodes to the same
@@ -206,6 +285,9 @@ export async function verifyMasumiAuthorization(
   | { ok: false; reason: string; detail?: string }
 > {
   const { terms, inputCommitment } = extra;
+
+  const deadlines = verifyMasumiTermDeadlines(terms);
+  if (!deadlines.ok) return deadlines;
 
   // Commitment: every part digest must recompute. The issuer echoes the content
   // it originates; for a part derived from the buyer's own request bytes the
@@ -387,7 +469,7 @@ export async function verifyMasumiLock(
   requirements: PaymentRequirements,
   decoded: DecodedCardanoTransaction,
   context: MasumiVerifyContext,
-): Promise<Check> {
+): Promise<MasumiLockCheck> {
   const schema = validateMasumiExtra(rawExtra, requirements.network);
   if (!schema.ok) return fail(ERR_MASUMI_SCHEMA, schema.detail);
   const extra = schema.extra;
@@ -433,49 +515,8 @@ export async function verifyMasumiLock(
   const view = parseMasumiLockDatum(datumHex);
   if (!view) return fail(ERR_MASUMI_DATUM_INVALID, "datum does not match masumi.vested_pay.v2");
 
-  // Structural invariants of a fresh lock.
-  if (view.state !== MASUMI_STATE_FUNDS_LOCKED) return fail(ERR_MASUMI_DATUM_INVALID, "state");
-  if (view.resultHash !== "") return fail(ERR_MASUMI_DATUM_INVALID, "result_hash");
-  if (view.sellerCooldownTime !== 0n || view.buyerCooldownTime !== 0n) {
-    return fail(ERR_MASUMI_DATUM_INVALID, "cooldown");
-  }
-  if (view.buyer.payment.isScript || view.seller.payment.isScript) {
-    return fail(ERR_MASUMI_DATUM_INVALID, "participant is a script credential");
-  }
-  if (view.buyerReturnAddress?.payment.isScript || view.sellerReturnAddress?.payment.isScript) {
-    return fail(ERR_MASUMI_DATUM_INVALID, "return address is a script credential");
-  }
-  if (view.referenceSignature.length < 32) {
-    return fail(ERR_MASUMI_DATUM_INVALID, "reference_signature shorter than 16 bytes");
-  }
-
-  // No participant or return address may BE the escrow: `vested_pay` re-parses
-  // every output at the script address as a continuation datum, so a payout
-  // aimed back at the escrow aborts every spend path.
-  const escrow = addressCredentials(escrowAddress);
-  const buyerTarget = view.buyerReturnAddress ?? view.buyer;
-  const sellerTarget = view.sellerReturnAddress ?? view.seller;
-  if (
-    sameCredentials(view.buyer, escrow) ||
-    sameCredentials(view.seller, escrow) ||
-    sameCredentials(buyerTarget, escrow) ||
-    sameCredentials(sellerTarget, escrow)
-  ) {
-    return fail(ERR_MASUMI_DATUM_INVALID, "datum address is the escrow");
-  }
-  // This scheme does not allow aggregated payouts.
-  if (sameCredentials(buyerTarget, sellerTarget)) {
-    return fail(ERR_MASUMI_DATUM_INVALID, "buyer and seller payout targets are equal");
-  }
-
-  // Deadlines: ordered, and clearing the minimum intervals.
-  if (
-    view.payByTime + MASUMI_MIN_PAY_TO_SUBMIT_MS > view.submitResultTime ||
-    view.submitResultTime + MASUMI_MIN_SUBMIT_TO_UNLOCK_MS > view.unlockTime ||
-    view.unlockTime + MASUMI_MIN_UNLOCK_TO_DISPUTE_MS > view.externalDisputeUnlockTime
-  ) {
-    return fail(ERR_MASUMI_DEADLINE, "deadline intervals below the minimum");
-  }
+  const datumInvariants = verifyMasumiDatumInvariants(view, escrowAddress);
+  if (!datumInvariants.ok) return datumInvariants;
   // The tx MUST carry a validity upper bound on/before pay_by_time, so the lock
   // cannot settle past the deadline.
   if (decoded.ttlSlot === undefined) return fail(ERR_MASUMI_DEADLINE, "no validity upper bound");

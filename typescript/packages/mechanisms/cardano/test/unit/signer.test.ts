@@ -170,7 +170,7 @@ describe("toFacilitatorCardanoSigner", () => {
 // the seller authorization itself rather than trust the 402 — these all fail
 // before any provider call, so no network is involved.
 describe("client-side Masumi authorization", () => {
-  const PAY_BY_TIME = 1_785_756_000_000n;
+  const PAY_BY_TIME = BigInt(Date.now() + 5 * 60 * 1000);
 
   const clientSigner = (
     config: Partial<Parameters<typeof toClientCardanoSigner>[0]> = {},
@@ -275,6 +275,32 @@ describe("client-side Masumi authorization", () => {
     await expect(
       clientSigner().buildAndSignPaymentTransaction(signInput(requirements)),
     ).rejects.toThrow(/masumi_agent_identifier/);
+  });
+
+  it("refuses invalid signed deadlines before wallet or provider access", async () => {
+    const { requirements } = await issueMasumiRequirements({
+      network: CARDANO_PREPROD_CAIP2,
+      asset: LOVELACE_ASSET,
+      amount: "50000000",
+      payByTimeMs: PAY_BY_TIME,
+      submitResultTimeMs: PAY_BY_TIME + 1n,
+    });
+    await expect(
+      clientSigner().buildAndSignPaymentTransaction(signInput(requirements)),
+    ).rejects.toThrow(/deadline intervals below the minimum/);
+  });
+
+  it("refuses a payByTime outside the x402 timeout before provider access", async () => {
+    const { requirements } = await issueMasumiRequirements({
+      network: CARDANO_PREPROD_CAIP2,
+      asset: LOVELACE_ASSET,
+      amount: "50000000",
+      maxTimeoutSeconds: 60,
+      payByTimeMs: BigInt(Date.now() + 5 * 60 * 1000),
+    });
+    await expect(
+      clientSigner().buildAndSignPaymentTransaction(signInput(requirements)),
+    ).rejects.toThrow(/payByTime exceeds maxTimeoutSeconds/);
   });
 
   it("refuses a script-credential buyer return address before wallet access", async () => {

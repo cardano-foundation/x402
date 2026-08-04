@@ -14,12 +14,15 @@ import { sha256 } from "@noble/hashes/sha2.js";
 import { convertToTokenAmount, numberToDecimalString, parseMoneyString } from "@x402/core/utils";
 import { randomBytes } from "node:crypto";
 import {
+  ASSET_TRANSFER_METHOD_DEFAULT,
+  ASSET_TRANSFER_METHOD_MASUMI,
   CANONICAL_CARDANO_ASSET_REGEX,
-  POSITIVE_CANONICAL_AMOUNT_REGEX,
   ERR_SETTLEMENT_DEFINITIVELY_REJECTED,
   getDefaultUsdmAsset,
   isCardanoNetwork,
+  POSITIVE_CANONICAL_AMOUNT_REGEX,
   SCHEME_EXACT,
+  SUBMISSION_POLICY_EITHER,
   USDM_DEFAULT_DECIMALS,
 } from "../../constants";
 import {
@@ -29,7 +32,7 @@ import {
   type InMemoryCardanoOperationStoreOptions,
 } from "../../idempotency";
 import { DEFAULT_CARDANO_REPLAY_BODY_BYTES } from "../../limits";
-import { normalizeSubmissionMode } from "../../policy";
+import { normalizeSubmissionMode, resolveCardanoPolicies } from "../../policy";
 import type { CardanoExtraMasumi } from "../../types";
 import { decodeCardanoTransaction } from "../../utils";
 import { buildSignedTerms, computeTermsDigest } from "../masumi/digests";
@@ -394,7 +397,7 @@ export class ExactCardanoScheme implements SchemeNetworkServer {
    * @param extensionKeys - The facilitator extension keys.
    * @returns The unchanged payment requirements.
    */
-  enhancePaymentRequirements(
+  async enhancePaymentRequirements(
     paymentRequirements: PaymentRequirements,
     supportedKind: SupportedKind,
     extensionKeys: string[],
@@ -403,7 +406,89 @@ export class ExactCardanoScheme implements SchemeNetworkServer {
     if (!isCardanoNetwork(supportedKind.network)) {
       throw new Error(`Unsupported Cardano network: ${supportedKind.network}`);
     }
-    return Promise.resolve(paymentRequirements);
+    this.assertFacilitatorSupportsRequirements(paymentRequirements, supportedKind);
+    return paymentRequirements;
+  }
+
+  /**
+   * Checks selected Cardano payment semantics against the facilitator's
+   * advertised capabilities without copying capability metadata into the 402.
+   *
+   * @param requirements - Requirements about to be served.
+   * @param supportedKind - Matching facilitator capability advertisement.
+   */
+  private assertFacilitatorSupportsRequirements(
+    requirements: PaymentRequirements,
+    supportedKind: SupportedKind,
+  ): void {
+    const advertised = supportedKind.extra;
+    if (!advertised || typeof advertised !== "object" || Array.isArray(advertised)) return;
+
+    const capabilities = advertised as Record<string, unknown>;
+    const method = requirements.extra?.assetTransferMethod ?? ASSET_TRANSFER_METHOD_DEFAULT;
+    const methods = capabilities.assetTransferMethods;
+    if (Array.isArray(methods) && !methods.includes(method)) {
+      throw new Error(`Cardano facilitator does not support assetTransferMethod ${String(method)}`);
+    }
+
+    const policies = resolveCardanoPolicies(requirements.extra);
+    if (!policies) {
+      throw new Error("Cardano requirements carry an invalid submission/confirmation policy");
+    }
+    const selectedModes =
+      policies.submissionPolicy === SUBMISSION_POLICY_EITHER
+        ? (["server", "client"] as const)
+        : ([policies.submissionPolicy] as const);
+    const advertisedModes = capabilities.submissionModes;
+    const confirmationRanges = capabilities.l1Confirmations;
+    for (const mode of selectedModes) {
+      if (Array.isArray(advertisedModes) && !advertisedModes.includes(mode)) {
+        throw new Error(`Cardano facilitator does not support ${mode} submission`);
+      }
+      if (
+        confirmationRanges &&
+        typeof confirmationRanges === "object" &&
+        !Array.isArray(confirmationRanges)
+      ) {
+        const range = (confirmationRanges as Record<string, unknown>)[mode];
+        if (!range || typeof range !== "object" || Array.isArray(range)) {
+          throw new Error(
+            `Cardano facilitator did not advertise an L1 confirmation range for ${mode}`,
+          );
+        }
+        const minimum = (range as Record<string, unknown>).minimum;
+        const maximum = (range as Record<string, unknown>).maximum;
+        if (
+          typeof minimum !== "number" ||
+          !Number.isInteger(minimum) ||
+          typeof maximum !== "number" ||
+          !Number.isInteger(maximum) ||
+          policies.confirmationPolicy.l1Confirmations < minimum ||
+          policies.confirmationPolicy.l1Confirmations > maximum
+        ) {
+          throw new Error(
+            `Cardano facilitator ${mode} confirmation range does not include ${policies.confirmationPolicy.l1Confirmations}`,
+          );
+        }
+      }
+    }
+
+    if (method === ASSET_TRANSFER_METHOD_MASUMI) {
+      const settlementPolicy = (requirements.extra as unknown as CardanoExtraMasumi).terms
+        ?.settlementPolicy;
+      const advertisedLayers = capabilities.settlementLayers;
+      if (Array.isArray(advertisedLayers)) {
+        const supported =
+          settlementPolicy === "auto"
+            ? advertisedLayers.includes("l1") || advertisedLayers.includes("hydra")
+            : advertisedLayers.includes(settlementPolicy);
+        if (!supported) {
+          throw new Error(
+            `Cardano facilitator does not support Masumi ${String(settlementPolicy)} settlement`,
+          );
+        }
+      }
+    }
   }
 
   /**

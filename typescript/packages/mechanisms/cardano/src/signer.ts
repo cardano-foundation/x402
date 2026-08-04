@@ -24,7 +24,9 @@ import {
   normalizeCardanoNetwork,
 } from "./constants";
 import { buildMasumiLock, type MasumiBuyerInput } from "./exact/masumi/lock";
+import { parseMasumiLockDatum } from "./exact/masumi/datum";
 import {
+  verifyMasumiDatumInvariants,
   verifyMasumiAuthorization,
   type MasumiDeploymentValidator,
   type MasumiRegistryValidator,
@@ -610,6 +612,7 @@ export function toClientCardanoSigner(config: ClientCardanoSignerConfig): Client
             }`,
           );
         }
+        assertMasumiPaymentWindow(masumiExtra, input.maxTimeoutSeconds);
         settlementLayer = resolveSettlementLayer(masumiExtra);
         masumiBuyerInput = (await config.masumiBuyerInput?.(masumiExtra)) ?? {};
         if (
@@ -668,6 +671,18 @@ export function toClientCardanoSigner(config: ClientCardanoSignerConfig): Client
           coinsPerUtxoByte,
           masumiBuyerInput,
         );
+        const datumView = parseMasumiLockDatum(lock.datum.data);
+        if (!datumView) {
+          throw new Error("Masumi client preflight could not decode the lock datum");
+        }
+        const datumInvariants = verifyMasumiDatumInvariants(datumView, input.payTo);
+        if (!datumInvariants.ok) {
+          throw new Error(
+            `Masumi client preflight failed: ${datumInvariants.reason}${
+              datumInvariants.detail ? ` (${datumInvariants.detail})` : ""
+            }`,
+          );
+        }
         paymentDatum = lock.datum;
         // The escrow output carries EXACTLY the requested asset set, with
         // `lockedLovelace = requestedLovelace + collateral`.
@@ -724,6 +739,10 @@ export function toClientCardanoSigner(config: ClientCardanoSignerConfig): Client
         auxiliaryData: null,
       });
 
+      if (masumiExtra) {
+        assertMasumiPaymentWindow(masumiExtra, input.maxTimeoutSeconds);
+      }
+
       // Client mode: the client broadcasts before the paid retry, and the
       // facilitator authenticates that exact transaction instead of submitting
       // it. Try to wait until the chain shows it because most providers expose
@@ -754,6 +773,28 @@ export function toClientCardanoSigner(config: ClientCardanoSignerConfig): Client
       };
     },
   };
+}
+
+/**
+ * Ensures the transaction validity bound derived from `payByTime` can satisfy
+ * the x402 timeout at both initial validation and the final pre-submit check.
+ *
+ * @param extra - Validated Masumi requirements.
+ * @param maxTimeoutSeconds - x402 validity-window limit.
+ */
+function assertMasumiPaymentWindow(extra: CardanoExtraMasumi, maxTimeoutSeconds: number): void {
+  if (!Number.isSafeInteger(maxTimeoutSeconds) || maxTimeoutSeconds <= 0) {
+    throw new Error("Masumi maxTimeoutSeconds must be a positive safe integer");
+  }
+  const nowMs = BigInt(Date.now());
+  const payByTime = BigInt(extra.terms.payByTime);
+  const latestPayByTime = nowMs + BigInt(maxTimeoutSeconds) * 1000n;
+  if (payByTime <= nowMs) {
+    throw new Error("Masumi client preflight failed: payByTime has expired");
+  }
+  if (payByTime > latestPayByTime) {
+    throw new Error("Masumi client preflight failed: payByTime exceeds maxTimeoutSeconds");
+  }
 }
 
 /**

@@ -47,12 +47,21 @@ const provider = { blockfrost: { baseUrl: process.env.BLOCKFROST_PREPROD_URL!, p
 const clientSigner = toClientCardanoSigner({ mnemonic, network: "cardano:preprod", provider });
 client.register("cardano:*", new ExactCardanoClient(clientSigner));
 
-// Facilitator (verify + settle). `awaitConfirmation` reports `confirmed` instead of `mempool`.
-const facilitatorSigner = toFacilitatorCardanoSigner({ mnemonic, network: "cardano:preprod", provider, awaitConfirmation: true });
-facilitator.register("cardano:preprod", new ExactCardanoFacilitator(facilitatorSigner));
+// Facilitator (verify + settle). Supply a complete ledger phase-1 validator
+// for the default server-submission mode and durable shared settlement state.
+const facilitatorSigner = toFacilitatorCardanoSigner({
+  network: "cardano:preprod",
+  provider,
+  awaitConfirmation: true,
+  validatePhase1Transaction: ledgerValidator.validatePhase1Transaction,
+});
+facilitator.register(
+  "cardano:preprod",
+  new ExactCardanoFacilitator(facilitatorSigner, { settlementStore }),
+);
 ```
 
-The facilitator only broadcasts the client's signed transaction, so its `mnemonic` is **optional** — omit it to run provider-only (no funds, no signer); when supplied it is used only to expose an address in the `/supported` response. The facilitator signer also implements the optional `evaluateTransaction` dry-run described below. A Koios provider (`{ koios: { baseUrl, token? } }`) may be used instead of Blockfrost. `provider.requestTimeoutMs` bounds every reference-signer provider query, build, submission, evaluation and confirmation wait; it defaults to 10 seconds.
+The facilitator only broadcasts the client's signed transaction, so its `mnemonic` is **optional** — omit it to run provider-only (no funds, no signer); when supplied it is used only to expose an address in the `/supported` response. `settlementStore` must be an atomic durable `CardanoSettlementStore` shared by every facilitator worker. The reference signer also implements the optional `evaluateTransaction` script dry-run. A Koios provider (`{ koios: { baseUrl, token? } }`) may be used instead of Blockfrost. `provider.requestTimeoutMs` bounds every reference-signer provider query, build, submission, evaluation and confirmation wait; it defaults to 10 seconds.
 
 ## Testnet funds
 
@@ -103,8 +112,8 @@ A non-empty `terms.agentIdentifier` claims a Masumi V2 registry identity. The po
 
 Cardano uses Ouroboros Praos (probabilistic finality). `settle()` reports the strongest verified evidence in `extra` (`status`, `confirmations`, `submissionMode`). Granting access on `mempool` is **strongly discouraged** by the spec, so the facilitator refuses a mempool-only result unless the operator sets `acceptMempool` *and* the policy allows `-1`.
 
-## Optional cryptographic authorization check
+## Script evaluation
 
-The facilitator's structural checks (network, recipient, amount, asset, nonce, TTL, witness presence) are inexpensive but do not prove the supplied witnesses actually authorize the consumed inputs. To close that gap, implement the optional `evaluateTransaction(signedTransactionBase64, network)` method on your `FacilitatorCardanoSigner`; the facilitator will call it after the structural checks pass and treat any thrown error as a verification failure. Typical implementations route this to a Cardano node `evaluate-tx` endpoint or to Blockfrost's `/utils/txs/evaluate`.
+Server submission requires `validatePhase1Transaction`, which must apply the complete Cardano phase-1 ledger rules to the exact signed transaction. The optional `evaluateTransaction(signedTransactionBase64, network)` hook is narrower: it dry-runs Plutus execution and does not prove value conservation or input authorization. Typical implementations route it to a Cardano node `evaluate-tx` endpoint or Blockfrost's `/utils/txs/evaluate`.
 
 See `specs/schemes/exact/scheme_exact_cardano.md` for the full protocol description.

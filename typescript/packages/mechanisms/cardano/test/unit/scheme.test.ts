@@ -1267,12 +1267,57 @@ describe("ExactCardanoScheme server", () => {
     expect(enhanced.extra).toEqual({ foo: "bar" });
   });
 
+  it("rejects requirements whose submission mode is not advertised", async () => {
+    const server = new ExactCardanoServer();
+    await expect(
+      server.enhancePaymentRequirements(
+        buildRequirements(),
+        {
+          x402Version: 2,
+          scheme: "exact",
+          network: CARDANO_MAINNET_CAIP2,
+          extra: {
+            assetTransferMethods: ["default"],
+            settlementLayers: ["l1"],
+            submissionModes: ["client"],
+            l1Confirmations: { client: { minimum: 0, maximum: 20 } },
+          },
+        },
+        [],
+      ),
+    ).rejects.toThrow(/does not support server submission/);
+  });
+
+  it("rejects requirements outside the advertised confirmation range", async () => {
+    const server = new ExactCardanoServer();
+    await expect(
+      server.enhancePaymentRequirements(
+        buildRequirements({
+          extra: { submissionPolicy: "server", confirmationPolicy: { l1Confirmations: 1 } },
+        }),
+        {
+          x402Version: 2,
+          scheme: "exact",
+          network: CARDANO_MAINNET_CAIP2,
+          extra: {
+            assetTransferMethods: ["default"],
+            settlementLayers: ["l1"],
+            submissionModes: ["server"],
+            l1Confirmations: { server: { minimum: 0, maximum: 0 } },
+          },
+        },
+        [],
+      ),
+    ).rejects.toThrow(/confirmation range does not include 1/);
+  });
+
   it("keeps an issued Masumi extra schema-valid through enhancement", async () => {
     const { requirements } = await issueMasumiRequirements({
       network: CARDANO_PREPROD_CAIP2,
       asset: LOVELACE_ASSET,
       amount: "5000000",
       payByTimeMs: 1_785_756_000_000n,
+      confirmationPolicy: { l1Confirmations: 0 },
     });
     const server = new ExactCardanoServer();
     const enhanced = await server.enhancePaymentRequirements(
