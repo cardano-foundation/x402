@@ -280,6 +280,9 @@ export class ExactCardanoScheme implements SchemeNetworkServer {
   async enrichPaymentRequiredResponse(context: SchemePaymentRequiredContext): Promise<void> {
     const transport = this.asReplayTransport(context.transportContext);
     if (!transport) return;
+    if (!this.replayOwner(transport)) {
+      throw new Error("Cardano replay protection requires a stable request adapter");
+    }
 
     const binding = await this.requestFingerprint(transport);
     const requirementsFingerprint = this.requirementsFingerprint(context.requirement);
@@ -287,7 +290,13 @@ export class ExactCardanoScheme implements SchemeNetworkServer {
       context.paymentPayload?.extensions,
       requirementsFingerprint,
     );
-    let challenge = echoedChallenge;
+    const canReuseEchoedChallenge = echoedChallenge
+      ? await this.operationStore.validateChallenge(echoedChallenge, {
+          fingerprint: binding.fingerprint,
+          requirementsFingerprint,
+        })
+      : false;
+    let challenge = canReuseEchoedChallenge ? echoedChallenge : undefined;
     if (!challenge) {
       const timeoutMs = context.requirement.maxTimeoutSeconds * 1000;
       if (!Number.isSafeInteger(timeoutMs) || timeoutMs <= 0) {
@@ -415,6 +424,15 @@ export class ExactCardanoScheme implements SchemeNetworkServer {
     if (!context.result.isValid) return;
     const transport = this.asReplayTransport(context.transportContext);
     if (!transport) return;
+    const replayOwner = this.replayOwner(transport);
+    if (!replayOwner) {
+      return {
+        abort: true,
+        reason: "payment_replay_store_unavailable",
+        message: "Cardano replay protection requires a stable request adapter",
+        status: 503,
+      };
+    }
 
     let identity: { key: string; txHash: string };
     try {
@@ -514,7 +532,7 @@ export class ExactCardanoScheme implements SchemeNetworkServer {
           status: 409,
         };
       case "claimed":
-        this.replayOwners.set(this.replayOwner(transport), { key: identity.key, ownerToken });
+        this.replayOwners.set(replayOwner, { key: identity.key, ownerToken });
         return;
     }
   }
@@ -536,6 +554,7 @@ export class ExactCardanoScheme implements SchemeNetworkServer {
     const transport = this.asReplayTransport(context.transportContext);
     if (!transport) return;
     const owner = this.replayOwner(transport);
+    if (!owner) return;
     const claimOwner = this.replayOwners.get(owner);
     if (!claimOwner) return;
     if (context.result?.errorReason === ERR_SETTLEMENT_DEFINITIVELY_REJECTED) {
@@ -543,7 +562,11 @@ export class ExactCardanoScheme implements SchemeNetworkServer {
       this.replayOwners.delete(owner);
       return;
     }
-    if (!transport.responseBody) return;
+    if (transport.responseBody === undefined) {
+      await this.operationStore.markAmbiguous(claimOwner.key, claimOwner.ownerToken);
+      this.replayOwners.delete(owner);
+      return;
+    }
 
     const responseHeaders = transport.responseHeaders ?? {};
     const contentType =
@@ -590,6 +613,7 @@ export class ExactCardanoScheme implements SchemeNetworkServer {
     const transport = this.asReplayTransport(context.transportContext);
     if (!transport) return;
     const owner = this.replayOwner(transport);
+    if (!owner) return;
     const claimOwner = this.replayOwners.get(owner);
     if (!claimOwner) return;
     if (context.reason === "after_verify_aborted") {
@@ -618,8 +642,9 @@ export class ExactCardanoScheme implements SchemeNetworkServer {
    * @param transport - Transport context.
    * @returns Stable ownership object.
    */
-  private replayOwner(transport: ReplayTransportContext): object {
-    return transport.request?.adapter ?? transport;
+  private replayOwner(transport: ReplayTransportContext): object | undefined {
+    const adapter = transport.request?.adapter;
+    return typeof adapter === "object" && adapter !== null ? adapter : undefined;
   }
 
   /**

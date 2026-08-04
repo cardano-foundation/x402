@@ -59,6 +59,50 @@ export type CardanoProviderConfig =
     };
 
 /**
+ * Resolves and validates the deadline shared by every reference-signer
+ * provider operation.
+ *
+ * @param provider - Provider configuration.
+ * @returns Validated timeout in milliseconds.
+ */
+function providerTimeoutMs(provider: CardanoProviderConfig): number {
+  const timeoutMs = provider.requestTimeoutMs ?? DEFAULT_CARDANO_PROVIDER_TIMEOUT_MS;
+  if (!Number.isSafeInteger(timeoutMs) || timeoutMs <= 0 || timeoutMs > 120_000) {
+    throw new Error("Cardano provider requestTimeoutMs must be an integer from 1 to 120000");
+  }
+  return timeoutMs;
+}
+
+/**
+ * Bounds a provider promise even when its SDK transport exposes no abort
+ * signal. The underlying request may finish later, but callers never wait past
+ * the configured deadline.
+ *
+ * @param operation - Provider promise to await.
+ * @param timeoutMs - Deadline in milliseconds.
+ * @param name - Operation name used in timeout errors.
+ * @returns The provider result.
+ */
+export async function withCardanoProviderTimeout<T>(
+  operation: PromiseLike<T>,
+  timeoutMs: number,
+  name: string,
+): Promise<T> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const timeout = new Promise<never>((_resolve, reject) => {
+    timer = setTimeout(
+      () => reject(new Error(`Cardano provider ${name} timed out after ${timeoutMs}ms`)),
+      timeoutMs,
+    );
+  });
+  try {
+    return await Promise.race([Promise.resolve(operation), timeout]);
+  } finally {
+    if (timer !== undefined) clearTimeout(timer);
+  }
+}
+
+/**
  * Resolves an x402 Cardano network identifier to an Evolution SDK chain preset.
  *
  * @param network - The x402 network identifier (e.g. "cardano:mainnet").
@@ -484,6 +528,7 @@ export interface ClientCardanoSignerConfig {
  */
 export function toClientCardanoSigner(config: ClientCardanoSignerConfig): ClientCardanoSigner {
   const chain = resolveChain(config.network);
+  const timeoutMs = providerTimeoutMs(config.provider);
   const mnemonic = normalizeMnemonic(config.mnemonic);
   const client = withProvider(Client.make(chain), config.provider).withSeed({
     mnemonic,
@@ -578,7 +623,11 @@ export function toClientCardanoSigner(config: ClientCardanoSignerConfig): Client
       }
 
       const changeAddress = await client.address();
-      const utxos = await client.getWalletUtxos();
+      const utxos = await withCardanoProviderTimeout(
+        client.getWalletUtxos(),
+        timeoutMs,
+        "getWalletUtxos",
+      );
       if (utxos.length === 0) {
         throw new Error("Funding wallet has no UTXOs available for the payment");
       }
@@ -606,7 +655,11 @@ export function toClientCardanoSigner(config: ClientCardanoSignerConfig): Client
         // The seller never signs `collateral_return_lovelace`; the client derives
         // it from the requested asset and live protocol parameters so the escrow
         // still clears min-UTXO after `SubmitResult`.
-        const { coinsPerUtxoByte } = await client.getProtocolParameters();
+        const { coinsPerUtxoByte } = await withCardanoProviderTimeout(
+          client.getProtocolParameters(),
+          timeoutMs,
+          "getProtocolParameters",
+        );
         const lock = buildMasumiLock(
           masumiExtra,
           Address.toBech32(nonceUtxo.address),
@@ -638,25 +691,29 @@ export function toClientCardanoSigner(config: ClientCardanoSignerConfig): Client
         ? BigInt(masumiExtra.terms.payByTime)
         : BigInt(Date.now()) + BigInt(input.maxTimeoutSeconds) * 1000n;
 
-      const signBuilder = await client
-        .newTx()
-        // .collectFrom() with a specific UTXO ensures the nonce appears as an input (rule 5).
-        // Additional UTXOs from the wallet may be auto-selected as needed to satisfy the output and fees.
-        .collectFrom({ inputs: [nonceUtxo] })
-        .payToAddress({
-          address: Address.fromBech32(input.payTo),
-          assets: outputAssets,
-          ...(paymentDatum ? { datum: paymentDatum } : {}),
-        })
-        .setValidity({ to: ttlMs })
-        .build({
-          changeAddress,
-          // Bump the output to the protocol min-UTXO for native-asset outputs
-          // and for datum-bearing outputs (an attached datum raises it). A
-          // Masumi lock already carries its exact structural lovelace, and
-          // raising it would break `locked == requested + collateral`.
-          autoMinUtxo: masumiExtra ? false : !isLovelace || paymentDatum !== undefined,
-        });
+      const signBuilder = await withCardanoProviderTimeout(
+        client
+          .newTx()
+          // .collectFrom() with a specific UTXO ensures the nonce appears as an input (rule 5).
+          // Additional UTXOs from the wallet may be auto-selected as needed to satisfy the output and fees.
+          .collectFrom({ inputs: [nonceUtxo] })
+          .payToAddress({
+            address: Address.fromBech32(input.payTo),
+            assets: outputAssets,
+            ...(paymentDatum ? { datum: paymentDatum } : {}),
+          })
+          .setValidity({ to: ttlMs })
+          .build({
+            changeAddress,
+            // Bump the output to the protocol min-UTXO for native-asset outputs
+            // and for datum-bearing outputs (an attached datum raises it). A
+            // Masumi lock already carries its exact structural lovelace, and
+            // raising it would break `locked == requested + collateral`.
+            autoMinUtxo: masumiExtra ? false : !isLovelace || paymentDatum !== undefined,
+          }),
+        timeoutMs,
+        "buildTransaction",
+      );
 
       const submitBuilder = await signBuilder.sign();
       const unsigned = await signBuilder.toTransaction();
@@ -673,13 +730,17 @@ export function toClientCardanoSigner(config: ClientCardanoSignerConfig): Client
       // no mempool read. A wait failure is still ambiguous after broadcast and
       // must not cause the wallet to build a second payment.
       if (input.submissionMode === "client") {
-        const hash = await client.submitTx(signed);
+        const hash = await withCardanoProviderTimeout(
+          client.submitTx(signed),
+          timeoutMs,
+          "submitTx",
+        );
         // Broadcast already succeeded. Observation failure is ambiguous: the
         // transaction can still land, so return the exact signed payload and let
         // the paid retry/facilitator report pending evidence instead of forcing
         // the caller to build another transaction.
         try {
-          await client.awaitTx(hash);
+          await withCardanoProviderTimeout(client.awaitTx(hash), timeoutMs, "awaitTx");
         } catch {
           // Intentionally continue with the original signed transaction.
         }
@@ -770,6 +831,7 @@ export function blockfrostQueries(provider: CardanoProviderConfig): {
   evidence(txHash: string): Promise<CardanoSettlementEvidence>;
   spentUtxoAddress(txHash: string, index: number): Promise<{ address?: string }>;
 } {
+  const timeoutMs = providerTimeoutMs(provider);
   const config = provider.blockfrost;
   if (!config) {
     return {
@@ -780,11 +842,6 @@ export function blockfrostQueries(provider: CardanoProviderConfig): {
   }
   const baseUrl = config.baseUrl.replace(/\/$/, "");
   const headers = config.projectId ? { project_id: config.projectId } : undefined;
-  const timeoutMs = provider.requestTimeoutMs ?? DEFAULT_CARDANO_PROVIDER_TIMEOUT_MS;
-  if (!Number.isSafeInteger(timeoutMs) || timeoutMs <= 0 || timeoutMs > 120_000) {
-    throw new Error("Cardano provider requestTimeoutMs must be an integer from 1 to 120000");
-  }
-
   /**
    * Performs one Blockfrost GET.
    *
@@ -852,6 +909,7 @@ export function toFacilitatorCardanoSigner(
   config: FacilitatorCardanoSignerConfig,
 ): FacilitatorCardanoSigner {
   const chain = resolveChain(config.network);
+  const timeoutMs = providerTimeoutMs(config.provider);
   const providerClient = withProvider(Client.make(chain), config.provider);
   const slotConfig = chain.slotConfig;
   const blockfrost = blockfrostQueries(config.provider);
@@ -909,7 +967,11 @@ export function toFacilitatorCardanoSigner(
         transactionId: TransactionHash.fromHex(txHash),
         index: BigInt(index),
       });
-      const utxos = await client.getUtxosByOutRef([input]);
+      const utxos = await withCardanoProviderTimeout(
+        client.getUtxosByOutRef([input]),
+        timeoutMs,
+        "getUtxosByOutRef",
+      );
       if (utxos.length > 0) {
         const utxo = utxos[0];
         const assets: Record<string, bigint> = {};
@@ -968,7 +1030,7 @@ export function toFacilitatorCardanoSigner(
     ): Promise<CardanoSubmissionResult> {
       assertNetwork(network);
       const tx = Transaction.fromCBORBytes(decodeCardanoTransactionBytes(signedTransactionBase64));
-      const hash = await client.submitTx(tx);
+      const hash = await withCardanoProviderTimeout(client.submitTx(tx), timeoutMs, "submitTx");
       const txHash = Buffer.from(hash.hash).toString("hex").toLowerCase();
       if (config.awaitConfirmation === false) {
         return { txHash, status: "mempool" };
@@ -978,7 +1040,7 @@ export function toFacilitatorCardanoSigner(
       // treat a transaction that is on its way to the chain as never sent. Report
       // mempool acceptance instead and let the confirmation policy decide.
       try {
-        await client.awaitTx(hash);
+        await withCardanoProviderTimeout(client.awaitTx(hash), timeoutMs, "awaitTx");
       } catch {
         return { txHash, status: "mempool" };
       }
@@ -987,19 +1049,27 @@ export function toFacilitatorCardanoSigner(
 
     async waitForConfirmation(txHash: string, network: string): Promise<void> {
       assertNetwork(network);
-      await client.awaitTx(TransactionHash.fromHex(txHash));
+      await withCardanoProviderTimeout(
+        client.awaitTx(TransactionHash.fromHex(txHash)),
+        timeoutMs,
+        "awaitTx",
+      );
     },
 
     async evaluateTransaction(signedTransactionBase64: string, network: string): Promise<void> {
       assertNetwork(network);
       const tx = Transaction.fromCBORBytes(decodeCardanoTransactionBytes(signedTransactionBase64));
-      await client.evaluateTx(tx);
+      await withCardanoProviderTimeout(client.evaluateTx(tx), timeoutMs, "evaluateTx");
     },
 
     async getCoinsPerUtxoByte(network: string): Promise<bigint> {
       assertNetwork(network);
       if (coinsPerUtxoByte === undefined) {
-        const params = await client.getProtocolParameters();
+        const params = await withCardanoProviderTimeout(
+          client.getProtocolParameters(),
+          timeoutMs,
+          "getProtocolParameters",
+        );
         coinsPerUtxoByte = params.coinsPerUtxoByte;
       }
       return coinsPerUtxoByte;

@@ -144,6 +144,8 @@ export interface BuildSignedTxResult {
   nonce: string;
   /** The payer bech32 address that controls the nonce UTXO. */
   payer: string;
+  /** Authenticated snapshot registered for the nonce input. */
+  nonceSnapshot: CardanoUtxoSnapshot;
 }
 
 /**
@@ -214,13 +216,14 @@ export async function buildSignedTx(params: BuildSignedTxParams): Promise<BuildS
     throw new Error("offline fixture wallet must use a payment-key address");
   }
   const paymentKeyHash = Credential.toHex(paymentCredential).toLowerCase();
-  fixtureInputSnapshots.set(params.nonceUtxoRef.toLowerCase(), {
+  const nonceSnapshot: CardanoUtxoSnapshot = {
     exists: true,
     address: payer,
     coin: fundingAssets.lovelace,
     assets: snapshotAssets(fundingAssets),
     paymentKeyHash,
-  });
+  };
+  fixtureInputSnapshots.set(params.nonceUtxoRef.toLowerCase(), nonceSnapshot);
 
   // Optional second wallet UTXO so coin selection can produce a multi-input tx.
   const availableUtxos = [nonceUtxo];
@@ -288,6 +291,7 @@ export async function buildSignedTx(params: BuildSignedTxParams): Promise<BuildS
     transaction: Buffer.from(Transaction.toCBORBytes(signed)).toString("base64"),
     nonce: params.nonceUtxoRef,
     payer,
+    nonceSnapshot: { ...nonceSnapshot, assets: { ...nonceSnapshot.assets } },
   };
 }
 

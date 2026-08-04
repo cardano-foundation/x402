@@ -4,6 +4,7 @@ import {
   blockfrostQueries,
   toClientCardanoSigner,
   toFacilitatorCardanoSigner,
+  withCardanoProviderTimeout,
 } from "../../src/signer";
 import {
   CARDANO_MAINNET_CAIP2,
@@ -139,6 +140,28 @@ describe("toFacilitatorCardanoSigner", () => {
         },
       }),
     ).toThrow(/requestTimeoutMs/);
+    expect(() =>
+      toFacilitatorCardanoSigner({
+        network: CARDANO_PREPROD_CAIP2,
+        provider: { koios: { baseUrl: "http://offline.invalid" }, requestTimeoutMs: 0 },
+      }),
+    ).toThrow(/requestTimeoutMs/);
+  });
+
+  it("bounds provider promises by the configured deadline", async () => {
+    vi.useFakeTimers();
+    try {
+      const pending = withCardanoProviderTimeout(
+        new Promise<never>(() => undefined),
+        25,
+        "testOperation",
+      );
+      const rejection = expect(pending).rejects.toThrow(/testOperation timed out after 25ms/);
+      await vi.advanceTimersByTimeAsync(25);
+      await rejection;
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });
 

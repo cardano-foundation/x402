@@ -52,7 +52,7 @@ const facilitatorSigner = toFacilitatorCardanoSigner({ mnemonic, network: "carda
 facilitator.register("cardano:preprod", new ExactCardanoFacilitator(facilitatorSigner));
 ```
 
-The facilitator only broadcasts the client's signed transaction, so its `mnemonic` is **optional** — omit it to run provider-only (no funds, no signer); when supplied it is used only to expose an address in the `/supported` response. The facilitator signer also implements the optional `evaluateTransaction` dry-run described below. A Koios provider (`{ koios: { baseUrl, token? } }`) may be used instead of Blockfrost.
+The facilitator only broadcasts the client's signed transaction, so its `mnemonic` is **optional** — omit it to run provider-only (no funds, no signer); when supplied it is used only to expose an address in the `/supported` response. The facilitator signer also implements the optional `evaluateTransaction` dry-run described below. A Koios provider (`{ koios: { baseUrl, token? } }`) may be used instead of Blockfrost. `provider.requestTimeoutMs` bounds every reference-signer provider query, build, submission, evaluation and confirmation wait; it defaults to 10 seconds.
 
 ## Testnet funds
 

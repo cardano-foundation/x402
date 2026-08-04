@@ -54,6 +54,10 @@ export type CardanoReplayChallengeResult =
  */
 export interface CardanoOperationStore {
   issueChallenge(binding: CardanoReplayChallengeBinding): Promise<CardanoReplayChallengeResult>;
+  validateChallenge(
+    challenge: string,
+    binding: Omit<CardanoReplayChallengeBinding, "expiresAt">,
+  ): Promise<boolean>;
   claim(claim: CardanoOperationClaim): Promise<CardanoOperationClaimResult>;
   complete(
     key: string,
@@ -131,6 +135,44 @@ export class InMemoryCardanoOperationStore implements CardanoOperationStore {
     } while (this.challenges.has(challenge));
     this.challenges.set(challenge, { ...binding });
     return { status: "issued", challenge };
+  }
+
+  /**
+   * Checks that an echoed challenge belongs to this request and requirement.
+   * A challenge retained by an operation remains valid for idempotent retries
+   * after its issuance lifetime; an expired unused challenge does not.
+   *
+   * @param challenge - Opaque challenge echoed by the client.
+   * @param binding - Expected request and requirement fingerprints.
+   * @returns Whether the challenge is valid for this response.
+   */
+  async validateChallenge(
+    challenge: string,
+    binding: Omit<CardanoReplayChallengeBinding, "expiresAt">,
+  ): Promise<boolean> {
+    const record = this.challenges.get(challenge);
+    if (
+      record &&
+      record.fingerprint === binding.fingerprint &&
+      record.requirementsFingerprint === binding.requirementsFingerprint
+    ) {
+      if (record.expiresAt > Date.now()) return true;
+      if (record.claimedKey && this.records.get(record.claimedKey)?.replayChallenge === challenge) {
+        return true;
+      }
+      this.challenges.delete(challenge);
+      return false;
+    }
+    for (const operation of this.records.values()) {
+      if (
+        operation.replayChallenge === challenge &&
+        operation.fingerprint === binding.fingerprint &&
+        operation.requirementsFingerprint === binding.requirementsFingerprint
+      ) {
+        return true;
+      }
+    }
+    return false;
   }
 
   /**

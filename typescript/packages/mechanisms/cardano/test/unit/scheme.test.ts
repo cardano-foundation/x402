@@ -124,6 +124,7 @@ async function serverReplayFixture(body: unknown = { job: 1 }) {
 async function attachReplayChallenge(
   server: ExactCardanoServer,
   fixture: Awaited<ReturnType<typeof serverReplayFixture>>,
+  echoPaymentPayload = false,
 ): Promise<string> {
   const paymentRequiredResponse: PaymentRequired = {
     x402Version: 2,
@@ -136,6 +137,7 @@ async function attachReplayChallenge(
     resourceInfo: paymentRequiredResponse.resource,
     paymentRequiredResponse,
     transportContext: fixture.transportContext,
+    ...(echoPaymentPayload ? { paymentPayload: fixture.context.paymentPayload } : {}),
   });
   fixture.context.paymentPayload.extensions = paymentRequiredResponse.extensions;
   const challenge = (
@@ -1036,6 +1038,21 @@ describe("ExactCardanoScheme server", () => {
     });
   });
 
+  it("does not reflect an invented challenge into a later 402 response", async () => {
+    const fixture = await serverReplayFixture();
+    const server = new ExactCardanoServer();
+    await attachReplayChallenge(server, fixture);
+    const replayProtection = fixture.context.paymentPayload.extensions?.cardanoReplayProtection as {
+      challenges: Record<string, string>;
+    };
+    const requirementKey = Object.keys(replayProtection.challenges)[0]!;
+    const invented = "f".repeat(64);
+    replayProtection.challenges[requirementKey] = invented;
+
+    const returned = await attachReplayChallenge(server, fixture, true);
+    expect(returned).not.toBe(invented);
+  });
+
   it("does not treat arbitrary authorization headers as authenticated request binding", async () => {
     const fixture = await serverReplayFixture();
     fixture.context.paymentPayload.payload.submissionMode = "client";
@@ -1076,6 +1093,37 @@ describe("ExactCardanoScheme server", () => {
       abort: true,
       reason: "payment_replay_outcome_ambiguous",
       status: 409,
+    });
+  });
+
+  it("marks the operation ambiguous when no handler response bytes are available", async () => {
+    const fixture = await serverReplayFixture();
+    const server = new ExactCardanoServer({ requestBinding: () => "test-requester" });
+    expect(await server.schemeHooks.onAfterVerify!(fixture.context)).toBeUndefined();
+    await server.schemeHooks.onAfterSettle!({
+      ...fixture.context,
+      result: { success: true, transaction: "abc", network: PREPROD },
+    });
+
+    expect(await server.schemeHooks.onAfterVerify!(fixture.context)).toMatchObject({
+      abort: true,
+      reason: "payment_replay_outcome_ambiguous",
+      status: 409,
+    });
+  });
+
+  it("rejects replay protection when hooks have no stable request adapter", async () => {
+    const fixture = await serverReplayFixture();
+    const server = new ExactCardanoServer({ requestBinding: () => "test-requester" });
+    const context = {
+      ...fixture.context,
+      transportContext: { request: { method: "POST" } },
+    };
+
+    expect(await server.schemeHooks.onAfterVerify!(context)).toMatchObject({
+      abort: true,
+      reason: "payment_replay_store_unavailable",
+      status: 503,
     });
   });
 

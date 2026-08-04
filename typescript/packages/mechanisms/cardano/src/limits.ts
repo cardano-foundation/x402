@@ -33,5 +33,5 @@ export const MAX_MASUMI_SCRIPT_HASH_CACHE_ENTRIES = 256;
 /** Default raw/canonical body budget for protected-operation fingerprints. */
 export const DEFAULT_CARDANO_REPLAY_BODY_BYTES = 2 * 1024 * 1024;
 
-/** Default timeout for the direct Blockfrost evidence queries. */
+/** Default deadline for reference-signer provider operations. */
 export const DEFAULT_CARDANO_PROVIDER_TIMEOUT_MS = 10_000;

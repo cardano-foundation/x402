@@ -91,6 +91,26 @@ describe("issueMasumiRequirements", () => {
     expect(validateMasumiExtra(extra, NETWORK)).toMatchObject({ ok: false });
   });
 
+  it("accepts shared JSON values but rejects an actual content cycle", async () => {
+    const shared = { units: "metric" };
+    const { requirements } = await issue({
+      commitment: [
+        {
+          name: "body",
+          canonicalization: "jcs",
+          content: { first: shared, second: shared },
+        },
+      ],
+    });
+    expect(validateMasumiExtra(requirements.extra, NETWORK)).toMatchObject({ ok: true });
+
+    const extra = structuredClone(requirements.extra) as unknown as CardanoExtraMasumi;
+    const cyclic: Record<string, unknown> = {};
+    cyclic.self = cyclic;
+    extra.inputCommitment.parts[0]!.content = cyclic;
+    expect(validateMasumiExtra(extra, NETWORK)).toMatchObject({ ok: false });
+  });
+
   it("keeps inputHash stable when a part's content is not echoed on the wire", async () => {
     const echoed = await issue();
     const withheld = await issue({

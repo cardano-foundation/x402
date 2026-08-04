@@ -131,12 +131,18 @@ function commitmentContentError(
     return undefined;
   }
 
-  const pending: Array<{ value: unknown; depth: number }> = [{ value, depth: 0 }];
+  const pending: Array<
+    { value: unknown; depth: number; leave?: false } | { value: object; leave: true }
+  > = [{ value, depth: 0 }];
   const seen = new WeakSet<object>();
   let values = 0;
   let bytes = 0;
   while (pending.length > 0) {
     const current = pending.pop()!;
+    if (current.leave) {
+      seen.delete(current.value);
+      continue;
+    }
     values++;
     if (values > MAX_JSON_VALUES) return "JCS content exceeds the value limit";
     if (current.depth > MAX_JSON_DEPTH) return "JCS content exceeds the nesting limit";
@@ -155,6 +161,7 @@ function commitmentContentError(
     if (typeof current.value !== "object") return "JCS content is not valid JSON";
     if (seen.has(current.value)) return "JCS content contains a cycle";
     seen.add(current.value);
+    pending.push({ value: current.value, leave: true });
     if (Array.isArray(current.value)) {
       for (const item of current.value) {
         pending.push({ value: item, depth: current.depth + 1 });

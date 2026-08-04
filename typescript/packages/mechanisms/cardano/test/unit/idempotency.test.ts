@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
 import {
   InMemoryCardanoOperationStore,
@@ -188,6 +188,19 @@ describe("Cardano idempotency stores", () => {
     if (issued.status !== "issued") throw new Error("test challenge was not issued");
 
     expect(
+      await store.validateChallenge(issued.challenge, {
+        fingerprint: "request-a",
+        requirementsFingerprint: "requirements-a",
+      }),
+    ).toBe(true);
+    expect(
+      await store.validateChallenge(issued.challenge, {
+        fingerprint: "request-b",
+        requirementsFingerprint: "requirements-a",
+      }),
+    ).toBe(false);
+
+    expect(
       await store.claim(
         operationClaim({ replayChallenge: issued.challenge, requireReplayChallenge: true }),
       ),
@@ -226,6 +239,62 @@ describe("Cardano idempotency stores", () => {
         }),
       ),
     ).toEqual({ status: "challenge-invalid" });
+  });
+
+  it("rejects an unused challenge after its issuance lifetime", async () => {
+    vi.useFakeTimers();
+    try {
+      vi.setSystemTime(new Date("2026-08-04T12:00:00Z"));
+      const store = new InMemoryCardanoOperationStore();
+      const issued = await store.issueChallenge({
+        fingerprint: "request-a",
+        requirementsFingerprint: "requirements-a",
+        expiresAt: Date.now() + 1_000,
+      });
+      if (issued.status !== "issued") throw new Error("test challenge was not issued");
+      vi.advanceTimersByTime(1_001);
+
+      expect(
+        await store.validateChallenge(issued.challenge, {
+          fingerprint: "request-a",
+          requirementsFingerprint: "requirements-a",
+        }),
+      ).toBe(false);
+      expect(
+        await store.claim(
+          operationClaim({ replayChallenge: issued.challenge, requireReplayChallenge: true }),
+        ),
+      ).toEqual({ status: "challenge-invalid" });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("keeps a consumed challenge valid for idempotent retries", async () => {
+    vi.useFakeTimers();
+    try {
+      vi.setSystemTime(new Date("2026-08-04T12:00:00Z"));
+      const store = new InMemoryCardanoOperationStore();
+      const issued = await store.issueChallenge({
+        fingerprint: "request-a",
+        requirementsFingerprint: "requirements-a",
+        expiresAt: Date.now() + 1_000,
+      });
+      if (issued.status !== "issued") throw new Error("test challenge was not issued");
+      await store.claim(
+        operationClaim({ replayChallenge: issued.challenge, requireReplayChallenge: true }),
+      );
+      vi.advanceTimersByTime(1_001);
+
+      expect(
+        await store.validateChallenge(issued.challenge, {
+          fingerprint: "request-a",
+          requirementsFingerprint: "requirements-a",
+        }),
+      ).toBe(true);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("allows one challenge to claim only one canonical operation", async () => {

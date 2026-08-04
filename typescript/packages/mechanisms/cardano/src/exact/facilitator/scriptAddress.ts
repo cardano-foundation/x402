@@ -83,7 +83,7 @@ function scriptPaymentCredentialHex(payTo: string): string | null {
  * @returns The derived script hash hex.
  * @throws When neither `script` nor `scriptHash` is usable.
  */
-function deriveScriptHashHex(extra: CardanoExtraScript): string {
+export function deriveScriptHashHex(extra: CardanoExtraScript): string {
   if (extra.script?.code) {
     if (
       !EVEN_HEX_REGEX.test(extra.script.code) ||
@@ -141,15 +141,22 @@ function parameterInputBytes(param: CardanoScriptParameter): number {
       return Buffer.byteLength(param.value, "utf8");
     case "bigint":
     case "integer": {
+      const value = param.value;
+      if (typeof value === "number" && !Number.isSafeInteger(value)) {
+        throw new Error("Cardano integer parameter must be a safe integer");
+      }
       if (
-        (typeof param.value !== "string" &&
-          typeof param.value !== "number" &&
-          typeof param.value !== "bigint") ||
-        String(param.value).length > 128
+        typeof value !== "bigint" &&
+        typeof value !== "number" &&
+        (typeof value !== "string" || !/^(?:0|[1-9]\d*|-[1-9]\d*)$/.test(value))
       ) {
+        throw new Error("Cardano integer parameter must use canonical decimal syntax");
+      }
+      const digits = String(value).replace(/^-/, "");
+      if (digits.length > 128) {
         throw new Error("Cardano integer parameter exceeds the digit limit");
       }
-      return String(param.value).length;
+      return digits.length;
     }
     case "boolean":
       if (typeof param.value !== "boolean") {

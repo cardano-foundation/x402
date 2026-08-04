@@ -1,6 +1,9 @@
 import { describe, expect, it } from "vitest";
 
-import { scriptAddressMatches } from "../../src/exact/facilitator/scriptAddress";
+import {
+  deriveScriptHashHex,
+  scriptAddressMatches,
+} from "../../src/exact/facilitator/scriptAddress";
 import { MAX_CARDANO_SCRIPT_BYTES, MAX_CARDANO_SCRIPT_PARAMETERS } from "../../src/limits";
 import type { CardanoExtraScript } from "../../src/types";
 import { freshPreprodAddress, MINIMAL_PLUTUS_V3, scriptAddressFor } from "../helpers/stubs";
@@ -78,5 +81,27 @@ describe("scriptAddressMatches", () => {
         addr,
       ),
     ).toBe(false);
+  });
+
+  it("rejects unsafe or non-canonical integer parameters", () => {
+    for (const value of [1.5, Number.MAX_SAFE_INTEGER + 1, "01", "1e3", "+1", "-0"]) {
+      expect(() =>
+        deriveScriptHashHex({
+          assetTransferMethod: "script",
+          script: { type: "plutusV3", code: CODE },
+          parameters: { p1: { type: "integer", value } },
+        }),
+      ).toThrow(/integer parameter/);
+    }
+  });
+
+  it("accepts canonical signed integer parameters", () => {
+    expect(
+      deriveScriptHashHex({
+        assetTransferMethod: "script",
+        script: { type: "plutusV3", code: CODE },
+        parameters: { p1: { type: "integer", value: "-42" } },
+      }),
+    ).toMatch(/^[0-9a-f]{56}$/);
   });
 });
