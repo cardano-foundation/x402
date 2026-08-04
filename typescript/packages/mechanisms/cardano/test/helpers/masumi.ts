@@ -113,6 +113,10 @@ export async function issueMasumiRequirements(
     externalDisputeUnlockTime: externalDisputeUnlockTime.toString(),
     // Fixed so a fixture's blockchainIdentifier is reproducible.
     sellerNonce: "ab".repeat(32),
+    // Negative fixtures exist precisely to mint 402s the issuer's own policy
+    // rejects — hostile sellers do not run our issuer. `issue.spec` covers the
+    // issuer-side checks directly.
+    unsafeSkipPolicyChecks: true,
     ...(options.buyerNonce !== undefined ? { buyerNonce: options.buyerNonce } : {}),
     ...(options.agentIdentifier !== undefined ? { agentIdentifier: options.agentIdentifier } : {}),
     ...(options.sellerReturnAddress !== undefined

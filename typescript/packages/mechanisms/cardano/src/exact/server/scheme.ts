@@ -37,6 +37,7 @@ import type { CardanoExtraMasumi } from "../../types";
 import { decodeCardanoTransaction } from "../../utils";
 import { buildSignedTerms, computeTermsDigest } from "../masumi/digests";
 import { jcs } from "../masumi/jcs";
+import { validateMasumiExtra } from "../masumi/schema";
 
 /** Cached protected-handler result bound to one payment and request. */
 interface HandlerReplayOwner {
@@ -414,6 +415,13 @@ export class ExactCardanoScheme implements SchemeNetworkServer {
    * Checks selected Cardano payment semantics against the facilitator's
    * advertised capabilities without copying capability metadata into the 402.
    *
+   * The check is all-or-nothing on purpose. A facilitator that publishes no
+   * `extra` at all has told us nothing, so there is nothing to check and the
+   * requirements pass. One that publishes an `extra` has claimed to describe
+   * itself, and every capability this scheme selects must then appear in it —
+   * a half-filled advertisement is treated as a rejection rather than as
+   * permission, because the alternative is serving a 402 nobody can settle.
+   *
    * @param requirements - Requirements about to be served.
    * @param supportedKind - Matching facilitator capability advertisement.
    */
@@ -422,12 +430,18 @@ export class ExactCardanoScheme implements SchemeNetworkServer {
     supportedKind: SupportedKind,
   ): void {
     const advertised = supportedKind.extra;
-    if (!advertised || typeof advertised !== "object" || Array.isArray(advertised)) return;
+    if (advertised === undefined || advertised === null) return;
+    if (typeof advertised !== "object" || Array.isArray(advertised)) {
+      throw new Error("Cardano facilitator advertised a malformed capability block");
+    }
 
     const capabilities = advertised as Record<string, unknown>;
     const method = requirements.extra?.assetTransferMethod ?? ASSET_TRANSFER_METHOD_DEFAULT;
     const methods = capabilities.assetTransferMethods;
-    if (Array.isArray(methods) && !methods.includes(method)) {
+    if (!Array.isArray(methods)) {
+      throw new Error("Cardano facilitator did not advertise assetTransferMethods");
+    }
+    if (!methods.includes(method)) {
       throw new Error(`Cardano facilitator does not support assetTransferMethod ${String(method)}`);
     }
 
@@ -440,53 +454,64 @@ export class ExactCardanoScheme implements SchemeNetworkServer {
         ? (["server", "client"] as const)
         : ([policies.submissionPolicy] as const);
     const advertisedModes = capabilities.submissionModes;
+    if (!Array.isArray(advertisedModes)) {
+      throw new Error("Cardano facilitator did not advertise submissionModes");
+    }
     const confirmationRanges = capabilities.l1Confirmations;
+    if (
+      !confirmationRanges ||
+      typeof confirmationRanges !== "object" ||
+      Array.isArray(confirmationRanges)
+    ) {
+      throw new Error("Cardano facilitator did not advertise l1Confirmations");
+    }
     for (const mode of selectedModes) {
-      if (Array.isArray(advertisedModes) && !advertisedModes.includes(mode)) {
+      if (!advertisedModes.includes(mode)) {
         throw new Error(`Cardano facilitator does not support ${mode} submission`);
       }
+      const range = (confirmationRanges as Record<string, unknown>)[mode];
+      if (!range || typeof range !== "object" || Array.isArray(range)) {
+        throw new Error(
+          `Cardano facilitator did not advertise an L1 confirmation range for ${mode}`,
+        );
+      }
+      const minimum = (range as Record<string, unknown>).minimum;
+      const maximum = (range as Record<string, unknown>).maximum;
       if (
-        confirmationRanges &&
-        typeof confirmationRanges === "object" &&
-        !Array.isArray(confirmationRanges)
+        typeof minimum !== "number" ||
+        !Number.isInteger(minimum) ||
+        typeof maximum !== "number" ||
+        !Number.isInteger(maximum) ||
+        policies.confirmationPolicy.l1Confirmations < minimum ||
+        policies.confirmationPolicy.l1Confirmations > maximum
       ) {
-        const range = (confirmationRanges as Record<string, unknown>)[mode];
-        if (!range || typeof range !== "object" || Array.isArray(range)) {
-          throw new Error(
-            `Cardano facilitator did not advertise an L1 confirmation range for ${mode}`,
-          );
-        }
-        const minimum = (range as Record<string, unknown>).minimum;
-        const maximum = (range as Record<string, unknown>).maximum;
-        if (
-          typeof minimum !== "number" ||
-          !Number.isInteger(minimum) ||
-          typeof maximum !== "number" ||
-          !Number.isInteger(maximum) ||
-          policies.confirmationPolicy.l1Confirmations < minimum ||
-          policies.confirmationPolicy.l1Confirmations > maximum
-        ) {
-          throw new Error(
-            `Cardano facilitator ${mode} confirmation range does not include ${policies.confirmationPolicy.l1Confirmations}`,
-          );
-        }
+        throw new Error(
+          `Cardano facilitator ${mode} confirmation range does not include ${policies.confirmationPolicy.l1Confirmations}`,
+        );
       }
     }
 
     if (method === ASSET_TRANSFER_METHOD_MASUMI) {
-      const settlementPolicy = (requirements.extra as unknown as CardanoExtraMasumi).terms
-        ?.settlementPolicy;
+      // `extra` is still the raw wire object here, so `settlementPolicy` comes
+      // from the schema check rather than from an unchecked cast. The schema
+      // requires the field, which is why there is no default to apply.
+      const schema = validateMasumiExtra(requirements.extra, requirements.network);
+      if (!schema.ok) {
+        throw new Error(`Cardano Masumi requirements are invalid: ${schema.detail}`);
+      }
+      const settlementPolicy = schema.extra.terms.settlementPolicy;
       const advertisedLayers = capabilities.settlementLayers;
-      if (Array.isArray(advertisedLayers)) {
-        const supported =
-          settlementPolicy === "auto"
-            ? advertisedLayers.includes("l1") || advertisedLayers.includes("hydra")
-            : advertisedLayers.includes(settlementPolicy);
-        if (!supported) {
-          throw new Error(
-            `Cardano facilitator does not support Masumi ${String(settlementPolicy)} settlement`,
-          );
-        }
+      if (!Array.isArray(advertisedLayers)) {
+        throw new Error("Cardano facilitator did not advertise settlementLayers");
+      }
+      const supported =
+        settlementPolicy === "auto"
+          ? advertisedLayers.includes("l1") || advertisedLayers.includes("hydra")
+          : advertisedLayers.includes(settlementPolicy);
+      if (!supported) {
+        throw new Error(
+          `Cardano facilitator does not support Masumi ${String(settlementPolicy)} settlement`,
+        );
       }
     }
   }

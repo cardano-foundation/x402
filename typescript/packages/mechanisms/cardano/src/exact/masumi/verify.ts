@@ -30,10 +30,8 @@ import { slotToPosixMs } from "../../utils";
 import { masumiEscrowAddress, resolveMasumiDeployment } from "./blueprint";
 import {
   MASUMI_MIN_COLLATERAL_LOVELACE,
-  MASUMI_MIN_PAY_TO_SUBMIT_MS,
-  MASUMI_MIN_SUBMIT_TO_UNLOCK_MS,
-  MASUMI_MIN_UNLOCK_TO_DISPUTE_MS,
   MASUMI_REGISTRY_POLICY_ID,
+  masumiDeadlineIntervalsHold,
   masumiMinUtxoLovelace,
 } from "./constants";
 import { verifySellerTermsSignature } from "./cose";
@@ -191,6 +189,29 @@ function returnAddressMatches(
 }
 
 /**
+ * Whether an address in the datum is one Masumi's own off-chain tooling can
+ * re-encode. `getPubKeyAddressDatum` in `masumi-payment-service` accepts only an
+ * enterprise key address or a base address whose **both** credentials are key
+ * hashes; a script stake credential or a pointer stake reference makes it throw.
+ *
+ * That matters after the lock: every later transition rebuilds the continuation
+ * datum from the decoded one and the validator requires `new_datum.buyer ==
+ * buyer` exactly, so an address form Masumi cannot re-encode leaves the escrow
+ * unspendable through Masumi tooling. The script payment credential is refused
+ * for a stronger reason still — `address_to_verification_key` fails on it, so
+ * the contract itself can never release the funds.
+ *
+ * @param credentials - The address credentials taken from the datum.
+ * @returns A failure detail suffix, or `null` when the address form is accepted.
+ */
+function unsupportedAddressForm(credentials: MasumiAddressCredentials): string | null {
+  if (credentials.payment.isScript) return "script payment credential";
+  if (credentials.stake?.isScript) return "script stake credential";
+  if (credentials.pointer) return "pointer stake reference";
+  return null;
+}
+
+/**
  * Checks invariants that make a freshly built V2 datum safe to submit. This is
  * shared by the client preflight and facilitator verification so client mode
  * cannot broadcast a lock that the facilitator will reject afterwards.
@@ -208,11 +229,16 @@ export function verifyMasumiDatumInvariants(
   if (view.sellerCooldownTime !== 0n || view.buyerCooldownTime !== 0n) {
     return fail(ERR_MASUMI_DATUM_INVALID, "cooldown");
   }
-  if (view.buyer.payment.isScript || view.seller.payment.isScript) {
-    return fail(ERR_MASUMI_DATUM_INVALID, "participant is a script credential");
-  }
-  if (view.buyerReturnAddress?.payment.isScript || view.sellerReturnAddress?.payment.isScript) {
-    return fail(ERR_MASUMI_DATUM_INVALID, "return address is a script credential");
+  const addressForms: Array<[string, MasumiAddressCredentials | null]> = [
+    ["buyer", view.buyer],
+    ["seller", view.seller],
+    ["buyer_return_address", view.buyerReturnAddress],
+    ["seller_return_address", view.sellerReturnAddress],
+  ];
+  for (const [field, credentials] of addressForms) {
+    if (!credentials) continue;
+    const unsupported = unsupportedAddressForm(credentials);
+    if (unsupported) return fail(ERR_MASUMI_DATUM_INVALID, `${field} is a ${unsupported}`);
   }
   if (view.referenceSignature.length < 32) {
     return fail(ERR_MASUMI_DATUM_INVALID, "reference_signature shorter than 16 bytes");
@@ -234,9 +260,12 @@ export function verifyMasumiDatumInvariants(
   }
 
   if (
-    view.payByTime + MASUMI_MIN_PAY_TO_SUBMIT_MS > view.submitResultTime ||
-    view.submitResultTime + MASUMI_MIN_SUBMIT_TO_UNLOCK_MS > view.unlockTime ||
-    view.unlockTime + MASUMI_MIN_UNLOCK_TO_DISPUTE_MS > view.externalDisputeUnlockTime
+    !masumiDeadlineIntervalsHold(
+      view.payByTime,
+      view.submitResultTime,
+      view.unlockTime,
+      view.externalDisputeUnlockTime,
+    )
   ) {
     return fail(ERR_MASUMI_DEADLINE, "deadline intervals below the minimum");
   }
@@ -250,14 +279,13 @@ export function verifyMasumiDatumInvariants(
  * @returns Success, or a deadline failure.
  */
 function verifyMasumiTermDeadlines(terms: CardanoExtraMasumi["terms"]): MasumiLockCheck {
-  const payByTime = BigInt(terms.payByTime);
-  const submitResultTime = BigInt(terms.submitResultTime);
-  const unlockTime = BigInt(terms.unlockTime);
-  const externalDisputeUnlockTime = BigInt(terms.externalDisputeUnlockTime);
   if (
-    payByTime + MASUMI_MIN_PAY_TO_SUBMIT_MS > submitResultTime ||
-    submitResultTime + MASUMI_MIN_SUBMIT_TO_UNLOCK_MS > unlockTime ||
-    unlockTime + MASUMI_MIN_UNLOCK_TO_DISPUTE_MS > externalDisputeUnlockTime
+    !masumiDeadlineIntervalsHold(
+      BigInt(terms.payByTime),
+      BigInt(terms.submitResultTime),
+      BigInt(terms.unlockTime),
+      BigInt(terms.externalDisputeUnlockTime),
+    )
   ) {
     return fail(ERR_MASUMI_DEADLINE, "deadline intervals below the minimum");
   }

@@ -184,8 +184,34 @@ function commitmentContentError(
 }
 
 /**
- * Whether a bech32 address parses, carries a verification-key payment
- * credential, and belongs to the selected network.
+ * Whether a value is a deadline the scheme can safely convert with `BigInt`: a
+ * bounded, positive, canonical decimal string of POSIX milliseconds.
+ *
+ * Callers rely on this as a guard, not just as a schema rule — `BigInt("")` and
+ * `BigInt("12x")` throw a raw `SyntaxError`, which would escape a validator as
+ * an unhelpful crash instead of a precise rejection.
+ *
+ * @param value - The candidate deadline.
+ * @returns True when the value converts cleanly.
+ */
+export function isPosixMsString(value: unknown): value is string {
+  return typeof value === "string" && value.length <= MAX_POSIX_DIGITS && POSITIVE_INT.test(value);
+}
+
+/**
+ * Whether a bech32 address parses, belongs to the selected network, and uses an
+ * address form the Masumi escrow lifecycle can carry end to end: an enterprise
+ * address with a key payment credential, or a base address whose payment **and**
+ * stake credentials are both key hashes.
+ *
+ * A script payment credential is refused because `vested_pay` does
+ * `expect Some(vk) = address_to_verification_key(...)` on every spend path — the
+ * contract could never release the funds. A script stake credential and a
+ * pointer stake reference are refused for a narrower but equally terminal
+ * reason: Masumi's own `getPubKeyAddressDatum` accepts neither, and every later
+ * transition rebuilds the continuation datum through it while the validator
+ * demands `new_datum.buyer == buyer` exactly. Locking such an address strands
+ * the escrow for Masumi tooling with no recovery path.
  *
  * @param value - The candidate address.
  * @param network - The x402 Cardano network identifier.
@@ -195,14 +221,9 @@ export function isKeyCredentialAddressOn(value: unknown, network: string): boole
   if (typeof value !== "string" || value.length === 0) return false;
   try {
     const address = AddressEras.fromBech32(value);
-    if (
-      address._tag !== "BaseAddress" &&
-      address._tag !== "EnterpriseAddress" &&
-      address._tag !== "PointerAddress"
-    ) {
-      return false;
-    }
+    if (address._tag !== "BaseAddress" && address._tag !== "EnterpriseAddress") return false;
     if (address.paymentCredential._tag !== "KeyHash") return false;
+    if (address._tag === "BaseAddress" && address.stakeCredential._tag !== "KeyHash") return false;
     return address.networkId === getCardanoNetworkId(network);
   } catch {
     return false;
@@ -410,8 +431,7 @@ function validateTerms(
   }
   const times = ["payByTime", "submitResultTime", "unlockTime", "externalDisputeUnlockTime"];
   for (const field of times) {
-    const time = value[field];
-    if (typeof time !== "string" || time.length > MAX_POSIX_DIGITS || !POSITIVE_INT.test(time)) {
+    if (!isPosixMsString(value[field])) {
       return { ok: false, detail: `terms.${field} must be a positive POSIX-ms integer string` };
     }
   }

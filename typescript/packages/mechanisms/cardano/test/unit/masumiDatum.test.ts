@@ -1,5 +1,15 @@
 import { describe, expect, it } from "vitest";
-import { AddressEras, Data, Pointer, PointerAddress } from "@evolution-sdk/evolution";
+import {
+  AddressEras,
+  BaseAddress,
+  Data,
+  Pointer,
+  PointerAddress,
+  ScriptHash,
+} from "@evolution-sdk/evolution";
+import { isKeyCredentialAddressOn } from "../../src/exact/masumi/schema";
+import { verifyMasumiDatumInvariants } from "../../src/exact/masumi/verify";
+import { freshKeyAddress } from "../helpers/masumi";
 import {
   addressCredentials,
   buildMasumiLockDatum,
@@ -269,5 +279,66 @@ describe("client-computed collateral", () => {
     expect(parseMasumiLockDatum(lock.datum.data)!.buyerReturnAddress?.payment.hash).toBe(
       addressCredentials(BUYER).payment.hash,
     );
+  });
+});
+
+// The codec above stays faithful to whatever the chain carries; refusing an
+// address form is a policy decision, and it lives here. Masumi's own
+// `getPubKeyAddressDatum` accepts only an enterprise key address or a base
+// address whose payment AND stake credentials are key hashes. Every later
+// transition rebuilds the continuation datum through it while `vested_pay`
+// demands `new_datum.buyer == buyer` exactly, so locking anything else strands
+// the escrow for Masumi tooling with no recovery path.
+describe("accepted datum address forms", () => {
+  const NETWORK = CARDANO_PREPROD_CAIP2;
+  const base = AddressEras.fromBech32(BUYER);
+  if (base._tag !== "BaseAddress") throw new Error("fixture must be a base address");
+
+  const scriptStakeAddress = AddressEras.toBech32(
+    new BaseAddress.BaseAddress({
+      networkId: base.networkId,
+      paymentCredential: base.paymentCredential,
+      stakeCredential: ScriptHash.fromHex("00".repeat(28)),
+    }),
+  );
+  const pointerAddress = AddressEras.toBech32(
+    new PointerAddress.PointerAddress({
+      networkId: base.networkId,
+      paymentCredential: base.paymentCredential,
+      pointer: new Pointer.Pointer({ slot: 42, txIndex: 3, certIndex: 1 }),
+    }),
+  );
+
+  it("accepts base key/key and enterprise key addresses", () => {
+    expect(isKeyCredentialAddressOn(BUYER, NETWORK)).toBe(true);
+    expect(isKeyCredentialAddressOn(SELLER, NETWORK)).toBe(true);
+    expect(isKeyCredentialAddressOn(freshKeyAddress(NETWORK).address, NETWORK)).toBe(true);
+  });
+
+  it("refuses a script stake credential and a pointer stake reference", () => {
+    expect(isKeyCredentialAddressOn(scriptStakeAddress, NETWORK)).toBe(false);
+    expect(isKeyCredentialAddressOn(pointerAddress, NETWORK)).toBe(false);
+  });
+
+  it("refuses a script payment credential", () => {
+    expect(isKeyCredentialAddressOn(masumiEscrowAddress(NETWORK), NETWORK)).toBe(false);
+  });
+
+  it("rejects a lock datum carrying an unsupported address form", () => {
+    const escrow = masumiEscrowAddress(NETWORK);
+    for (const [field, address] of [
+      ["buyer", scriptStakeAddress],
+      ["seller", pointerAddress],
+    ] as const) {
+      const datum = buildMasumiLockDatum({
+        ...input,
+        ...(field === "buyer" ? { buyerAddress: address } : { sellerAddress: address }),
+      });
+      const view = parseMasumiLockDatum(datum)!;
+      expect(verifyMasumiDatumInvariants(view, escrow)).toMatchObject({
+        ok: false,
+        detail: expect.stringContaining(field),
+      });
+    }
   });
 });

@@ -1260,8 +1260,42 @@ describe("ExactCardanoScheme server", () => {
         extra: {
           assetTransferMethods: ["default", "masumi", "script"],
           settlementLayers: ["l1"],
+          submissionModes: ["server", "client"],
+          l1Confirmations: {
+            server: { minimum: 0, maximum: 20 },
+            client: { minimum: 0, maximum: 20 },
+          },
         },
       },
+      [],
+    );
+    expect(enhanced.extra).toEqual({ foo: "bar" });
+  });
+
+  // A facilitator that publishes an `extra` has claimed to describe itself, so a
+  // capability this scheme selects and cannot find there is a rejection — not
+  // silent permission to serve a 402 nobody can settle.
+  it("rejects a half-filled facilitator capability advertisement", async () => {
+    const server = new ExactCardanoServer();
+    await expect(
+      server.enhancePaymentRequirements(
+        buildRequirements(),
+        {
+          x402Version: 2,
+          scheme: "exact",
+          network: CARDANO_MAINNET_CAIP2,
+          extra: { assetTransferMethods: ["default"], settlementLayers: ["l1"] },
+        },
+        [],
+      ),
+    ).rejects.toThrow(/did not advertise submissionModes/);
+  });
+
+  it("accepts requirements when the facilitator advertises no capabilities at all", async () => {
+    const server = new ExactCardanoServer();
+    const enhanced = await server.enhancePaymentRequirements(
+      buildRequirements({ extra: { foo: "bar" } }),
+      { x402Version: 2, scheme: "exact", network: CARDANO_MAINNET_CAIP2 },
       [],
     );
     expect(enhanced.extra).toEqual({ foo: "bar" });

@@ -517,7 +517,7 @@ describe("masumi lock verification", () => {
       expect(await check(mutated)).toMatchObject({
         ok: false,
         reason: "invalid_exact_cardano_payload_masumi_datum_invalid",
-        detail: "return address is a script credential",
+        detail: "buyer_return_address is a script payment credential",
       });
     });
 

@@ -740,7 +740,7 @@ export function toClientCardanoSigner(config: ClientCardanoSignerConfig): Client
       });
 
       if (masumiExtra) {
-        assertMasumiPaymentWindow(masumiExtra, input.maxTimeoutSeconds);
+        assertMasumiPayByTimeNotExpired(masumiExtra);
       }
 
       // Client mode: the client broadcasts before the paid retry, and the
@@ -776,8 +776,8 @@ export function toClientCardanoSigner(config: ClientCardanoSignerConfig): Client
 }
 
 /**
- * Ensures the transaction validity bound derived from `payByTime` can satisfy
- * the x402 timeout at both initial validation and the final pre-submit check.
+ * Ensures the transaction validity bound derived from `payByTime` still lies
+ * inside the x402 validity window before the wallet is touched.
  *
  * @param extra - Validated Masumi requirements.
  * @param maxTimeoutSeconds - x402 validity-window limit.
@@ -786,14 +786,27 @@ function assertMasumiPaymentWindow(extra: CardanoExtraMasumi, maxTimeoutSeconds:
   if (!Number.isSafeInteger(maxTimeoutSeconds) || maxTimeoutSeconds <= 0) {
     throw new Error("Masumi maxTimeoutSeconds must be a positive safe integer");
   }
-  const nowMs = BigInt(Date.now());
+  assertMasumiPayByTimeNotExpired(extra);
   const payByTime = BigInt(extra.terms.payByTime);
-  const latestPayByTime = nowMs + BigInt(maxTimeoutSeconds) * 1000n;
-  if (payByTime <= nowMs) {
-    throw new Error("Masumi client preflight failed: payByTime has expired");
-  }
+  const latestPayByTime = BigInt(Date.now()) + BigInt(maxTimeoutSeconds) * 1000n;
   if (payByTime > latestPayByTime) {
     throw new Error("Masumi client preflight failed: payByTime exceeds maxTimeoutSeconds");
+  }
+}
+
+/**
+ * Re-checks only the bound that can newly fail between preflight and broadcast.
+ *
+ * The `maxTimeoutSeconds` ceiling is deliberately not repeated here: it grows
+ * with the wall clock, so once it has been cleared it cannot fail later. Expiry
+ * is the opposite — building and signing takes real time, and a transaction
+ * whose TTL is already past `pay_by_time` can never settle.
+ *
+ * @param extra - Validated Masumi requirements.
+ */
+function assertMasumiPayByTimeNotExpired(extra: CardanoExtraMasumi): void {
+  if (BigInt(extra.terms.payByTime) <= BigInt(Date.now())) {
+    throw new Error("Masumi client preflight failed: payByTime has expired");
   }
 }
 

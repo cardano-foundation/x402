@@ -10,7 +10,14 @@ import type { CardanoExtraMasumi } from "../../src/types";
 import { MAX_MASUMI_COMMITMENT_PARTS } from "../../src/limits";
 
 const NETWORK = CARDANO_PREPROD_CAIP2;
-const PAY_BY_TIME = 1_785_756_000_000n;
+// The issuer enforces absolute deadline floors against its own clock, so the
+// happy-path fixture has to be anchored to now rather than to a fixed instant.
+// `payByTime` sits inside `maxTimeoutSeconds` (10 minutes) while
+// `submitResultTime` clears the 15-minute lead Masumi requires.
+const PAY_BY_TIME = BigInt(Date.now() + 9 * 60 * 1000);
+const SUBMIT_RESULT_TIME = PAY_BY_TIME + 7n * 60n * 1000n;
+const UNLOCK_TIME = SUBMIT_RESULT_TIME + 20n * 60n * 1000n;
+const EXTERNAL_DISPUTE_UNLOCK_TIME = UNLOCK_TIME + 20n * 60n * 1000n;
 
 /**
  * Issues a 402 with a mnemonic-backed seller, i.e. the way a resource server
@@ -40,9 +47,9 @@ async function issue(overrides: Record<string, unknown> = {}) {
       },
     ],
     payByTime: PAY_BY_TIME.toString(),
-    submitResultTime: (PAY_BY_TIME + 300_000n).toString(),
-    unlockTime: (PAY_BY_TIME + 1_200_000n).toString(),
-    externalDisputeUnlockTime: (PAY_BY_TIME + 2_100_000n).toString(),
+    submitResultTime: SUBMIT_RESULT_TIME.toString(),
+    unlockTime: UNLOCK_TIME.toString(),
+    externalDisputeUnlockTime: EXTERNAL_DISPUTE_UNLOCK_TIME.toString(),
     ...overrides,
   });
   return { requirements, sellerAddress: seller.sellerAddress };
@@ -148,5 +155,80 @@ describe("issueMasumiRequirements", () => {
     await expect(issue({ asset: `AA${"00".repeat(27)}.` })).rejects.toThrow(
       /canonical lowercase form/,
     );
+  });
+
+  // Every value below is covered by `termsDigest`, so a 402 that trips one of
+  // these cannot be repaired afterwards — only re-issued. Catching it here is
+  // the difference between an immediate error and a 402 no buyer will ever pay.
+  describe("issuer-side policy", () => {
+    it("rejects deadline gaps below the minimum", async () => {
+      await expect(issue({ submitResultTime: (PAY_BY_TIME + 60_000n).toString() })).rejects.toThrow(
+        /deadline intervals are below the minimum/,
+      );
+      await expect(
+        issue({ unlockTime: (SUBMIT_RESULT_TIME + 60_000n).toString() }),
+      ).rejects.toThrow(/deadline intervals are below the minimum/);
+      await expect(
+        issue({ externalDisputeUnlockTime: (UNLOCK_TIME + 60_000n).toString() }),
+      ).rejects.toThrow(/deadline intervals are below the minimum/);
+    });
+
+    it("rejects a payByTime that has already passed", async () => {
+      const past = BigInt(Date.now() - 60_000);
+      await expect(
+        issue({
+          payByTime: past.toString(),
+          submitResultTime: (past + 7n * 60n * 1000n).toString(),
+          unlockTime: (past + 27n * 60n * 1000n).toString(),
+          externalDisputeUnlockTime: (past + 47n * 60n * 1000n).toString(),
+        }),
+      ).rejects.toThrow(/payByTime must be in the future/);
+    });
+
+    it("rejects a submitResultTime inside Masumi's 15-minute lead", async () => {
+      const payByTime = BigInt(Date.now() + 60_000);
+      const submitResultTime = payByTime + 6n * 60n * 1000n;
+      await expect(
+        issue({
+          payByTime: payByTime.toString(),
+          submitResultTime: submitResultTime.toString(),
+          unlockTime: (submitResultTime + 20n * 60n * 1000n).toString(),
+          externalDisputeUnlockTime: (submitResultTime + 40n * 60n * 1000n).toString(),
+        }),
+      ).rejects.toThrow(/submitResultTime must be at least 15 minutes away/);
+    });
+
+    it("rejects a payByTime the buyer could not reach inside maxTimeoutSeconds", async () => {
+      await expect(issue({ maxTimeoutSeconds: 60 })).rejects.toThrow(
+        /payByTime exceeds maxTimeoutSeconds/,
+      );
+    });
+
+    it("rejects a non-positive maxTimeoutSeconds even with policy checks skipped", async () => {
+      await expect(issue({ maxTimeoutSeconds: 0 })).rejects.toThrow(
+        /maxTimeoutSeconds must be a positive safe integer/,
+      );
+      // `maxTimeoutSeconds` goes into `termsDigest`, so its validity is not part
+      // of the skippable policy surface.
+      await expect(issue({ maxTimeoutSeconds: -1, unsafeSkipPolicyChecks: true })).rejects.toThrow(
+        /maxTimeoutSeconds must be a positive safe integer/,
+      );
+    });
+
+    // Named rejections, not a raw `SyntaxError` escaping from `BigInt`.
+    it("rejects unparseable deadlines with a named error", async () => {
+      await expect(issue({ payByTime: "" })).rejects.toThrow(
+        /payByTime must be a positive POSIX-ms integer string/,
+      );
+      await expect(issue({ submitResultTime: "12x" })).rejects.toThrow(
+        /submitResultTime must be a positive POSIX-ms integer string/,
+      );
+      await expect(issue({ unlockTime: "-1" })).rejects.toThrow(
+        /unlockTime must be a positive POSIX-ms integer string/,
+      );
+      await expect(issue({ externalDisputeUnlockTime: "9".repeat(21) })).rejects.toThrow(
+        /externalDisputeUnlockTime must be a positive POSIX-ms integer string/,
+      );
+    });
   });
 });
