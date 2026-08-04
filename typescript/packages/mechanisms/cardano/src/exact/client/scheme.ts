@@ -1,14 +1,16 @@
 import type {
+  PaymentPayloadContext,
   PaymentPayloadResult,
   PaymentRequirements,
   SchemeNetworkClient,
 } from "@x402/core/types";
 import {
   CARDANO_ADDRESS_REGEX,
-  CARDANO_ASSET_REGEX,
+  CANONICAL_CARDANO_ASSET_REGEX,
   CARDANO_UTXO_REF_REGEX,
   isCardanoNetwork,
   SCHEME_EXACT,
+  POSITIVE_CANONICAL_AMOUNT_REGEX,
   SUBMISSION_POLICY_EITHER,
 } from "../../constants";
 import { resolveCardanoPolicies } from "../../policy";
@@ -45,11 +47,13 @@ export class ExactCardanoScheme implements SchemeNetworkClient {
    *
    * @param x402Version - The x402 protocol version.
    * @param paymentRequirements - The payment requirements to fulfill.
+   * @param context - Payment-required context, including the protected resource.
    * @returns A promise resolving to the Cardano payment payload.
    */
   async createPaymentPayload(
     x402Version: number,
     paymentRequirements: PaymentRequirements,
+    context?: PaymentPayloadContext,
   ): Promise<PaymentPayloadResult> {
     if (!isCardanoNetwork(paymentRequirements.network)) {
       throw new Error(`Unsupported Cardano network: ${paymentRequirements.network}`);
@@ -63,14 +67,18 @@ export class ExactCardanoScheme implements SchemeNetworkClient {
     if (!paymentRequirements.asset) {
       throw new Error("Asset is required");
     }
-    if (!CARDANO_ASSET_REGEX.test(paymentRequirements.asset)) {
-      throw new Error(`Invalid Cardano asset unit: ${paymentRequirements.asset}`);
+    if (!CANONICAL_CARDANO_ASSET_REGEX.test(paymentRequirements.asset)) {
+      throw new Error(
+        `Cardano asset must use canonical lowercase form: ${paymentRequirements.asset}`,
+      );
     }
     if (!paymentRequirements.amount) {
       throw new Error("Amount is required");
     }
-    if (!/^[0-9]+$/.test(paymentRequirements.amount)) {
-      throw new Error(`Amount must be a non-negative integer, got: ${paymentRequirements.amount}`);
+    if (!POSITIVE_CANONICAL_AMOUNT_REGEX.test(paymentRequirements.amount)) {
+      throw new Error(
+        `Amount must be a positive canonical integer, got: ${paymentRequirements.amount}`,
+      );
     }
 
     // The server's policy selects the submitter; `either` leaves the choice to
@@ -94,6 +102,7 @@ export class ExactCardanoScheme implements SchemeNetworkClient {
       maxTimeoutSeconds: paymentRequirements.maxTimeoutSeconds,
       extra: paymentRequirements.extra,
       submissionMode,
+      ...(context?.resource ? { resource: context.resource } : {}),
     });
 
     if (!result || typeof result.transaction !== "string" || result.transaction.length === 0) {
@@ -109,6 +118,14 @@ export class ExactCardanoScheme implements SchemeNetworkClient {
       throw new Error(
         `Cardano signer honoured submissionMode ${result.submissionMode}, expected ${submissionMode}`,
       );
+    }
+
+    const method = paymentRequirements.extra?.assetTransferMethod ?? "default";
+    if (
+      method !== "masumi" &&
+      (result.settlementLayer !== undefined || result.headId !== undefined)
+    ) {
+      throw new Error("Cardano signer returned Masumi settlement fields for a non-Masumi payment");
     }
 
     const payload: ExactCardanoPayload = {

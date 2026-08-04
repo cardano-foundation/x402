@@ -53,7 +53,7 @@ describe("issueMasumiRequirements", () => {
     const schema = validateMasumiExtra(requirements.extra, NETWORK);
     expect(schema.ok).toBe(true);
 
-    const authorization = verifyMasumiAuthorization(
+    const authorization = await verifyMasumiAuthorization(
       (schema as { ok: true; extra: CardanoExtraMasumi }).extra,
       requirements,
     );
@@ -104,5 +104,13 @@ describe("issueMasumiRequirements", () => {
 
   it("refuses to serve requirements that would fail the wire schema", async () => {
     await expect(issue({ buyerNonce: "01" })).rejects.toThrow(/Issued Masumi requirements/);
+  });
+
+  it("rejects non-canonical amount and asset values before signing", async () => {
+    await expect(issue({ amount: "0" })).rejects.toThrow(/positive canonical integer/);
+    await expect(issue({ amount: "050000000" })).rejects.toThrow(/positive canonical integer/);
+    await expect(issue({ asset: `AA${"00".repeat(27)}.` })).rejects.toThrow(
+      /canonical lowercase form/,
+    );
   });
 });

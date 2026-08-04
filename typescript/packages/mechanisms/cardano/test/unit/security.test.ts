@@ -40,9 +40,31 @@ const stubSigner: FacilitatorCardanoSigner = {
   getUtxo: async () => ({ exists: true, address: "addr1qpayer00" }),
   getCurrentSlot: async () => 100n,
   submitTransaction: async () => ({ txHash: "deadbeef", status: "confirmed" }),
+  getTransactionEvidence: async () => ({ status: "unknown", confirmations: -2 }),
 };
 
 describe("Cardano facilitator security", () => {
+  const decodedPayment = () => ({
+    txHash: "abc",
+    networkId: 1,
+    ttlSlot: undefined,
+    validityStartSlot: undefined,
+    inputs: [`${TX_HASH}#0`],
+    outputs: [
+      {
+        address: RECIPIENT,
+        coin: 0n,
+        assets: { [USDM_MAINNET_ASSET.toLowerCase()]: 10_000n },
+      },
+    ],
+    vkeyHashes: [],
+    isValid: true,
+    vkeyWitnessCount: 1,
+    scriptWitnessCount: 0,
+    redeemerCount: 0,
+    signaturesValid: true,
+  });
+
   it("reads assetTransferMethod from canonical requirements, not client-echoed accepted", async () => {
     let capturedExtra: Record<string, unknown> | undefined;
 
@@ -127,6 +149,35 @@ describe("Cardano facilitator security", () => {
     const result = await facilitator.verify(payload, buildRequirements());
     expect(result.isValid).toBe(true);
     expect(result.payer).toBe("addr1qpayer00");
+  });
+
+  it("rejects Masumi settlement fields on the default method", async () => {
+    vi.mocked(decodeCardanoTransaction).mockReturnValueOnce(decodedPayment());
+    const requirements = buildRequirements();
+    const result = await new ExactCardanoFacilitator(stubSigner).verify(
+      {
+        x402Version: 2,
+        accepted: requirements,
+        payload: { transaction: "AAAA", nonce: `${TX_HASH}#0`, settlementLayer: "l1" },
+      },
+      requirements,
+    );
+    expect(result.invalidReason).toBe("invalid_exact_cardano_payload_settlement_layer_mismatch");
+  });
+
+  it("rejects a confirmation depth it cannot authenticate", async () => {
+    vi.mocked(decodeCardanoTransaction).mockReturnValueOnce(decodedPayment());
+    const withoutEvidence = { ...stubSigner, getTransactionEvidence: undefined };
+    const requirements = buildRequirements();
+    const result = await new ExactCardanoFacilitator(withoutEvidence).verify(
+      {
+        x402Version: 2,
+        accepted: requirements,
+        payload: { transaction: "AAAA", nonce: `${TX_HASH}#0` },
+      },
+      requirements,
+    );
+    expect(result.invalidReason).toBe("exact_cardano_facilitator_evidence_unavailable");
   });
 
   // `is_valid` sits outside the transaction body, so it is not covered by the

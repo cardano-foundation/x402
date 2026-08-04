@@ -11,6 +11,7 @@ import {
   ASSET_TRANSFER_METHOD_MASUMI,
   ASSET_TRANSFER_METHOD_SCRIPT,
   CARDANO_NETWORKS,
+  CANONICAL_CARDANO_ASSET_REGEX,
   ERR_AMOUNT_INSUFFICIENT,
   ERR_ASSET_MISMATCH,
   ERR_CHAIN_LOOKUP_FAILED,
@@ -29,7 +30,9 @@ import {
   ERR_PAYMENT_PENDING,
   ERR_POLICY_INVALID,
   ERR_RECIPIENT_MISMATCH,
+  ERR_REQUIREMENTS_INVALID,
   ERR_SCRIPT_ADDRESS_MISMATCH,
+  ERR_SETTLEMENT_LAYER_MISMATCH,
   ERR_SETTLEMENT_FAILED,
   ERR_SETTLEMENT_NOT_CONFIRMED,
   ERR_SUBMISSION_MODE_MISMATCH,
@@ -45,6 +48,7 @@ import {
   MAX_L1_CONFIRMATIONS,
   MIN_L1_CONFIRMATIONS,
   normalizeCardanoNetwork,
+  POSITIVE_CANONICAL_AMOUNT_REGEX,
   SCHEME_EXACT,
 } from "../../constants";
 import {
@@ -75,7 +79,11 @@ import {
 } from "../../utils";
 import { buildSignedTerms, computeTermsDigest } from "../masumi/digests";
 import { validateMasumiExtra } from "../masumi/schema";
-import { verifyMasumiLock, type MasumiRegistryValidator } from "../masumi/verify";
+import {
+  verifyMasumiLock,
+  type MasumiDeploymentValidator,
+  type MasumiRegistryValidator,
+} from "../masumi/verify";
 import { scriptAddressMatches } from "./scriptAddress";
 
 /**
@@ -117,6 +125,8 @@ export interface ExactCardanoFacilitatorConfig {
    * taken on trust; unregistered sellers are unaffected.
    */
   validateRegistryClaim?: MasumiRegistryValidator;
+  /** Explicitly approves a non-canonical Masumi V2 deployment. */
+  validateCustomMasumiDeployment?: MasumiDeploymentValidator;
   /**
    * Allows a client-submitted payment to run Plutus scripts. Default `false`:
    * only a script-running transaction can land phase-2 invalid — creating none
@@ -221,6 +231,7 @@ export class ExactCardanoScheme implements SchemeNetworkFacilitator {
   private readonly confirmationTimeoutMs: number;
   private readonly confirmationPollMs: number;
   private readonly validateRegistryClaim?: MasumiRegistryValidator;
+  private readonly validateCustomMasumiDeployment?: MasumiDeploymentValidator;
   private readonly allowClientScriptExecution: boolean;
 
   /**
@@ -239,6 +250,7 @@ export class ExactCardanoScheme implements SchemeNetworkFacilitator {
     this.confirmationTimeoutMs = config.confirmationTimeoutMs ?? 90_000;
     this.confirmationPollMs = config.confirmationPollMs ?? 5_000;
     this.validateRegistryClaim = config.validateRegistryClaim;
+    this.validateCustomMasumiDeployment = config.validateCustomMasumiDeployment;
     this.allowClientScriptExecution = config.allowClientScriptExecution ?? false;
   }
 
@@ -268,9 +280,11 @@ export class ExactCardanoScheme implements SchemeNetworkFacilitator {
         // Mempool-only evidence is refused unless the operator opted in.
         server: {
           minimum: this.acceptMempool ? MIN_L1_CONFIRMATIONS : 0,
-          maximum: MAX_L1_CONFIRMATIONS,
+          maximum: this.canAuthenticateEvidence() ? MAX_L1_CONFIRMATIONS : 0,
         },
-        client: { minimum: 0, maximum: MAX_L1_CONFIRMATIONS },
+        ...(this.canAuthenticateEvidence()
+          ? { client: { minimum: 0, maximum: MAX_L1_CONFIRMATIONS } }
+          : {}),
       },
     };
   }
@@ -409,9 +423,9 @@ export class ExactCardanoScheme implements SchemeNetworkFacilitator {
         // transaction that may already have landed, so the spec requires a
         // timeout, transport failure or unknown node result to RETAIN it.
         //
-        // Ask the ledger before deciding: only a transaction with no trace at
-        // all may free its claim, and then only when the signer can actually
-        // authenticate that absence.
+        // Ask the ledger before deciding. An `unknown` lookup is not proof that
+        // no submission occurred; only the signer's explicit definitive-
+        // rejection classifier may release the claim.
         let landed = false;
         if (this.canAuthenticateEvidence()) {
           try {
@@ -432,12 +446,20 @@ export class ExactCardanoScheme implements SchemeNetworkFacilitator {
           const evidence = await this.awaitEvidence(decoded.txHash, requirements.network, required);
           return this.evidenceResponse(evidence, decoded.txHash, network, mode, required, verified);
         }
-        this.releaseClaim(decoded.txHash);
+        const definitive = this.signer.isDefinitiveSubmissionRejection?.(cause) === true;
+        if (definitive) {
+          this.releaseClaim(decoded.txHash);
+        } else {
+          // Unknown does not prove absence. Keep the canonical transaction ID
+          // claimed so a paid retry cannot rebroadcast a transaction that may
+          // still be valid and in flight.
+          this.markSubmitted(decoded.txHash);
+        }
         return {
           success: false,
           errorReason: ERR_SETTLEMENT_FAILED,
           errorMessage: describeErrorChain(cause),
-          transaction: "",
+          transaction: definitive ? "" : decoded.txHash,
           network,
         };
       }
@@ -485,7 +507,9 @@ export class ExactCardanoScheme implements SchemeNetworkFacilitator {
    * @param context.payload - The decoded Cardano payload.
    * @param context.payer - The address that owns the nonce UTXO.
    * @param context.coinsPerUtxoByte - Live `coinsPerUtxoByte`, when available.
+   * @param context.resource - The protected x402 resource, when available.
    * @param context.validateRegistryClaim - Independent registry validator, if any.
+   * @param context.validateCustomDeployment - Explicit custom deployment validator, if any.
    * @returns Result describing success or a precise failure reason.
    */
   protected async runMethodSpecificChecks(
@@ -496,18 +520,26 @@ export class ExactCardanoScheme implements SchemeNetworkFacilitator {
       payer: string;
       coinsPerUtxoByte?: bigint;
       validateRegistryClaim?: MasumiRegistryValidator;
+      resource?: PaymentPayload["resource"];
+      validateCustomDeployment?: MasumiDeploymentValidator;
     },
   ): Promise<{ ok: true } | { ok: false; reason: string; detail?: string }> {
     const extra = requirements.extra;
     const method =
       (extra as CardanoExtra | undefined)?.assetTransferMethod ?? ASSET_TRANSFER_METHOD_DEFAULT;
     if (method === ASSET_TRANSFER_METHOD_DEFAULT) {
+      if (context.payload.settlementLayer !== undefined || context.payload.headId !== undefined) {
+        return { ok: false, reason: ERR_SETTLEMENT_LAYER_MISMATCH };
+      }
       return { ok: true };
     }
     if (method === ASSET_TRANSFER_METHOD_MASUMI) {
       return verifyMasumiLock(extra, requirements, decoded, context);
     }
     if (method === ASSET_TRANSFER_METHOD_SCRIPT) {
+      if (context.payload.settlementLayer !== undefined || context.payload.headId !== undefined) {
+        return { ok: false, reason: ERR_SETTLEMENT_LAYER_MISMATCH };
+      }
       const scriptExtra = extra as CardanoExtraScript;
       if (!scriptExtra.scriptHash && !scriptExtra.script) {
         return { ok: false, reason: ERR_SCRIPT_ADDRESS_MISMATCH };
@@ -602,6 +634,19 @@ export class ExactCardanoScheme implements SchemeNetworkFacilitator {
 
       if (!isCardanoNetwork(requirements.network)) {
         return { response: { isValid: false, invalidReason: ERR_NETWORK_MISMATCH, payer: "" } };
+      }
+      if (
+        !POSITIVE_CANONICAL_AMOUNT_REGEX.test(requirements.amount) ||
+        !CANONICAL_CARDANO_ASSET_REGEX.test(requirements.asset)
+      ) {
+        return {
+          response: {
+            isValid: false,
+            invalidReason: ERR_REQUIREMENTS_INVALID,
+            invalidMessage: "amount and asset must use their positive canonical wire forms",
+            payer: "",
+          },
+        };
       }
 
       let cardanoPayload: ExactCardanoPayload;
@@ -909,6 +954,8 @@ export class ExactCardanoScheme implements SchemeNetworkFacilitator {
           payer,
           coinsPerUtxoByte,
           validateRegistryClaim: this.validateRegistryClaim,
+          resource: payload.resource,
+          validateCustomDeployment: this.validateCustomMasumiDeployment,
         });
         if (!methodCheck.ok) {
           return {
@@ -940,6 +987,17 @@ export class ExactCardanoScheme implements SchemeNetworkFacilitator {
               },
             };
           }
+        }
+        if (policies.confirmationPolicy.l1Confirmations > 0 && !this.canAuthenticateEvidence()) {
+          return {
+            response: {
+              isValid: false,
+              invalidReason: ERR_EVIDENCE_UNAVAILABLE,
+              invalidMessage:
+                "confirmation depth above canonical inclusion requires transaction evidence",
+              payer,
+            },
+          };
         }
         return {
           response: { isValid: true, payer },

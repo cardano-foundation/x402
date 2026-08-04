@@ -1,4 +1,4 @@
-import { Address } from "@evolution-sdk/evolution";
+import { AddressEras } from "@evolution-sdk/evolution";
 
 import { getCardanoNetworkId } from "../../constants";
 import { normalizeConfirmationPolicy, normalizeSubmissionPolicy } from "../../policy";
@@ -103,11 +103,15 @@ function unknownKey(value: Record<string, unknown>, allowed: Set<string>): strin
 export function isKeyCredentialAddressOn(value: unknown, network: string): boolean {
   if (typeof value !== "string" || value.length === 0) return false;
   try {
-    const address = Address.fromBech32(value) as {
-      networkId?: number;
-      paymentCredential?: { _tag?: string };
-    };
-    if (address.paymentCredential?._tag !== "KeyHash") return false;
+    const address = AddressEras.fromBech32(value);
+    if (
+      address._tag !== "BaseAddress" &&
+      address._tag !== "EnterpriseAddress" &&
+      address._tag !== "PointerAddress"
+    ) {
+      return false;
+    }
+    if (address.paymentCredential._tag !== "KeyHash") return false;
     return address.networkId === getCardanoNetworkId(network);
   } catch {
     return false;

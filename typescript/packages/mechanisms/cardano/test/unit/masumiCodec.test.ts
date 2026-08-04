@@ -207,6 +207,15 @@ describe("input commitment", () => {
       /base64url/,
     );
   });
+
+  it("refuses non-canonical base64url encodings", () => {
+    expect(() => commitmentPartDigest({ canonicalization: "raw", content: "a" })).toThrow(
+      /canonical/,
+    );
+    expect(() => commitmentPartDigest({ canonicalization: "raw", content: "Zh" })).toThrow(
+      /canonical/,
+    );
+  });
 });
 
 describe("seller COSE authorization", () => {

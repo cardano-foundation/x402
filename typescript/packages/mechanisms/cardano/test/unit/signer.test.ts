@@ -150,7 +150,12 @@ describe("client-side Masumi authorization", () => {
     });
     await expect(
       clientSigner().buildAndSignPaymentTransaction(signInput(requirements)),
-    ).rejects.toThrow(/allowCustomMasumiDeployment/);
+    ).rejects.toThrow(/custom deployment requires explicit application approval/);
+    await expect(
+      clientSigner({ allowCustomMasumiDeployment: true }).buildAndSignPaymentTransaction(
+        signInput(requirements),
+      ),
+    ).rejects.toThrow(/Blockfrost/);
   });
 
   it("refuses a registry claim it cannot independently validate", async () => {
@@ -164,6 +169,41 @@ describe("client-side Masumi authorization", () => {
     await expect(
       clientSigner().buildAndSignPaymentTransaction(signInput(requirements)),
     ).rejects.toThrow(/masumi_agent_identifier/);
+  });
+
+  it("refuses a script-credential buyer return address before wallet access", async () => {
+    const { requirements } = await issueMasumiRequirements({
+      network: CARDANO_PREPROD_CAIP2,
+      asset: LOVELACE_ASSET,
+      amount: "50000000",
+      payByTimeMs: PAY_BY_TIME,
+    });
+    await expect(
+      clientSigner({
+        masumiBuyerInput: () => ({ buyerReturnAddress: requirements.payTo }),
+      }).buildAndSignPaymentTransaction(signInput(requirements)),
+    ).rejects.toThrow(/buyer return address must be a key-credential address/);
+  });
+
+  it("awaits registry validation with the protected resource", async () => {
+    const { requirements } = await issueMasumiRequirements({
+      network: CARDANO_PREPROD_CAIP2,
+      asset: LOVELACE_ASSET,
+      amount: "50000000",
+      payByTimeMs: PAY_BY_TIME,
+      agentIdentifier: `67ab0c92c4ac1610895a1c965ee50aba41a8f1513b15240723b3bd0b${"01".repeat(8)}`,
+    });
+    const resource = { url: "https://agent.example.com/weather" };
+    await expect(
+      clientSigner({
+        validateMasumiRegistryClaim: async () => true,
+      }).buildAndSignPaymentTransaction(signInput(requirements)),
+    ).rejects.toThrow(/protected resource/);
+    await expect(
+      clientSigner({
+        validateMasumiRegistryClaim: async claim => claim.resource.url === resource.url,
+      }).buildAndSignPaymentTransaction({ ...signInput(requirements), resource }),
+    ).rejects.toThrow(/Blockfrost/);
   });
 
   // The issuer MAY omit `content` for a part derived from the buyer's own

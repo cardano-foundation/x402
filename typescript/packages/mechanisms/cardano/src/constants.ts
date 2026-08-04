@@ -134,6 +134,10 @@ export const CARDANO_MIN_UTXO_OVERHEAD_BYTES = 160;
  * - assetName: 0..32 bytes -> 0..64 hex characters.
  */
 export const CARDANO_ASSET_REGEX = /^(lovelace|[0-9a-fA-F]{56}\.[0-9a-fA-F]{0,64})$/;
+/** Canonical Cardano asset unit: lowercase policy/asset hex, or `lovelace`. */
+export const CANONICAL_CARDANO_ASSET_REGEX = /^(lovelace|[0-9a-f]{56}\.[0-9a-f]{0,64})$/;
+/** Positive canonical decimal integer with no leading zero. */
+export const POSITIVE_CANONICAL_AMOUNT_REGEX = /^[1-9][0-9]*$/;
 
 /**
  * Cardano payment address regex (very permissive).
@@ -246,6 +250,8 @@ export function getDefaultUsdmAsset(network: string): string {
 export const ERR_UNSUPPORTED_SCHEME = "unsupported_scheme";
 /** Error: payload is missing required fields. */
 export const ERR_INVALID_PAYLOAD = "invalid_exact_cardano_payload";
+/** Error: canonical payment requirements are malformed. */
+export const ERR_REQUIREMENTS_INVALID = "invalid_exact_cardano_requirements";
 /** Error: declared and accepted networks differ. */
 export const ERR_NETWORK_MISMATCH = "network_mismatch";
 /** Error: signed transaction could not be CBOR decoded. */

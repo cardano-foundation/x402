@@ -2,7 +2,12 @@ import { Address, COSE, PrivateKey } from "@evolution-sdk/evolution";
 import { addressFromSeed, keysFromSeed } from "@evolution-sdk/evolution/sdk/wallet/Derivation";
 import type { PaymentRequirements } from "@x402/core/types";
 
-import { ASSET_TRANSFER_METHOD_MASUMI, getCardanoNetworkId } from "../../constants";
+import {
+  ASSET_TRANSFER_METHOD_MASUMI,
+  CANONICAL_CARDANO_ASSET_REGEX,
+  getCardanoNetworkId,
+  POSITIVE_CANONICAL_AMOUNT_REGEX,
+} from "../../constants";
 import type {
   CardanoExtraMasumi,
   MasumiCommitmentPart,
@@ -133,6 +138,12 @@ function randomHex(bytes: number): string {
 export async function issueMasumiRequirements(
   input: IssueMasumiRequirementsInput,
 ): Promise<PaymentRequirements> {
+  if (!POSITIVE_CANONICAL_AMOUNT_REGEX.test(input.amount)) {
+    throw new Error(`Masumi amount must be a positive canonical integer: ${input.amount}`);
+  }
+  if (!CANONICAL_CARDANO_ASSET_REGEX.test(input.asset)) {
+    throw new Error(`Masumi asset must use canonical lowercase form: ${input.asset}`);
+  }
   const deployment = resolveMasumiDeployment(input.network, input.deployment);
   if (!deployment) {
     throw new Error(
@@ -171,6 +182,9 @@ export async function issueMasumiRequirements(
     submitResultTime: input.submitResultTime,
     unlockTime: input.unlockTime,
     externalDisputeUnlockTime: input.externalDisputeUnlockTime,
+    // This reference implementation currently has no Hydra client, so its
+    // issuer deliberately selects L1 instead of advertising `auto` and later
+    // being unable to honor a Hydra-capable buyer's choice.
     settlementPolicy: input.settlementPolicy ?? "l1",
   };
 

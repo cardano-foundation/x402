@@ -11,7 +11,7 @@ import {
   TransactionInput,
 } from "@evolution-sdk/evolution";
 import { addressFromSeed } from "@evolution-sdk/evolution/sdk/wallet/Derivation";
-import type { PaymentRequirements } from "@x402/core/types";
+import type { PaymentRequirements, ResourceInfo } from "@x402/core/types";
 
 import {
   ASSET_TRANSFER_METHOD_MASUMI,
@@ -24,7 +24,7 @@ import {
 } from "./constants";
 import { buildMasumiLock, type MasumiBuyerInput } from "./exact/masumi/lock";
 import { verifyMasumiAuthorization, type MasumiRegistryValidator } from "./exact/masumi/verify";
-import { validateMasumiExtra } from "./exact/masumi/schema";
+import { isKeyCredentialAddressOn, validateMasumiExtra } from "./exact/masumi/schema";
 import { buildScriptDatumInline } from "./exact/script/datum";
 import type {
   CardanoExtra,
@@ -175,6 +175,8 @@ export interface ClientCardanoSignInput {
    * the facilitator will authenticate it instead of submitting it.
    */
   submissionMode: CardanoSubmissionMode;
+  /** Protected resource, used to validate registered Masumi agent endpoints. */
+  resource?: ResourceInfo;
 }
 
 /**
@@ -308,6 +310,13 @@ export interface FacilitatorCardanoSigner {
     signedTransactionBase64: string,
     network: string,
   ): Promise<CardanoSubmissionResult>;
+
+  /**
+   * Optional classifier for a submission error that definitively proves the
+   * transaction was rejected before it could be accepted. Ambiguous transport,
+   * timeout and provider errors MUST return false or leave this hook absent.
+   */
+  isDefinitiveSubmissionRejection?(error: unknown): boolean;
 
   /**
    * Optional: waits for confirmation of a previously submitted transaction.
@@ -472,6 +481,7 @@ export function toClientCardanoSigner(config: ClientCardanoSignerConfig): Client
       // mode before anything is broadcast.
       const extra = input.extra as CardanoExtra | undefined;
       let masumiExtra: CardanoExtraMasumi | undefined;
+      let masumiBuyerInput: MasumiBuyerInput = {};
       let settlementLayer: CardanoSettlementLayer | undefined;
       if (extra?.assetTransferMethod === ASSET_TRANSFER_METHOD_MASUMI) {
         const schema = validateMasumiExtra(extra, input.network);
@@ -484,7 +494,7 @@ export function toClientCardanoSigner(config: ClientCardanoSignerConfig): Client
         // any facilitator sees the payment. Skipping this would let a malicious
         // 402 send funds to a non-escrow address or bind them to terms no seller
         // ever signed.
-        const authorization = verifyMasumiAuthorization(
+        const authorization = await verifyMasumiAuthorization(
           masumiExtra,
           {
             scheme: "exact",
@@ -506,6 +516,8 @@ export function toClientCardanoSigner(config: ClientCardanoSignerConfig): Client
             ...(config.validateMasumiRegistryClaim
               ? { validateRegistryClaim: config.validateMasumiRegistryClaim }
               : {}),
+            ...(input.resource ? { resource: input.resource } : {}),
+            ...(config.allowCustomMasumiDeployment ? { validateCustomDeployment: () => true } : {}),
           },
         );
         if (!authorization.ok) {
@@ -515,15 +527,16 @@ export function toClientCardanoSigner(config: ClientCardanoSignerConfig): Client
             }`,
           );
         }
-        // A non-canonical deployment is a different set of dispute arbitrators,
-        // so the seller signature alone is not approval — the application has to
-        // opt in explicitly.
-        if (masumiExtra.deployment && !config.allowCustomMasumiDeployment) {
+        settlementLayer = resolveSettlementLayer(masumiExtra);
+        masumiBuyerInput = (await config.masumiBuyerInput?.(masumiExtra)) ?? {};
+        if (
+          masumiBuyerInput.buyerReturnAddress !== undefined &&
+          !isKeyCredentialAddressOn(masumiBuyerInput.buyerReturnAddress, input.network)
+        ) {
           throw new Error(
-            "Masumi requirements declare a custom deployment; set allowCustomMasumiDeployment to approve it",
+            "Masumi buyer return address must be a key-credential address on network",
           );
         }
-        settlementLayer = resolveSettlementLayer(masumiExtra);
       }
 
       const changeAddress = await client.address();
@@ -562,7 +575,7 @@ export function toClientCardanoSigner(config: ClientCardanoSignerConfig): Client
           input.asset,
           amount,
           coinsPerUtxoByte,
-          (await config.masumiBuyerInput?.(masumiExtra)) ?? {},
+          masumiBuyerInput,
         );
         paymentDatum = lock.datum;
         // The escrow output carries EXACTLY the requested asset set, with

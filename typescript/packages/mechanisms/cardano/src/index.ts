@@ -12,7 +12,12 @@ export { verifySellerTermsSignature } from "./exact/masumi/cose";
 export { jcs, jcsBytes } from "./exact/masumi/jcs";
 export { buildMasumiLock, type MasumiBuyerInput, type MasumiLock } from "./exact/masumi/lock";
 export { validateMasumiExtra, type MasumiSchemaResult } from "./exact/masumi/schema";
-export { verifyMasumiAuthorization, verifyMasumiLock } from "./exact/masumi/verify";
+export {
+  verifyMasumiAuthorization,
+  verifyMasumiLock,
+  type MasumiDeploymentValidator,
+  type MasumiRegistryValidator,
+} from "./exact/masumi/verify";
 
 // Script method (generic contract locking with arbitrary datums)
 export { buildScriptDatumInline } from "./exact/script/datum";

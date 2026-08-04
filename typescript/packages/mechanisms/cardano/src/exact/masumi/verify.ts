@@ -1,4 +1,4 @@
-import type { PaymentRequirements } from "@x402/core/types";
+import type { PaymentRequirements, ResourceInfo } from "@x402/core/types";
 
 import {
   ERR_MASUMI_AGENT_IDENTIFIER,
@@ -24,6 +24,7 @@ import type {
   CardanoExtraMasumi,
   DecodedCardanoTransaction,
   ExactCardanoPayload,
+  MasumiDeployment,
 } from "../../types";
 import { slotToPosixMs } from "../../utils";
 import { masumiEscrowAddress, resolveMasumiDeployment } from "./blueprint";
@@ -84,6 +85,10 @@ export interface MasumiVerifyContext {
    * Unregistered sellers (absent, `null` or empty) are unaffected.
    */
   validateRegistryClaim?: MasumiRegistryValidator;
+  /** The protected resource whose endpoint the registry claim must cover. */
+  resource?: ResourceInfo;
+  /** Explicit application approval for a non-canonical deployment. */
+  validateCustomDeployment?: MasumiDeploymentValidator;
 }
 
 /**
@@ -92,6 +97,10 @@ export interface MasumiVerifyContext {
 export interface MasumiAuthorizationOptions {
   /** Independently validates a non-empty `agentIdentifier`. */
   validateRegistryClaim?: MasumiRegistryValidator;
+  /** The protected resource whose endpoint the registry claim must cover. */
+  resource?: ResourceInfo;
+  /** Explicit application approval for a non-canonical deployment. */
+  validateCustomDeployment?: MasumiDeploymentValidator;
   /**
    * The buyer's own content for commitment parts the issuer did not echo,
    * keyed by part name. The spec requires the client to recompute every part
@@ -126,7 +135,16 @@ export type MasumiRegistryValidator = (claim: {
   amount: string;
   /** The signed top-level asset unit. */
   asset: string;
-}) => boolean;
+  /** The protected x402 resource whose URL must match the registry endpoint. */
+  resource: ResourceInfo;
+}) => boolean | Promise<boolean>;
+
+/** Explicitly approves one non-canonical Masumi V2 deployment. */
+export type MasumiDeploymentValidator = (claim: {
+  network: string;
+  payTo: string;
+  deployment: MasumiDeployment;
+}) => boolean | Promise<boolean>;
 
 /**
  * Whether two addresses share the same payment (and stake, if any) credential.
@@ -137,7 +155,17 @@ export type MasumiRegistryValidator = (claim: {
  */
 function sameCredentials(a: MasumiAddressCredentials, b: MasumiAddressCredentials): boolean {
   if (a.payment.hash !== b.payment.hash || a.payment.isScript !== b.payment.isScript) return false;
-  return (a.stake?.hash ?? "") === (b.stake?.hash ?? "");
+  if (
+    (a.stake?.hash ?? "") !== (b.stake?.hash ?? "") ||
+    (a.stake?.isScript ?? false) !== (b.stake?.isScript ?? false)
+  ) {
+    return false;
+  }
+  return (
+    (a.pointer?.slot ?? -1n) === (b.pointer?.slot ?? -1n) &&
+    (a.pointer?.txIndex ?? -1n) === (b.pointer?.txIndex ?? -1n) &&
+    (a.pointer?.certIndex ?? -1n) === (b.pointer?.certIndex ?? -1n)
+  );
 }
 
 /**
@@ -169,13 +197,14 @@ function returnAddressMatches(
  * @param options - Registry validation and buyer-supplied commitment content.
  * @returns `{ ok: true }` plus the derived escrow address, else a failure reason.
  */
-export function verifyMasumiAuthorization(
+export async function verifyMasumiAuthorization(
   extra: CardanoExtraMasumi,
   requirements: PaymentRequirements,
   options: MasumiAuthorizationOptions = {},
-):
+): Promise<
   | { ok: true; escrowAddress: string; termsDigest: string }
-  | { ok: false; reason: string; detail?: string } {
+  | { ok: false; reason: string; detail?: string }
+> {
   const { terms, inputCommitment } = extra;
 
   // Commitment: every part digest must recompute. The issuer echoes the content
@@ -244,8 +273,6 @@ export function verifyMasumiAuthorization(
       detail: `derived escrow ${escrowAddress} does not equal payTo`,
     };
   }
-
-  // Seller authorization over the reconstructed terms.
   const termsDigest = computeTermsDigest(buildSignedTerms(extra, requirements));
   if (
     !verifySellerTermsSignature(
@@ -258,10 +285,30 @@ export function verifyMasumiAuthorization(
     return { ok: false, reason: ERR_MASUMI_SELLER_SIGNATURE };
   }
 
-  // A non-empty agentIdentifier makes a Masumi V2 registry claim, which the
-  // spec requires to be validated independently on the selected network. The
-  // policy prefix alone proves nothing: anyone can copy a registered agent's
-  // identifier into their own terms, so an unvalidatable claim is refused.
+  // Run application callbacks only after the local seller signature check.
+  if (extra.deployment) {
+    if (!options.validateCustomDeployment) {
+      return {
+        ok: false,
+        reason: ERR_MASUMI_DEPLOYMENT,
+        detail: "custom deployment requires explicit application approval",
+      };
+    }
+    if (
+      !(await options.validateCustomDeployment({
+        network: requirements.network,
+        payTo: requirements.payTo,
+        deployment: extra.deployment,
+      }))
+    ) {
+      return {
+        ok: false,
+        reason: ERR_MASUMI_DEPLOYMENT,
+        detail: "custom deployment was not approved",
+      };
+    }
+  }
+
   const agentIdentifier = typeof terms.agentIdentifier === "string" ? terms.agentIdentifier : "";
   if (agentIdentifier.length > 0) {
     if (!agentIdentifier.startsWith(MASUMI_REGISTRY_POLICY_ID)) {
@@ -278,14 +325,22 @@ export function verifyMasumiAuthorization(
         detail: "registry claims require an independent on-network validator",
       };
     }
+    if (!options.resource) {
+      return {
+        ok: false,
+        reason: ERR_MASUMI_AGENT_IDENTIFIER,
+        detail: "registry claims require the protected resource for endpoint validation",
+      };
+    }
     if (
-      !options.validateRegistryClaim({
+      !(await options.validateRegistryClaim({
         agentIdentifier,
         sellerAddress: terms.sellerAddress,
         network: requirements.network,
         amount: requirements.amount,
         asset: requirements.asset,
-      })
+        resource: options.resource,
+      }))
     ) {
       return {
         ok: false,
@@ -295,7 +350,6 @@ export function verifyMasumiAuthorization(
     }
   }
 
-  // The compatibility identifier must decode to exactly these values.
   const decoded = decodeBlockchainIdentifier(extra.blockchainIdentifier);
   if (
     !decoded ||
@@ -328,20 +382,24 @@ export function verifyMasumiAuthorization(
  * @param context - Payload, resolved payer and live protocol parameters.
  * @returns `{ ok: true }` when the lock is valid, else a precise failure reason.
  */
-export function verifyMasumiLock(
+export async function verifyMasumiLock(
   rawExtra: unknown,
   requirements: PaymentRequirements,
   decoded: DecodedCardanoTransaction,
   context: MasumiVerifyContext,
-): Check {
+): Promise<Check> {
   const schema = validateMasumiExtra(rawExtra, requirements.network);
   if (!schema.ok) return fail(ERR_MASUMI_SCHEMA, schema.detail);
   const extra = schema.extra;
   const terms = extra.terms;
 
-  const authorization = verifyMasumiAuthorization(extra, requirements, {
+  const authorization = await verifyMasumiAuthorization(extra, requirements, {
     ...(context.validateRegistryClaim
       ? { validateRegistryClaim: context.validateRegistryClaim }
+      : {}),
+    ...(context.resource ? { resource: context.resource } : {}),
+    ...(context.validateCustomDeployment
+      ? { validateCustomDeployment: context.validateCustomDeployment }
       : {}),
   });
   if (!authorization.ok) return authorization;
@@ -383,6 +441,9 @@ export function verifyMasumiLock(
   }
   if (view.buyer.payment.isScript || view.seller.payment.isScript) {
     return fail(ERR_MASUMI_DATUM_INVALID, "participant is a script credential");
+  }
+  if (view.buyerReturnAddress?.payment.isScript || view.sellerReturnAddress?.payment.isScript) {
+    return fail(ERR_MASUMI_DATUM_INVALID, "return address is a script credential");
   }
   if (view.referenceSignature.length < 32) {
     return fail(ERR_MASUMI_DATUM_INVALID, "reference_signature shorter than 16 bytes");

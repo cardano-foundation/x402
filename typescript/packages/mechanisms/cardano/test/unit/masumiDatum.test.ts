@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { Data } from "@evolution-sdk/evolution";
+import { AddressEras, Data, Pointer, PointerAddress } from "@evolution-sdk/evolution";
 import {
   addressCredentials,
   buildMasumiLockDatum,
@@ -123,6 +123,29 @@ describe("masumi lock datum codec", () => {
       addressCredentials(BUYER).payment.hash,
     );
     expect(parseMasumiLockDatum(buildMasumiLockDatum(input))?.buyerReturnAddress).toBeNull();
+  });
+
+  it("round-trips pointer stake references without converting them to None", () => {
+    const buyer = AddressEras.fromBech32(BUYER);
+    if (buyer._tag !== "BaseAddress") throw new Error("fixture must be a base address");
+    const pointerAddress = AddressEras.toBech32(
+      new PointerAddress.PointerAddress({
+        networkId: buyer.networkId,
+        paymentCredential: buyer.paymentCredential,
+        pointer: new Pointer.Pointer({ slot: 42, txIndex: 3, certIndex: 1 }),
+      }),
+    );
+    const datum = buildMasumiLockDatum({ ...input, buyerReturnAddress: pointerAddress });
+    expect(parseMasumiLockDatum(datum)?.buyerReturnAddress?.pointer).toEqual({
+      slot: 42n,
+      txIndex: 3n,
+      certIndex: 1n,
+    });
+    expect(addressCredentials(pointerAddress).pointer).toEqual({
+      slot: 42n,
+      txIndex: 3n,
+      certIndex: 1n,
+    });
   });
 
   it("extracts credentials: base has stake, enterprise script address has none", () => {

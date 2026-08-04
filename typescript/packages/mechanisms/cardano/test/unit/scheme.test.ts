@@ -80,13 +80,42 @@ describe("ExactCardanoScheme client", () => {
   it("rejects invalid asset units", async () => {
     await expect(
       client.createPaymentPayload(2, buildRequirements({ asset: "not.a.unit" })),
-    ).rejects.toThrow(/Invalid Cardano asset unit/);
+    ).rejects.toThrow(/canonical lowercase form/);
   });
 
   it("rejects non-numeric amounts", async () => {
     await expect(
       client.createPaymentPayload(2, buildRequirements({ amount: "10.5" })),
-    ).rejects.toThrow(/Amount must be a non-negative integer/);
+    ).rejects.toThrow(/positive canonical integer/);
+  });
+
+  it("rejects zero, leading-zero, and uppercase wire values", async () => {
+    await expect(
+      client.createPaymentPayload(2, buildRequirements({ amount: "0" })),
+    ).rejects.toThrow(/positive canonical integer/);
+    await expect(
+      client.createPaymentPayload(2, buildRequirements({ amount: "010000" })),
+    ).rejects.toThrow(/positive canonical integer/);
+    await expect(
+      client.createPaymentPayload(
+        2,
+        buildRequirements({ asset: USDM_MAINNET_ASSET.toUpperCase() }),
+      ),
+    ).rejects.toThrow(/canonical lowercase form/);
+  });
+
+  it("rejects Masumi settlement fields returned for a default payment", async () => {
+    const c = new ExactCardanoClient({
+      ...stubSigner,
+      buildAndSignPaymentTransaction: () => ({
+        transaction: "AAAA",
+        nonce: `${TX_HASH}#0`,
+        settlementLayer: "l1",
+      }),
+    });
+    await expect(c.createPaymentPayload(2, buildRequirements())).rejects.toThrow(
+      /non-Masumi payment/,
+    );
   });
 
   it("returns a payload from the signer for valid requirements", async () => {
@@ -184,8 +213,7 @@ describe("ExactCardanoScheme facilitator", () => {
       // This stub signer has no evidence hook, so client submission is not offered.
       submissionModes: ["server"],
       l1Confirmations: {
-        server: { minimum: 0, maximum: 20 },
-        client: { minimum: 0, maximum: 20 },
+        server: { minimum: 0, maximum: 0 },
       },
     });
   });
@@ -197,6 +225,10 @@ describe("ExactCardanoScheme facilitator", () => {
     });
     const extra = facilitator.getExtra(CARDANO_PREPROD_CAIP2)!;
     expect(extra.submissionModes).toEqual(["server", "client"]);
+    expect(extra.l1Confirmations).toEqual({
+      server: { minimum: 0, maximum: 20 },
+      client: { minimum: 0, maximum: 20 },
+    });
   });
 
   it("rejects payloads when networks differ", async () => {
@@ -222,6 +254,21 @@ describe("ExactCardanoScheme facilitator", () => {
     );
     expect(result.isValid).toBe(false);
     expect(result.invalidReason).toBe("network_mismatch");
+  });
+
+  it("rejects non-canonical requirements before decoding the transaction", async () => {
+    const facilitator = new ExactCardanoFacilitator(stubFacilitatorSigner);
+    for (const reqs of [
+      buildRequirements({ amount: "0" }),
+      buildRequirements({ amount: "010000" }),
+      buildRequirements({ asset: USDM_MAINNET_ASSET.toUpperCase() }),
+    ]) {
+      const result = await facilitator.verify(
+        { x402Version: 2, accepted: reqs, payload: { transaction: "AA", nonce: `${TX_HASH}#0` } },
+        reqs,
+      );
+      expect(result.invalidReason).toBe("invalid_exact_cardano_requirements");
+    }
   });
 
   it("rejects payloads with malformed nonce", async () => {
@@ -451,6 +498,8 @@ describe("ExactCardanoScheme facilitator", () => {
             throw new Error("BadInputsUTxO (input already spent)");
           },
           getTransactionEvidence: async () => ({ status: "unknown", confirmations: -2 }),
+          isDefinitiveSubmissionRejection: error =>
+            error instanceof Error && error.message.includes("BadInputsUTxO"),
         }),
       );
       const failed = await facilitator.settle(payloadFor(), reqs);
@@ -461,6 +510,25 @@ describe("ExactCardanoScheme facilitator", () => {
       // Nothing landed, so a retry is allowed to attempt submission again.
       await facilitator.settle(payloadFor(), reqs);
       expect(submits).toBe(2);
+    });
+
+    it("retains the claim after an ambiguous submission failure", async () => {
+      let submits = 0;
+      const facilitator = new FakeOk(
+        stubFacilitator({
+          submitTransaction: async () => {
+            submits += 1;
+            throw new Error("provider connection closed");
+          },
+          getTransactionEvidence: async () => ({ status: "unknown", confirmations: -2 }),
+        }),
+        { confirmationTimeoutMs: 1, confirmationPollMs: 1 },
+      );
+      const first = await facilitator.settle(payloadFor(), reqs);
+      expect(first.success).toBe(false);
+      expect(first.transaction).toBe(decodeCardanoTransaction(transaction).txHash);
+      await facilitator.settle(payloadFor(), reqs);
+      expect(submits).toBe(1);
     });
 
     it("refuses a retry that flips the normalized submission mode", async () => {

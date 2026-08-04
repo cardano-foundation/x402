@@ -55,7 +55,11 @@ function base64UrlDecode(value: string): Uint8Array {
     throw new Error("Commitment raw content is not unpadded base64url");
   }
   const base64 = value.replace(/-/g, "+").replace(/_/g, "/");
-  return Uint8Array.from(Buffer.from(base64, "base64"));
+  const decoded = Buffer.from(base64, "base64");
+  if (decoded.toString("base64url") !== value) {
+    throw new Error("Commitment raw content is not canonical unpadded base64url");
+  }
+  return Uint8Array.from(decoded);
 }
 
 /**
