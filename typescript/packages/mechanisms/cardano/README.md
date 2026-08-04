@@ -68,14 +68,32 @@ from the faucet; preprod **USDM** must be sourced separately, so use lovelace fo
 Per spec, three methods can be selected via `requirements.extra.assetTransferMethod`:
 
 - `default` — address-to-address payments. No extra verification beyond the core rules.
-- `masumi` — locks funds into Masumi's `vested_pay` escrow for **concrete agent-to-agent payments**. The base facilitator builds and verifies the fixed 19-field lock datum (`buildMasumiLockInline` / `verifyMasumiLock`); no subclassing is required.
+- `masumi` — locks funds into Masumi's `vested_pay` escrow for **concrete agent-to-agent payments**. Issue the 402 with `issueMasumiRequirements` (it derives `payTo` from the deployment parameters, builds the request commitment and gets the seller's CIP-8 signature over `termsDigest`); the client and facilitator both re-verify that authorization, and the facilitator additionally checks the 19-field lock datum (`verifyMasumiLock`). No subclassing is required.
 - `script` — locks funds into **any contract defined by the server**, with an optional arbitrary datum. The base facilitator reconstructs the script address from `extra.script`/`parameters` (or `scriptHash`) and verifies it equals `requirements.payTo`. Supply `extra.datum` (CBOR hex) to attach an inline datum for contracts that require one — the client attaches it verbatim; because the datum is arbitrary and contract-specific, the facilitator does **not** verify its contents, so a correct datum is the server's responsibility (a wrong or missing one strands the funds). Use this to lock into your own contract; use `masumi` for agent payments.
 
 Overriding `runMethodSpecificChecks` is **not** required for any built-in method; if you subclass to add a custom method, call `super.runMethodSpecificChecks(...)` so the Masumi and script checks still run.
 
+## Submission and confirmation policy
+
+`requirements.extra.submissionPolicy` selects who broadcasts: `server` (the default when absent), `client`, or `either`. The paid payload echoes the normalized `submissionMode`, which must be allowed by the policy and must stay the same across retries for one transaction. In client mode the client broadcasts before the paid retry and the facilitator authenticates that exact transaction instead of submitting it — which requires the optional `getTransactionEvidence` signer hook, so a facilitator without it advertises `server` only.
+
+`requirements.extra.confirmationPolicy.l1Confirmations` sets the evidence required before `settle()` reports success: `-1` authenticated mempool acceptance, `0` canonical block inclusion, `1..20` that many newer blocks. It defaults to `1`. Below the threshold, `settle()` returns `errorReason: "payment_pending"` with the strongest evidence in `extra`; the paid retry resumes observing the same transaction without resubmitting it.
+
+Hydra settlement is **not implemented**: a `settlementLayer: "hydra"` payload is rejected and `/supported` advertises L1 only. Authenticating a Hydra payment needs verified Init state, head parameters, a seller-participant binding and `SnapshotConfirmed` evidence.
+
+## Idempotency boundary
+
+`settle()` is idempotent per canonical transaction ID, not one-shot. The spec requires a paid retry to repeat the exact original `PAYMENT-SIGNATURE` and the verifier to resume observing the same transaction, so a terminal "already settled" state would strand any payment that needs more confirmations than a single call can wait for. What this package guarantees is that a given transaction is **broadcast at most once** and always reports the same ledger truth.
+
+Binding a settled payment to a **single protected operation** is the resource server's responsibility, which the spec assigns explicitly: key the record by canonical transaction ID for `default` and `script`. For `masumi` the binding is stronger and already enforced here — `termsDigest` covers exactly one issued 402, so a payment cannot be reused against a second one (each carries a fresh `sellerNonce`).
+
+## Masumi registry claims
+
+A non-empty `terms.agentIdentifier` claims a Masumi V2 registry identity. The policy prefix alone proves nothing — anyone can copy a registered agent's identifier into their own terms — so such a claim is **rejected** unless you supply a `validateRegistryClaim` validator (on the facilitator config and, for the client, `validateMasumiRegistryClaim`) that independently checks the asset, seller authorization, metadata, endpoint, network and price on the selected network. Unregistered sellers (an absent, `null` or empty identifier) need no validator.
+
 ## Settlement status
 
-Cardano uses Ouroboros Praos (probabilistic finality). The default `settle()` returns whatever status the underlying signer reports. Granting access on `mempool` is **strongly discouraged** by the spec.
+Cardano uses Ouroboros Praos (probabilistic finality). `settle()` reports the strongest verified evidence in `extra` (`status`, `confirmations`, `submissionMode`). Granting access on `mempool` is **strongly discouraged** by the spec, so the facilitator refuses a mempool-only result unless the operator sets `acceptMempool` *and* the policy allows `-1`.
 
 ## Optional cryptographic authorization check
 

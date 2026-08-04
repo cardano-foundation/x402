@@ -1,11 +1,14 @@
 import { describe, expect, it } from "vitest";
 import { preprod, PrivateKey } from "@evolution-sdk/evolution";
-import { toFacilitatorCardanoSigner } from "../../src/signer";
+import { toClientCardanoSigner, toFacilitatorCardanoSigner } from "../../src/signer";
 import {
   CARDANO_MAINNET_CAIP2,
   CARDANO_PREPROD_CAIP2,
   CARDANO_PREPROD_CIP34,
+  LOVELACE_ASSET,
 } from "../../src/constants";
+import { MASUMI_DEFAULT_DEPLOYMENT } from "../../src/exact/masumi/blueprint";
+import { issueMasumiRequirements } from "../helpers/masumi";
 
 const makeSigner = (): ReturnType<typeof toFacilitatorCardanoSigner> =>
   toFacilitatorCardanoSigner({
@@ -68,5 +71,185 @@ describe("toFacilitatorCardanoSigner", () => {
       provider: { blockfrost: { baseUrl: "http://offline.invalid" } },
     });
     expect(providerOnly.getAddresses()).toEqual([]);
+  });
+});
+
+// The client is about to move real value, and in client-submission mode it
+// broadcasts before any facilitator sees the payment. It therefore has to verify
+// the seller authorization itself rather than trust the 402 — these all fail
+// before any provider call, so no network is involved.
+describe("client-side Masumi authorization", () => {
+  const PAY_BY_TIME = 1_785_756_000_000n;
+
+  const clientSigner = (
+    config: Partial<Parameters<typeof toClientCardanoSigner>[0]> = {},
+  ): ReturnType<typeof toClientCardanoSigner> =>
+    toClientCardanoSigner({
+      mnemonic: PrivateKey.generateMnemonic(),
+      network: CARDANO_PREPROD_CAIP2,
+      provider: { blockfrost: { baseUrl: "http://offline.invalid" } },
+      ...config,
+    });
+
+  /**
+   * Builds the signer input for an issued Masumi 402.
+   *
+   * @param requirements - The issued requirements.
+   * @param payTo - Optional override for the escrow address.
+   * @returns The signer input.
+   */
+  const signInput = (
+    requirements: Awaited<ReturnType<typeof issueMasumiRequirements>>["requirements"],
+    payTo = requirements.payTo,
+  ) => ({
+    network: CARDANO_PREPROD_CAIP2,
+    payTo,
+    asset: requirements.asset,
+    amount: requirements.amount,
+    maxTimeoutSeconds: requirements.maxTimeoutSeconds,
+    extra: requirements.extra,
+    submissionMode: "server" as const,
+  });
+
+  it("refuses a 402 that redirects payTo away from the derived escrow", async () => {
+    const { requirements } = await issueMasumiRequirements({
+      network: CARDANO_PREPROD_CAIP2,
+      asset: LOVELACE_ASSET,
+      amount: "50000000",
+      payByTimeMs: PAY_BY_TIME,
+    });
+    const attackerAddress =
+      "addr_test1qzdjjcstngx8yneqv4d2phmz35ytkyxk4aa09rfexu7kj3evleltf708u3qyrn29sudutxqqy0vx5f3lv73dtewsdras79zz7d";
+    await expect(
+      clientSigner().buildAndSignPaymentTransaction(signInput(requirements, attackerAddress)),
+    ).rejects.toThrow(/seller authorization failed/);
+  });
+
+  it("refuses a 402 whose seller signature does not cover the terms", async () => {
+    const { requirements } = await issueMasumiRequirements({
+      network: CARDANO_PREPROD_CAIP2,
+      asset: LOVELACE_ASSET,
+      amount: "50000000",
+      payByTimeMs: PAY_BY_TIME,
+    });
+    // Raise the price after the seller signed it.
+    const tampered = { ...requirements, amount: "60000000" };
+    await expect(
+      clientSigner().buildAndSignPaymentTransaction(signInput(tampered)),
+    ).rejects.toThrow(/masumi_seller_signature/);
+  });
+
+  it("refuses a non-canonical deployment unless the application approves it", async () => {
+    const custom = { ...MASUMI_DEFAULT_DEPLOYMENT, cooldownPeriod: "999999" };
+    const { requirements } = await issueMasumiRequirements({
+      network: CARDANO_PREPROD_CAIP2,
+      asset: LOVELACE_ASSET,
+      amount: "50000000",
+      payByTimeMs: PAY_BY_TIME,
+      deployment: custom,
+    });
+    await expect(
+      clientSigner().buildAndSignPaymentTransaction(signInput(requirements)),
+    ).rejects.toThrow(/allowCustomMasumiDeployment/);
+  });
+
+  it("refuses a registry claim it cannot independently validate", async () => {
+    const { requirements } = await issueMasumiRequirements({
+      network: CARDANO_PREPROD_CAIP2,
+      asset: LOVELACE_ASSET,
+      amount: "50000000",
+      payByTimeMs: PAY_BY_TIME,
+      agentIdentifier: `67ab0c92c4ac1610895a1c965ee50aba41a8f1513b15240723b3bd0b${"01".repeat(8)}`,
+    });
+    await expect(
+      clientSigner().buildAndSignPaymentTransaction(signInput(requirements)),
+    ).rejects.toThrow(/masumi_agent_identifier/);
+  });
+
+  // The issuer MAY omit `content` for a part derived from the buyer's own
+  // request bytes — the buyer recomputes that digest from what it actually sent.
+  // A client that skips the check instead lets a seller invent the digest and
+  // bind the escrow to a request that was never made.
+  it("refuses a commitment part whose content it cannot verify", async () => {
+    const body = { days: 3, units: "metric" };
+    const { requirements } = await issueMasumiRequirements({
+      network: CARDANO_PREPROD_CAIP2,
+      asset: LOVELACE_ASSET,
+      amount: "50000000",
+      payByTimeMs: PAY_BY_TIME,
+      parts: [{ name: "body", canonicalization: "jcs", content: body }],
+    });
+    // The issuer withholds the content it committed to.
+    const extra = requirements.extra as unknown as { inputCommitment: { parts: unknown[] } };
+    const withheld = {
+      ...requirements,
+      extra: {
+        ...requirements.extra,
+        inputCommitment: {
+          ...(requirements.extra as unknown as { inputCommitment: object }).inputCommitment,
+          parts: extra.inputCommitment.parts.map(p =>
+            Object.fromEntries(
+              Object.entries(p as Record<string, unknown>).filter(([k]) => k !== "content"),
+            ),
+          ),
+        },
+      },
+    } as typeof requirements;
+
+    await expect(
+      clientSigner().buildAndSignPaymentTransaction(signInput(withheld)),
+    ).rejects.toThrow(/carries no content to verify its digest against/);
+
+    // Supplying the buyer's own request content makes it verifiable again.
+    await expect(
+      clientSigner({ masumiRequestContent: { body } }).buildAndSignPaymentTransaction(
+        signInput(withheld),
+      ),
+    ).rejects.toThrow(/Blockfrost/); // got past authorization, failed at the offline provider
+  });
+
+  it("refuses buyer content that does not match the committed digest", async () => {
+    const { requirements } = await issueMasumiRequirements({
+      network: CARDANO_PREPROD_CAIP2,
+      asset: LOVELACE_ASSET,
+      amount: "50000000",
+      payByTimeMs: PAY_BY_TIME,
+      parts: [{ name: "body", canonicalization: "jcs", content: { days: 3, units: "metric" } }],
+    });
+    const extra = requirements.extra as unknown as { inputCommitment: { parts: unknown[] } };
+    const withheld = {
+      ...requirements,
+      extra: {
+        ...requirements.extra,
+        inputCommitment: {
+          ...(requirements.extra as unknown as { inputCommitment: object }).inputCommitment,
+          parts: extra.inputCommitment.parts.map(p =>
+            Object.fromEntries(
+              Object.entries(p as Record<string, unknown>).filter(([k]) => k !== "content"),
+            ),
+          ),
+        },
+      },
+    } as typeof requirements;
+
+    // The buyer actually sent something else, so the digest must not recompute.
+    await expect(
+      clientSigner({
+        masumiRequestContent: { body: { days: 4, units: "metric" } },
+      }).buildAndSignPaymentTransaction(signInput(withheld)),
+    ).rejects.toThrow(/masumi_commitment/);
+  });
+
+  it("refuses Hydra terms it cannot settle", async () => {
+    const { requirements } = await issueMasumiRequirements({
+      network: CARDANO_PREPROD_CAIP2,
+      asset: LOVELACE_ASSET,
+      amount: "50000000",
+      payByTimeMs: PAY_BY_TIME,
+      settlementPolicy: "hydra",
+    });
+    await expect(
+      clientSigner().buildAndSignPaymentTransaction(signInput(requirements)),
+    ).rejects.toThrow(/Hydra settlement/);
   });
 });

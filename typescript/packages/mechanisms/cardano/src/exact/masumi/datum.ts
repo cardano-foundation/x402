@@ -215,8 +215,16 @@ function asHex(d: Data.Data): string | null {
     : null;
 }
 
+/** Cardano payment/stake credential hashes are Blake2b-224: 28 bytes. */
+const CREDENTIAL_HASH_HEX_LENGTH = 56;
+
 /**
  * Decodes a Plutus credential (`Constr 0|1 [hash]`) into a typed credential.
+ *
+ * The hash length is enforced: `vested_pay` decodes the datum with a typed
+ * `expect`, so a credential of any other size makes every later spend path fail
+ * and permanently strands the escrow — after this facilitator has already
+ * accepted the lock.
  *
  * @param d - The credential Plutus data.
  * @returns The credential, or `null` on a structural mismatch.
@@ -225,7 +233,7 @@ function dataToCredential(d: Data.Data): MasumiCredential | null {
   const c = asConstr(d);
   if (!c || (c.index !== 0n && c.index !== 1n) || c.fields.length !== 1) return null;
   const hash = asHex(c.fields[0]);
-  if (hash === null) return null;
+  if (hash === null || hash.length !== CREDENTIAL_HASH_HEX_LENGTH) return null;
   return { isScript: c.index === 1n, hash };
 }
 
@@ -242,7 +250,7 @@ function dataToAddress(d: Data.Data): MasumiAddressCredentials | null {
   if (!payment) return null;
   const opt = asConstr(c.fields[1]);
   if (!opt) return null;
-  if (opt.index === 1n) return { payment }; // None
+  if (opt.index === 1n) return opt.fields.length === 0 ? { payment } : null; // None
   if (opt.index !== 0n || opt.fields.length !== 1) return null;
   const inline = asConstr(opt.fields[0]); // Inline(cred)
   if (!inline || inline.index !== 0n || inline.fields.length !== 1) return null;
@@ -303,7 +311,11 @@ export function parseMasumiLockDatum(datum: Data.Data | string): MasumiDatumView
   const externalDisputeUnlockTime = asInt(f[15]);
   const sellerCooldownTime = asInt(f[16]);
   const buyerCooldownTime = asInt(f[17]);
+  // The state constructor carries no fields; `FundsLocked` is `Constr 0 []`.
+  // Accepting `Constr 0 [junk]` would let through a datum the validator's typed
+  // decode rejects on every later spend, stranding the escrow.
   const stateConstr = asConstr(f[18]);
+  if (stateConstr !== null && stateConstr.fields.length !== 0) return null;
 
   if (
     !buyer ||

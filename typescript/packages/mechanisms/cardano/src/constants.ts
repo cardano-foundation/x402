@@ -150,6 +150,32 @@ export const CARDANO_ADDRESS_REGEX = /^(addr1|addr_test1)[0-9a-z]+$/;
 export const CARDANO_UTXO_REF_REGEX = /^[0-9a-fA-F]{64}#\d+$/;
 
 /**
+ * Submission policy values a server may declare in `extra.submissionPolicy`.
+ * Omission normalizes to `server`. `either` is a policy, never a payload mode.
+ */
+export const SUBMISSION_POLICY_SERVER = "server";
+/** Submission policy: the client broadcasts before the paid retry. */
+export const SUBMISSION_POLICY_CLIENT = "client";
+/** Submission policy: the client picks either mode. */
+export const SUBMISSION_POLICY_EITHER = "either";
+
+/**
+ * Default `confirmationPolicy.l1Confirmations` when the requirements omit it,
+ * and the inclusive bounds the spec allows (`-1` = authenticated mempool
+ * acceptance, `0` = canonical block inclusion, `1..20` = newer canonical blocks).
+ */
+export const DEFAULT_L1_CONFIRMATIONS = 1;
+/** Lowest accepted `l1Confirmations` (authenticated mempool acceptance). */
+export const MIN_L1_CONFIRMATIONS = -1;
+/** Highest accepted `l1Confirmations`. */
+export const MAX_L1_CONFIRMATIONS = 20;
+
+/** Settlement layer selected by a Masumi payload. */
+export const SETTLEMENT_LAYER_L1 = "l1";
+/** Settlement layer selected by a Masumi payload for a Hydra head. */
+export const SETTLEMENT_LAYER_HYDRA = "hydra";
+
+/**
  * Maximum allowed value for assetTransferMethod.
  */
 export const ASSET_TRANSFER_METHOD_DEFAULT = "default";
@@ -253,12 +279,20 @@ export const ERR_SETTLEMENT_FAILED = "exact_cardano_settlement_failed";
 export const ERR_SETTLEMENT_NOT_CONFIRMED = "exact_cardano_settlement_not_confirmed";
 /** Error: duplicate settlement detected within the cache window. */
 export const ERR_DUPLICATE_SETTLEMENT = "duplicate_settlement";
+/** Error: the transaction is valid but has not yet reached the required evidence level. */
+export const ERR_PAYMENT_PENDING = "payment_pending";
 /** Error: the script assetTransferMethod was selected but reconstruction failed. */
 export const ERR_SCRIPT_ADDRESS_MISMATCH = "invalid_exact_cardano_payload_script_address_mismatch";
 /** Error: transaction is not signed (no vkey/bootstrap witnesses present). */
 export const ERR_TRANSACTION_UNSIGNED = "invalid_exact_cardano_payload_unsigned";
 /** Error: a vkey witness signature is not valid over the transaction body. */
 export const ERR_INVALID_SIGNATURE = "invalid_exact_cardano_payload_invalid_signature";
+/**
+ * Error: the transaction is a failed-script (phase-2 invalid) transaction. It
+ * lands under its own id but consumes collateral instead of its inputs and
+ * creates none of its declared outputs, so it pays nothing.
+ */
+export const ERR_TRANSACTION_PHASE2_INVALID = "invalid_exact_cardano_payload_phase2_invalid";
 /** Error: the recipient output's lovelace is below the protocol min-UTXO. */
 export const ERR_MIN_UTXO_INSUFFICIENT = "invalid_exact_cardano_payload_min_utxo_insufficient";
 /** Error: masumi payTo is not the known Masumi escrow address for the network. */
@@ -280,3 +314,37 @@ export const ERR_MASUMI_MIN_UTXO = "invalid_exact_cardano_payload_masumi_min_utx
 export const ERR_MASUMI_REFERENCE_SCRIPT = "invalid_exact_cardano_payload_masumi_reference_script";
 /** Error: the escrow output does not carry the requested asset/amount. */
 export const ERR_MASUMI_ASSET = "invalid_exact_cardano_payload_masumi_asset";
+/** Error: `extra.submissionPolicy` / `extra.confirmationPolicy` is malformed. */
+export const ERR_POLICY_INVALID = "invalid_exact_cardano_requirements_policy";
+/** Error: the normalized `payload.submissionMode` is not allowed by `submissionPolicy`. */
+export const ERR_SUBMISSION_MODE_MISMATCH =
+  "invalid_exact_cardano_payload_submission_mode_mismatch";
+/** Error: the TTL is later than now + `maxTimeoutSeconds` (rule 7 upper bound). */
+export const ERR_TTL_TOO_FAR = "invalid_exact_cardano_payload_ttl_too_far";
+/** Error: client mode requires authenticated evidence the facilitator cannot obtain. */
+export const ERR_EVIDENCE_UNAVAILABLE = "exact_cardano_facilitator_evidence_unavailable";
+/** Error: client-mode evidence does not prove the exact transaction consumed the nonce. */
+export const ERR_EVIDENCE_MISMATCH = "invalid_exact_cardano_payload_evidence_mismatch";
+/** Error: the payload selected a settlement layer this facilitator does not support. */
+export const ERR_SETTLEMENT_LAYER_UNSUPPORTED =
+  "invalid_exact_cardano_payload_settlement_layer_unsupported";
+/** Error: `payload.settlementLayer` is not allowed by `terms.settlementPolicy`. */
+export const ERR_SETTLEMENT_LAYER_MISMATCH =
+  "invalid_exact_cardano_payload_settlement_layer_mismatch";
+/** Error: the masumi `extra` block violates the closed-object wire schema. */
+export const ERR_MASUMI_SCHEMA = "invalid_exact_cardano_requirements_masumi_schema";
+/** Error: an `inputCommitment` part digest or the commitment digest does not recompute. */
+export const ERR_MASUMI_COMMITMENT = "invalid_exact_cardano_requirements_masumi_commitment";
+/** Error: the seller's COSE authorization over `termsDigest` does not verify. */
+export const ERR_MASUMI_SELLER_SIGNATURE =
+  "invalid_exact_cardano_requirements_masumi_seller_signature";
+/** Error: `blockchainIdentifier` does not decode to the reconstructed identifier. */
+export const ERR_MASUMI_IDENTIFIER = "invalid_exact_cardano_requirements_masumi_identifier";
+/** Error: `agentIdentifier` does not carry the Masumi V2 registry policy id. */
+export const ERR_MASUMI_AGENT_IDENTIFIER =
+  "invalid_exact_cardano_requirements_masumi_agent_identifier";
+/** Error: the derived deployment escrow address does not equal `payTo`. */
+export const ERR_MASUMI_DEPLOYMENT = "invalid_exact_cardano_requirements_masumi_deployment";
+/** Error: the transaction carries more than one output at the escrow address. */
+export const ERR_MASUMI_ESCROW_OUTPUT_COUNT =
+  "invalid_exact_cardano_payload_masumi_escrow_output_count";

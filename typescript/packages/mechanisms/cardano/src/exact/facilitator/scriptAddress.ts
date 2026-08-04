@@ -13,6 +13,7 @@ import type {
   CardanoScriptDescriptor,
   CardanoScriptParameter,
 } from "../../types";
+import { unwrapCborByteString } from "../../utils";
 
 /**
  * Reconstructs the script payment-credential (script hash) implied by a script
@@ -132,38 +133,4 @@ function makePlutusScript(
     case "plutusV3":
       return new PlutusV3.PlutusV3({ bytes });
   }
-}
-
-/**
- * Strips a single definite-length CBOR byte-string wrapper, returning the
- * payload bytes. `applyParamsToScript` returns the script wrapped in one such
- * layer; the script hash is computed over the unwrapped bytes.
- *
- * @param hex - Hex of a definite-length CBOR byte string.
- * @returns The unwrapped payload bytes.
- */
-function unwrapCborByteString(hex: string): Uint8Array {
-  const bytes = Buffer.from(hex, "hex");
-  if (bytes.length === 0 || bytes[0] >> 5 !== 2) {
-    throw new Error("Expected a CBOR byte string from applyParamsToScript");
-  }
-  const additional = bytes[0] & 0x1f;
-  let length: number;
-  let offset: number;
-  if (additional < 24) {
-    length = additional;
-    offset = 1;
-  } else if (additional === 24) {
-    length = bytes[1];
-    offset = 2;
-  } else if (additional === 25) {
-    length = bytes.readUInt16BE(1);
-    offset = 3;
-  } else if (additional === 26) {
-    length = bytes.readUInt32BE(1);
-    offset = 5;
-  } else {
-    throw new Error("Unsupported CBOR byte-string length encoding");
-  }
-  return Uint8Array.from(bytes.subarray(offset, offset + length));
 }

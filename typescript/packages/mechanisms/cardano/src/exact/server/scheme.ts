@@ -91,8 +91,15 @@ export class ExactCardanoScheme implements SchemeNetworkServer {
 
   /**
    * Enhances payment requirements before they are returned to the client.
-   * The base implementation passes the supportedKind extra through so any
-   * facilitator-supplied metadata reaches the client.
+   *
+   * The requirements' own `extra` is passed through **unchanged**. A
+   * facilitator's `/supported` extra is capability advertisement — which
+   * transfer methods, settlement layers and confirmation ranges it can service
+   * — and is not payload semantics, so merging it here would be wrong twice
+   * over: `PaymentRequirements.extra` selects what the payment *is*, and the
+   * Masumi `extra` is a **closed object** whose unknown fields are a rejection.
+   * Copying `assetTransferMethods`/`settlementLayers`/`submissionModes` into it
+   * would make every Masumi 402 invalid on arrival.
    *
    * @param paymentRequirements - The base payment requirements.
    * @param supportedKind - The matching SupportedKind.
@@ -108,11 +115,7 @@ export class ExactCardanoScheme implements SchemeNetworkServer {
     if (!isCardanoNetwork(supportedKind.network)) {
       throw new Error(`Unsupported Cardano network: ${supportedKind.network}`);
     }
-    const extra: Record<string, unknown> = {
-      ...(supportedKind.extra ?? {}),
-      ...(paymentRequirements.extra ?? {}),
-    };
-    return Promise.resolve({ ...paymentRequirements, extra });
+    return Promise.resolve(paymentRequirements);
   }
 
   /**

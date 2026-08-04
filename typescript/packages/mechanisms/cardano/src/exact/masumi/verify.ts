@@ -1,20 +1,49 @@
 import type { PaymentRequirements } from "@x402/core/types";
 
 import {
+  ERR_MASUMI_AGENT_IDENTIFIER,
   ERR_MASUMI_ASSET,
   ERR_MASUMI_COLLATERAL,
-  ERR_MASUMI_CONTRACT_MISMATCH,
+  ERR_MASUMI_COMMITMENT,
   ERR_MASUMI_DATUM_INVALID,
   ERR_MASUMI_DATUM_MISMATCH,
   ERR_MASUMI_DATUM_MISSING,
   ERR_MASUMI_DEADLINE,
+  ERR_MASUMI_DEPLOYMENT,
+  ERR_MASUMI_ESCROW_OUTPUT_COUNT,
+  ERR_MASUMI_IDENTIFIER,
   ERR_MASUMI_MIN_UTXO,
   ERR_MASUMI_REFERENCE_SCRIPT,
+  ERR_MASUMI_SCHEMA,
+  ERR_MASUMI_SELLER_SIGNATURE,
+  ERR_SETTLEMENT_LAYER_MISMATCH,
+  ERR_SETTLEMENT_LAYER_UNSUPPORTED,
   LOVELACE_ASSET,
 } from "../../constants";
-import type { CardanoExtraMasumi, DecodedCardanoTransaction } from "../../types";
+import type {
+  CardanoExtraMasumi,
+  DecodedCardanoTransaction,
+  ExactCardanoPayload,
+} from "../../types";
 import { slotToPosixMs } from "../../utils";
-import { MASUMI_MIN_COLLATERAL_LOVELACE, masumiMinUtxoLovelace } from "./constants";
+import { masumiEscrowAddress, resolveMasumiDeployment } from "./blueprint";
+import {
+  MASUMI_MIN_COLLATERAL_LOVELACE,
+  MASUMI_MIN_PAY_TO_SUBMIT_MS,
+  MASUMI_MIN_SUBMIT_TO_UNLOCK_MS,
+  MASUMI_MIN_UNLOCK_TO_DISPUTE_MS,
+  MASUMI_REGISTRY_POLICY_ID,
+  masumiMinUtxoLovelace,
+} from "./constants";
+import { verifySellerTermsSignature } from "./cose";
+import {
+  buildSignedTerms,
+  commitmentPartDigest,
+  computeInputHash,
+  computeTermsDigest,
+} from "./digests";
+import { decodeBlockchainIdentifier } from "./identifier";
+import { validateMasumiExtra } from "./schema";
 import {
   addressCredentials,
   MASUMI_STATE_FUNDS_LOCKED,
@@ -22,15 +51,82 @@ import {
   type MasumiAddressCredentials,
 } from "./datum";
 
-type Check = { ok: true } | { ok: false; reason: string };
+type Check = { ok: true } | { ok: false; reason: string; detail?: string };
 
 /**
  * Builds a rejection result carrying the failure reason.
  *
  * @param reason - The failure reason code.
+ * @param detail - Optional human-readable detail.
  * @returns A failing check.
  */
-const fail = (reason: string): Check => ({ ok: false, reason });
+const fail = (reason: string, detail?: string): Check => ({ ok: false, reason, detail });
+
+/**
+ * Everything the Masumi lock check needs beyond the requirements and the
+ * decoded transaction.
+ */
+export interface MasumiVerifyContext {
+  /** The decoded Cardano payload (nonce, settlement layer). */
+  payload: ExactCardanoPayload;
+  /** The address that owns the nonce UTXO, i.e. the resolved buyer. */
+  payer: string;
+  /** Live `coinsPerUtxoByte`; when absent the min-UTXO checks are skipped. */
+  coinsPerUtxoByte?: bigint;
+  /**
+   * Independently validates a registry claim on the selected network. The spec
+   * requires the asset, seller authorization, metadata, endpoint, network and
+   * exact price to be checked before a non-empty `agentIdentifier` is honoured.
+   *
+   * Without one, a non-empty `agentIdentifier` is **rejected**: accepting an
+   * unvalidated claim would let anyone assert another registered agent's
+   * identity and reputation while signing the terms with their own key.
+   * Unregistered sellers (absent, `null` or empty) are unaffected.
+   */
+  validateRegistryClaim?: MasumiRegistryValidator;
+}
+
+/**
+ * Options for {@link verifyMasumiAuthorization}.
+ */
+export interface MasumiAuthorizationOptions {
+  /** Independently validates a non-empty `agentIdentifier`. */
+  validateRegistryClaim?: MasumiRegistryValidator;
+  /**
+   * The buyer's own content for commitment parts the issuer did not echo,
+   * keyed by part name. The spec requires the client to recompute every part
+   * digest "using the issuer's `content` where present and its own request
+   * bytes where absent" — without this, an omitted part's digest is unchecked.
+   */
+  localCommitmentContent?: Record<string, unknown>;
+  /**
+   * Rejects a commitment part whose content is neither echoed by the issuer nor
+   * supplied locally. **Clients MUST set this.** A seller that omits content can
+   * otherwise invent part digests and an `inputHash`, sign that internally
+   * consistent manifest, and bind the escrow to a request the buyer never made.
+   * A facilitator leaves it `false`: it never sees the original request.
+   */
+  requireAllPartContent?: boolean;
+}
+
+/**
+ * Validates a Masumi V2 registry claim against the selected network.
+ *
+ * @param claim - The registry claim to validate.
+ * @returns True when the claim is authentic and resolves to the signed price.
+ */
+export type MasumiRegistryValidator = (claim: {
+  /** The non-empty `terms.agentIdentifier`. */
+  agentIdentifier: string;
+  /** The seller address the terms are signed by. */
+  sellerAddress: string;
+  /** The x402 Cardano network identifier. */
+  network: string;
+  /** The signed top-level amount. */
+  amount: string;
+  /** The signed top-level asset unit. */
+  asset: string;
+}) => boolean;
 
 /**
  * Whether two addresses share the same payment (and stake, if any) credential.
@@ -49,7 +145,7 @@ function sameCredentials(a: MasumiAddressCredentials, b: MasumiAddressCredential
  * a declared address must be present in the datum with matching credentials; an
  * omitted one must be absent (`None`).
  *
- * @param declared - The `extra` return address (bech32), or undefined.
+ * @param declared - The signed terms' return address (bech32), or undefined.
  * @param actual - The datum's return-address credentials, or null (`None`).
  * @returns True when they correspond exactly.
  */
@@ -62,185 +158,354 @@ function returnAddressMatches(
 }
 
 /**
- * Verifies that a payment locks funds into the Masumi `vested_pay` escrow with a
- * well-formed `FundsLocked` datum matching the requirements. Only the on-chain
- * lock is checked (x402's scope); the post-lock lifecycle is out of scope.
+ * Verifies the seller authorization carried in `extra`: the request commitment
+ * recomputes, the reconstructed `termsDigest` is what the seller's COSE
+ * signature covers, and the compatibility identifier decodes to the same
+ * values. No transaction is involved — a client runs exactly these checks
+ * before it signs.
  *
- * @param extra - The masumi `extra` block from the canonical requirements.
+ * @param extra - The schema-validated masumi `extra` block.
+ * @param requirements - The canonical payment requirements.
+ * @param options - Registry validation and buyer-supplied commitment content.
+ * @returns `{ ok: true }` plus the derived escrow address, else a failure reason.
+ */
+export function verifyMasumiAuthorization(
+  extra: CardanoExtraMasumi,
+  requirements: PaymentRequirements,
+  options: MasumiAuthorizationOptions = {},
+):
+  | { ok: true; escrowAddress: string; termsDigest: string }
+  | { ok: false; reason: string; detail?: string } {
+  const { terms, inputCommitment } = extra;
+
+  // Commitment: every part digest must recompute. The issuer echoes the content
+  // it originates; for a part derived from the buyer's own request bytes the
+  // buyer supplies it. A part with neither is unverifiable — the client MUST
+  // refuse it, because a seller free to invent an omitted part's digest is free
+  // to bind the escrow to a request that was never made.
+  for (const part of inputCommitment.parts) {
+    const content = part.content ?? options.localCommitmentContent?.[part.name];
+    if (content === undefined) {
+      if (options.requireAllPartContent) {
+        return {
+          ok: false,
+          reason: ERR_MASUMI_COMMITMENT,
+          detail: `part ${part.name} carries no content to verify its digest against`,
+        };
+      }
+      continue;
+    }
+    let digest: string;
+    try {
+      digest = commitmentPartDigest({ canonicalization: part.canonicalization, content });
+    } catch (cause) {
+      return {
+        ok: false,
+        reason: ERR_MASUMI_COMMITMENT,
+        detail: cause instanceof Error ? cause.message : String(cause),
+      };
+    }
+    if (digest !== part.digest) {
+      return {
+        ok: false,
+        reason: ERR_MASUMI_COMMITMENT,
+        detail: `part ${part.name} digest mismatch`,
+      };
+    }
+  }
+  if (computeInputHash(inputCommitment) !== inputCommitment.digest) {
+    return { ok: false, reason: ERR_MASUMI_COMMITMENT, detail: "commitment digest mismatch" };
+  }
+
+  // Escrow address: derived from the deployment parameters, never defaulted
+  // from `payTo`. Preview has no canonical deployment.
+  const deployment = resolveMasumiDeployment(requirements.network, extra.deployment);
+  if (!deployment) {
+    return {
+      ok: false,
+      reason: ERR_MASUMI_DEPLOYMENT,
+      detail: "network has no canonical deployment; extra.deployment is required",
+    };
+  }
+  let escrowAddress: string;
+  try {
+    escrowAddress = masumiEscrowAddress(requirements.network, deployment);
+  } catch (cause) {
+    return {
+      ok: false,
+      reason: ERR_MASUMI_DEPLOYMENT,
+      detail: cause instanceof Error ? cause.message : String(cause),
+    };
+  }
+  if (escrowAddress !== requirements.payTo) {
+    return {
+      ok: false,
+      reason: ERR_MASUMI_DEPLOYMENT,
+      detail: `derived escrow ${escrowAddress} does not equal payTo`,
+    };
+  }
+
+  // Seller authorization over the reconstructed terms.
+  const termsDigest = computeTermsDigest(buildSignedTerms(extra, requirements));
+  if (
+    !verifySellerTermsSignature(
+      extra.referenceKey,
+      extra.referenceSignature,
+      terms.sellerAddress,
+      termsDigest,
+    )
+  ) {
+    return { ok: false, reason: ERR_MASUMI_SELLER_SIGNATURE };
+  }
+
+  // A non-empty agentIdentifier makes a Masumi V2 registry claim, which the
+  // spec requires to be validated independently on the selected network. The
+  // policy prefix alone proves nothing: anyone can copy a registered agent's
+  // identifier into their own terms, so an unvalidatable claim is refused.
+  const agentIdentifier = typeof terms.agentIdentifier === "string" ? terms.agentIdentifier : "";
+  if (agentIdentifier.length > 0) {
+    if (!agentIdentifier.startsWith(MASUMI_REGISTRY_POLICY_ID)) {
+      return {
+        ok: false,
+        reason: ERR_MASUMI_AGENT_IDENTIFIER,
+        detail: "agentIdentifier does not carry the Masumi V2 registry policy id",
+      };
+    }
+    if (!options.validateRegistryClaim) {
+      return {
+        ok: false,
+        reason: ERR_MASUMI_AGENT_IDENTIFIER,
+        detail: "registry claims require an independent on-network validator",
+      };
+    }
+    if (
+      !options.validateRegistryClaim({
+        agentIdentifier,
+        sellerAddress: terms.sellerAddress,
+        network: requirements.network,
+        amount: requirements.amount,
+        asset: requirements.asset,
+      })
+    ) {
+      return {
+        ok: false,
+        reason: ERR_MASUMI_AGENT_IDENTIFIER,
+        detail: "registry validation rejected the claim",
+      };
+    }
+  }
+
+  // The compatibility identifier must decode to exactly these values.
+  const decoded = decodeBlockchainIdentifier(extra.blockchainIdentifier);
+  if (
+    !decoded ||
+    decoded.sellerNonce !== terms.sellerNonce ||
+    decoded.agentIdentifier !== agentIdentifier ||
+    decoded.buyerNonce !== terms.buyerNonce ||
+    decoded.referenceSignature !== extra.referenceSignature ||
+    decoded.referenceKey !== extra.referenceKey ||
+    decoded.contractAddress !== requirements.payTo
+  ) {
+    return { ok: false, reason: ERR_MASUMI_IDENTIFIER };
+  }
+
+  return { ok: true, escrowAddress, termsDigest };
+}
+
+/**
+ * Verifies that a payment locks funds into the Masumi `vested_pay` escrow with a
+ * well-formed `FundsLocked` datum matching the seller-signed terms. Only the
+ * on-chain lock is checked (x402's scope); the post-lock lifecycle is governed
+ * by the contract in later transactions.
+ *
+ * Because `vested_pay` only runs on spend, a malformed datum is not rejected at
+ * lock time — it silently strands the funds — so every invariant below is
+ * enforced here rather than left to the validator.
+ *
+ * @param rawExtra - The `extra` block from the canonical requirements.
  * @param requirements - The canonical payment requirements.
  * @param decoded - The decoded transaction (with output inline datums).
- * @param payer - The resolved payer (buyer) address.
- * @param coinsPerUtxoByte - Live `coinsPerUtxoByte`; when supplied, the escrow
- *   output is checked against the post-result min-UTXO. Skipped when absent.
+ * @param context - Payload, resolved payer and live protocol parameters.
  * @returns `{ ok: true }` when the lock is valid, else a precise failure reason.
  */
 export function verifyMasumiLock(
-  extra: CardanoExtraMasumi,
+  rawExtra: unknown,
   requirements: PaymentRequirements,
   decoded: DecodedCardanoTransaction,
-  payer: string,
-  coinsPerUtxoByte?: bigint,
+  context: MasumiVerifyContext,
 ): Check {
-  // 1. payTo must equal the deployment's escrow address, which the server
-  //    declares in `extra.contractAddress` (from the purchase). Not defaulted:
-  //    locking to a wrong escrow silently strands the funds.
-  if (!extra.contractAddress || requirements.payTo !== extra.contractAddress) {
-    return fail(ERR_MASUMI_CONTRACT_MISMATCH);
+  const schema = validateMasumiExtra(rawExtra, requirements.network);
+  if (!schema.ok) return fail(ERR_MASUMI_SCHEMA, schema.detail);
+  const extra = schema.extra;
+  const terms = extra.terms;
+
+  const authorization = verifyMasumiAuthorization(extra, requirements, {
+    ...(context.validateRegistryClaim
+      ? { validateRegistryClaim: context.validateRegistryClaim }
+      : {}),
+  });
+  if (!authorization.ok) return authorization;
+  const escrowAddress = authorization.escrowAddress;
+
+  // Settlement layer: required for masumi, and admitted by the signed policy.
+  const settlementLayer = context.payload.settlementLayer;
+  if (settlementLayer === undefined) {
+    return fail(ERR_SETTLEMENT_LAYER_MISMATCH, "payload.settlementLayer is required for masumi");
+  }
+  if (terms.settlementPolicy !== "auto" && terms.settlementPolicy !== settlementLayer) {
+    return fail(ERR_SETTLEMENT_LAYER_MISMATCH);
+  }
+  // Hydra needs verified Init state, head parameters, a seller-participant
+  // binding and `SnapshotConfirmed` evidence from the selected head. This
+  // implementation has none of that, and authenticating a Hydra payment against
+  // L1 evidence would be a lie, so Hydra is refused outright.
+  if (settlementLayer === "hydra") {
+    return fail(ERR_SETTLEMENT_LAYER_UNSUPPORTED, "Hydra settlement is not implemented");
   }
 
-  // 2. Locate the escrow output paying payTo and carrying an inline datum.
-  const output = decoded.outputs.find(
-    o => o.address === requirements.payTo && o.datum !== undefined,
-  );
-  if (!output || output.datum === undefined) {
-    return fail(ERR_MASUMI_DATUM_MISSING);
-  }
+  // Exactly one escrow output, carrying an inline datum and no reference script.
+  const escrowOutputs = decoded.outputs.filter(o => o.address === escrowAddress);
+  if (escrowOutputs.length !== 1) return fail(ERR_MASUMI_ESCROW_OUTPUT_COUNT);
+  const output = escrowOutputs[0];
+  if (output.datum === undefined) return fail(ERR_MASUMI_DATUM_MISSING);
+  // Masumi treats a set `reference_script_hash` as a spoofing attempt.
+  if (output.hasReferenceScript) return fail(ERR_MASUMI_REFERENCE_SCRIPT);
+
   const datumHex = output.datum;
-  // The escrow output must NOT carry a reference script — Masumi treats a set
-  // `reference_script_hash` as a spoofing attempt (FundsOrDatumInvalid).
-  if (output.hasReferenceScript) {
-    return fail(ERR_MASUMI_REFERENCE_SCRIPT);
-  }
   const view = parseMasumiLockDatum(datumHex);
-  if (!view) {
-    return fail(ERR_MASUMI_DATUM_INVALID);
-  }
+  if (!view) return fail(ERR_MASUMI_DATUM_INVALID, "datum does not match masumi.vested_pay.v2");
 
-  // 3. Structural invariants of a fresh lock. The validator never checks these
-  //    on lock and Masumi validates them off-chain, so any mismatch strands the
-  //    funds on a purchase Masumi then invalidates — reject up front.
-  if (view.state !== MASUMI_STATE_FUNDS_LOCKED) return fail(ERR_MASUMI_DATUM_INVALID);
-  if (view.resultHash !== "") return fail(ERR_MASUMI_DATUM_INVALID);
-  // Fresh lock: both cooldown timers MUST be 0 (a non-zero value is spoofing).
+  // Structural invariants of a fresh lock.
+  if (view.state !== MASUMI_STATE_FUNDS_LOCKED) return fail(ERR_MASUMI_DATUM_INVALID, "state");
+  if (view.resultHash !== "") return fail(ERR_MASUMI_DATUM_INVALID, "result_hash");
   if (view.sellerCooldownTime !== 0n || view.buyerCooldownTime !== 0n) {
-    return fail(ERR_MASUMI_DATUM_INVALID);
+    return fail(ERR_MASUMI_DATUM_INVALID, "cooldown");
   }
   if (view.buyer.payment.isScript || view.seller.payment.isScript) {
-    return fail(ERR_MASUMI_DATUM_INVALID);
+    return fail(ERR_MASUMI_DATUM_INVALID, "participant is a script credential");
   }
-  // No participant or return address may BE the escrow. Such a datum bricks the
-  // payout paths: a tagged payout would land back at the script address, where
-  // `vested_pay`'s continuation parsing (`expect new_datum: Datum` over every
-  // script-address output) aborts the whole spend. Anyone can lock this datum
-  // directly on-chain, so reject before a seller treats it as paid and works.
-  // Mirrors Masumi's own `decodeV2ContractDatum` rejection.
-  const escrow = addressCredentials(extra.contractAddress);
+  if (view.referenceSignature.length < 32) {
+    return fail(ERR_MASUMI_DATUM_INVALID, "reference_signature shorter than 16 bytes");
+  }
+
+  // No participant or return address may BE the escrow: `vested_pay` re-parses
+  // every output at the script address as a continuation datum, so a payout
+  // aimed back at the escrow aborts every spend path.
+  const escrow = addressCredentials(escrowAddress);
+  const buyerTarget = view.buyerReturnAddress ?? view.buyer;
+  const sellerTarget = view.sellerReturnAddress ?? view.seller;
   if (
     sameCredentials(view.buyer, escrow) ||
     sameCredentials(view.seller, escrow) ||
-    (view.buyerReturnAddress !== null && sameCredentials(view.buyerReturnAddress, escrow)) ||
-    (view.sellerReturnAddress !== null && sameCredentials(view.sellerReturnAddress, escrow))
+    sameCredentials(buyerTarget, escrow) ||
+    sameCredentials(sellerTarget, escrow)
   ) {
-    return fail(ERR_MASUMI_DATUM_INVALID);
+    return fail(ERR_MASUMI_DATUM_INVALID, "datum address is the escrow");
   }
-  // reference_signature: >= 16 bytes (32 hex chars).
-  if (view.referenceSignature.length < 32) return fail(ERR_MASUMI_DATUM_INVALID);
-  // Time ordering: pay_by <= submit_result <= unlock <= external_dispute_unlock.
-  if (
-    view.payByTime > view.submitResultTime ||
-    view.submitResultTime > view.unlockTime ||
-    view.unlockTime > view.externalDisputeUnlockTime
-  ) {
-    return fail(ERR_MASUMI_DATUM_INVALID);
+  // This scheme does not allow aggregated payouts.
+  if (sameCredentials(buyerTarget, sellerTarget)) {
+    return fail(ERR_MASUMI_DATUM_INVALID, "buyer and seller payout targets are equal");
   }
 
-  // 4. Deadline: the tx MUST carry a validity upper bound (TTL) on/before
-  //    pay_by_time, so it cannot settle past the deadline — Masumi flags a lock
-  //    landing after pay_by_time FundsOrDatumInvalid.
-  if (decoded.ttlSlot === undefined) return fail(ERR_MASUMI_DEADLINE);
+  // Deadlines: ordered, and clearing the minimum intervals.
+  if (
+    view.payByTime + MASUMI_MIN_PAY_TO_SUBMIT_MS > view.submitResultTime ||
+    view.submitResultTime + MASUMI_MIN_SUBMIT_TO_UNLOCK_MS > view.unlockTime ||
+    view.unlockTime + MASUMI_MIN_UNLOCK_TO_DISPUTE_MS > view.externalDisputeUnlockTime
+  ) {
+    return fail(ERR_MASUMI_DEADLINE, "deadline intervals below the minimum");
+  }
+  // The tx MUST carry a validity upper bound on/before pay_by_time, so the lock
+  // cannot settle past the deadline.
+  if (decoded.ttlSlot === undefined) return fail(ERR_MASUMI_DEADLINE, "no validity upper bound");
   if (BigInt(slotToPosixMs(requirements.network, decoded.ttlSlot)) > view.payByTime) {
-    return fail(ERR_MASUMI_DEADLINE);
+    return fail(ERR_MASUMI_DEADLINE, "TTL is after pay_by_time");
   }
 
-  // 5. Value: collateral bounds + asset/amount (mirrors Masumi's
-  //    checkPaymentAmountsMatch). collateral_return_lovelace is denominated in
-  //    lovelace and bounded against the locked lovelace for every asset — a
-  //    collateral above the locked ADA bricks the seller's on-chain spend paths.
-  const collateral = view.collateralReturnLovelace;
-  if (
-    collateral < 0n ||
-    (collateral > 0n && collateral < MASUMI_MIN_COLLATERAL_LOVELACE) ||
-    collateral > output.coin
-  ) {
-    return fail(ERR_MASUMI_COLLATERAL);
+  // Buyer identity: the datum's payment credential must control the nonce input
+  // and have witnessed the transaction. Only the payment credential is compared
+  // — the buyer may pick any stake part for its own address.
+  const payerCredentials = addressCredentials(context.payer);
+  if (view.buyer.payment.hash !== payerCredentials.payment.hash) {
+    return fail(ERR_MASUMI_DATUM_MISMATCH, "buyer does not control the nonce input");
   }
+  if (!decoded.vkeyHashes.includes(view.buyer.payment.hash)) {
+    return fail(ERR_MASUMI_DATUM_MISMATCH, "no witness for the buyer credential");
+  }
+
+  // Seller-side datum fields match the signed terms exactly. `buyer_return_address`
+  // is buyer-chosen and deliberately not matched.
+  if (!sameCredentials(view.seller, addressCredentials(terms.sellerAddress))) {
+    return fail(ERR_MASUMI_DATUM_MISMATCH, "seller");
+  }
+  if (!returnAddressMatches(terms.sellerReturnAddress, view.sellerReturnAddress)) {
+    return fail(ERR_MASUMI_DATUM_MISMATCH, "seller_return_address");
+  }
+  const agentIdentifier = typeof terms.agentIdentifier === "string" ? terms.agentIdentifier : "";
+  const byteFields: Array<[string, string, string]> = [
+    ["reference_key", extra.referenceKey, view.referenceKey],
+    ["reference_signature", extra.referenceSignature, view.referenceSignature],
+    ["seller_nonce", terms.sellerNonce, view.sellerNonce],
+    ["buyer_nonce", terms.buyerNonce, view.buyerNonce],
+    ["agent_identifier", agentIdentifier, view.agentIdentifier],
+    ["input_hash", terms.inputHash, view.inputHash],
+  ];
+  for (const [field, declared, actual] of byteFields) {
+    if (declared.toLowerCase() !== actual) return fail(ERR_MASUMI_DATUM_MISMATCH, field);
+  }
+  const timeFields: Array<[string, string, bigint]> = [
+    ["pay_by_time", terms.payByTime, view.payByTime],
+    ["submit_result_time", terms.submitResultTime, view.submitResultTime],
+    ["unlock_time", terms.unlockTime, view.unlockTime],
+    [
+      "external_dispute_unlock_time",
+      terms.externalDisputeUnlockTime,
+      view.externalDisputeUnlockTime,
+    ],
+  ];
+  for (const [field, declared, actual] of timeFields) {
+    if (BigInt(declared) !== actual) return fail(ERR_MASUMI_DATUM_MISMATCH, field);
+  }
+
+  // Value: `lockedLovelace = requestedLovelace + collateral_return_lovelace`
+  // exactly, with the collateral either zero or at/above the Masumi floor.
   const amount = BigInt(requirements.amount);
   const assetKey = requirements.asset.toLowerCase();
-  if (assetKey === LOVELACE_ASSET) {
-    // Lovelace: overpayment allowed for min-ada; locked >= amount + collateral.
-    if (output.coin < amount + collateral) return fail(ERR_MASUMI_ASSET);
-  } else {
-    // Native token: exact amount (Masumi forbids token overpayment); its
-    // structural lovelace covers collateral (above) and min-UTXO (below).
-    if (output.assets[assetKey] !== amount) return fail(ERR_MASUMI_ASSET);
+  const isLovelace = assetKey === LOVELACE_ASSET;
+  const requestedLovelace = isLovelace ? amount : 0n;
+  const collateral = view.collateralReturnLovelace;
+  if (collateral < 0n || (collateral > 0n && collateral < MASUMI_MIN_COLLATERAL_LOVELACE)) {
+    return fail(ERR_MASUMI_COLLATERAL, `collateral ${collateral} below the floor`);
   }
-  // The escrow output must carry EXACTLY the requested asset set — no extra
-  // native tokens (Masumi rejects a mismatched token count). Zero tokens for a
-  // lovelace payment; exactly the one requested token otherwise.
-  if (Object.keys(output.assets).length !== (assetKey === LOVELACE_ASSET ? 0 : 1)) {
-    return fail(ERR_MASUMI_ASSET);
+  if (output.coin !== requestedLovelace + collateral) {
+    return fail(
+      ERR_MASUMI_COLLATERAL,
+      `locked ${output.coin} lovelace, expected ${requestedLovelace + collateral}`,
+    );
+  }
+  if (!isLovelace && output.assets[assetKey] !== amount) {
+    return fail(ERR_MASUMI_ASSET, "native token amount is not exact");
+  }
+  // The escrow output carries EXACTLY the requested asset set.
+  if (Object.keys(output.assets).length !== (isLovelace ? 0 : 1)) {
+    return fail(ERR_MASUMI_ASSET, "escrow output carries extra native tokens");
   }
 
-  // 6. min-UTXO with post-result headroom (when the live coinsPerUtxoByte is
-  //    available): the escrow output must hold enough lovelace that the seller's
-  //    later SubmitResult output (32-byte result_hash + non-zero cooldowns) still
-  //    clears the protocol min-UTXO. Otherwise the seller can never spend.
-  if (coinsPerUtxoByte !== undefined) {
-    const nativeTokenCount = Object.keys(output.assets).length;
+  // min-UTXO with post-`SubmitResult` headroom: the escrow must still clear the
+  // protocol minimum once `result_hash` is 32 bytes and the cooldowns non-zero,
+  // otherwise the seller can never spend it.
+  if (context.coinsPerUtxoByte !== undefined) {
     const requiredMinUtxo = masumiMinUtxoLovelace(
       datumHex.length / 2,
-      nativeTokenCount,
-      coinsPerUtxoByte,
+      Object.keys(output.assets).length,
+      context.coinsPerUtxoByte,
     );
-    if (output.coin < requiredMinUtxo) return fail(ERR_MASUMI_MIN_UTXO);
-  }
-
-  // 7. Field matching against the canonical requirements' extra.
-  //    buyer MUST be the payer; seller MUST be the declared seller.
-  if (!sameCredentials(view.buyer, addressCredentials(payer))) {
-    return fail(ERR_MASUMI_DATUM_MISMATCH);
-  }
-  if (!sameCredentials(view.seller, addressCredentials(extra.sellerAddress))) {
-    return fail(ERR_MASUMI_DATUM_MISMATCH);
-  }
-  // seller_return address is server-declared, so it must match EXACTLY: declared in extra -> datum `Some(match)`,
-  // omitted -> datum `None`. Masumi compares these against the purchase, so a
-  // return address it doesn't expect (or a missing one it does) is rejected.
-  // buyer_return address is user-declared.
-  if (!returnAddressMatches(extra.sellerReturnAddress, view.sellerReturnAddress)) {
-    return fail(ERR_MASUMI_DATUM_MISMATCH);
-  }
-  // Server-declared datum fields, when present, MUST match the datum. Fields the
-  // server omits are client-filled (random/default) and only invariant-checked.
-  const mismatches: Array<[string | undefined, string]> = [
-    [extra.referenceKey, view.referenceKey],
-    [extra.referenceSignature, view.referenceSignature],
-    [extra.sellerNonce, view.sellerNonce],
-    [extra.identifierFromPurchaser, view.buyerNonce],
-    [extra.agentIdentifier, view.agentIdentifier],
-    [extra.inputHash, view.inputHash],
-  ];
-  for (const [declared, actual] of mismatches) {
-    if (declared !== undefined && declared.toLowerCase() !== actual) {
-      return fail(ERR_MASUMI_DATUM_MISMATCH);
+    if (output.coin < requiredMinUtxo) {
+      return fail(
+        ERR_MASUMI_MIN_UTXO,
+        `locked ${output.coin}, post-result minimum ${requiredMinUtxo}`,
+      );
     }
-  }
-  const timeMismatch: Array<[string | undefined, bigint]> = [
-    [extra.payByTime, view.payByTime],
-    [extra.submitResultTime, view.submitResultTime],
-    [extra.unlockTime, view.unlockTime],
-    [extra.externalDisputeUnlockTime, view.externalDisputeUnlockTime],
-  ];
-  for (const [declared, actual] of timeMismatch) {
-    if (declared !== undefined && BigInt(declared) !== actual) {
-      return fail(ERR_MASUMI_DATUM_MISMATCH);
-    }
-  }
-  if (
-    extra.collateralReturnLovelace !== undefined &&
-    BigInt(extra.collateralReturnLovelace) !== view.collateralReturnLovelace
-  ) {
-    return fail(ERR_MASUMI_DATUM_MISMATCH);
   }
 
   return { ok: true };

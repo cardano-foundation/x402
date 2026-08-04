@@ -85,6 +85,18 @@ export interface BuildSignedTxParams {
   secondInput?: { ref: string; lovelace: bigint };
   /** Optional inline datum to attach to the payment output (e.g. a Masumi lock). */
   datum?: InlineDatum.InlineDatum;
+  /**
+   * Optional wallet mnemonic. Supply one when the caller needs the payer address
+   * *before* building the transaction — a Masumi lock datum names the buyer, and
+   * the buyer must control the nonce input.
+   */
+  mnemonic?: string;
+  /**
+   * Exact lovelace to place on the payment output, disabling the automatic
+   * min-UTXO bump. A Masumi lock must carry exactly
+   * `requestedLovelace + collateral`, which the bump would break.
+   */
+  outputLovelace?: bigint;
 }
 
 /**
@@ -128,7 +140,7 @@ export async function buildSignedTx(params: BuildSignedTxParams): Promise<BuildS
   const chain = resolveChain(network);
 
   // Deterministic-enough offline wallet; a fresh key per call is fine for tests.
-  const mnemonic = PrivateKey.generateMnemonic();
+  const mnemonic = params.mnemonic ?? PrivateKey.generateMnemonic();
   const client = Client.make(chain)
     .withBlockfrost({ baseUrl: "http://offline.invalid" })
     .withSeed({ mnemonic });
@@ -180,10 +192,17 @@ export async function buildSignedTx(params: BuildSignedTxParams): Promise<BuildS
   }
 
   const outputAssets = isLovelace
-    ? Assets.fromLovelace(params.amount)
+    ? Assets.fromLovelace(params.outputLovelace ?? params.amount)
     : (() => {
         const { policyId, assetNameHex } = parseAssetUnit(params.asset);
-        return Assets.addByHex(Assets.zero, policyId, assetNameHex, params.amount);
+        return Assets.addByHex(
+          params.outputLovelace !== undefined
+            ? Assets.fromLovelace(params.outputLovelace)
+            : Assets.zero,
+          policyId,
+          assetNameHex,
+          params.amount,
+        );
       })();
 
   const signBuilder = await client
@@ -199,7 +218,7 @@ export async function buildSignedTx(params: BuildSignedTxParams): Promise<BuildS
       availableUtxos,
       changeAddress: address,
       fullProtocolParameters: OFFLINE_PROTOCOL_PARAMETERS,
-      autoMinUtxo: !isLovelace,
+      autoMinUtxo: params.outputLovelace === undefined && !isLovelace,
     });
 
   const submitBuilder = await signBuilder.sign();

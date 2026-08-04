@@ -1,4 +1,32 @@
 /**
+ * Who broadcasts the signed transaction. Declared by the server in
+ * `PaymentRequirements.extra.submissionPolicy`; `either` lets the client pick.
+ */
+export type CardanoSubmissionPolicy = "server" | "client" | "either";
+
+/**
+ * The mode a paid payload actually selected. An absent `payload.submissionMode`
+ * normalizes to `server`; `either` is a policy and never a payload mode.
+ */
+export type CardanoSubmissionMode = "server" | "client";
+
+/**
+ * Ledger a Masumi payment settles on. Carried by `payload.settlementLayer`.
+ */
+export type CardanoSettlementLayer = "l1" | "hydra";
+
+/**
+ * Minimum L1 evidence required before the resource is released.
+ *
+ * `-1` is authenticated mempool acceptance, `0` is inclusion in a canonical
+ * block, and `1..20` requires that many newer canonical blocks. Greater
+ * evidence satisfies a lower threshold.
+ */
+export interface CardanoConfirmationPolicy {
+  l1Confirmations: number;
+}
+
+/**
  * Payload structure carried inside a Cardano `exact` PaymentPayload.
  *
  * The `transaction` field is a base64-encoded, fully signed Cardano CBOR
@@ -15,7 +43,36 @@ export type ExactCardanoPayload = {
    * UTXO reference (`txHash#index`) used as nonce, must be present as a tx input.
    */
   nonce: string;
+  /**
+   * Who broadcasts. Absent normalizes to `server`; the normalized value MUST be
+   * allowed by the selected `extra.submissionPolicy`.
+   */
+  submissionMode?: CardanoSubmissionMode;
+  /**
+   * Masumi only: the ledger this payment settles on. `terms.settlementPolicy`
+   * MUST allow the selected value.
+   */
+  settlementLayer?: CardanoSettlementLayer;
+  /**
+   * Masumi + Hydra only: the canonical lowercase 56-character hexadecimal Hydra
+   * protocol head id from the on-chain Init transaction. MUST be absent for L1.
+   */
+  headId?: string;
 };
+
+/**
+ * Fields every Cardano `extra` block may carry, whatever the transfer method.
+ */
+export interface CardanoExtraPolicies {
+  /**
+   * Who broadcasts the signed transaction. Defaults to `server` when absent.
+   */
+  submissionPolicy?: CardanoSubmissionPolicy;
+  /**
+   * Minimum L1 evidence. Defaults to `{ l1Confirmations: 1 }` when absent.
+   */
+  confirmationPolicy?: CardanoConfirmationPolicy;
+}
 
 /**
  * Common (default) `extra` shape for Cardano payment requirements.
@@ -23,7 +80,7 @@ export type ExactCardanoPayload = {
  * The default assetTransferMethod is the address-to-address flow described in
  * the spec — `extra` may be empty or carry caller-defined metadata.
  */
-export interface CardanoExtraDefault {
+export interface CardanoExtraDefault extends CardanoExtraPolicies {
   /**
    * Free-form metadata. Implementations MUST tolerate unknown keys.
    */
@@ -35,101 +92,143 @@ export interface CardanoExtraDefault {
 }
 
 /**
- * `extra` shape for the Masumi assetTransferMethod — the fields needed to build
- * the Masumi `vested_pay` escrow lock datum. Field semantics follow the spec
- * section "Masumi assetTransferMethod Schema"; each maps to a datum field.
+ * One part of the Masumi request commitment. `partBytes` is
+ * `UTF-8(RFC8785-JCS(content))` for `jcs` and `base64url-decode(content)` for
+ * `raw`; `digest` is their lowercase hex SHA-256.
  *
- * Fields split by who knows them:
- *
- * - **Server-declared (required)** — the seller-side identifiers and time bounds
- *   the resource server takes from its Masumi payment request. They bind the
- *   locked UTxO to that purchase, so the client must not invent them and the
- *   facilitator matches every one against the datum.
- * - **Buyer-supplied (optional here)** — `identifierFromPurchaser`, `inputHash`
- *   and `buyerReturnAddress`. The 402 is issued for an unauthenticated request,
- *   so the server cannot know them; the client fills them when it builds the
- *   lock. A server that does declare one is still honoured and matched.
+ * `content` is REQUIRED only for parts the issuer originates. It is OPTIONAL
+ * for parts derived from the client's own request bytes, which the client
+ * recomputes from what it sent — the manifest excludes `content` by
+ * construction, so omitting it on the wire does not change `inputHash`.
  */
-export interface CardanoExtraMasumi {
+export interface MasumiCommitmentPart {
+  /** Unique non-empty part name (conventionally `parameters`, `body`, `raw`). */
+  name: string;
+  /** How `content` is turned into bytes. */
+  canonicalization: "jcs" | "raw";
+  /** Optional media type, preserved byte-for-byte in the manifest. */
+  mediaType?: string;
+  /** RFC 8785-compatible JSON for `jcs`, unpadded base64url string for `raw`. */
+  content?: unknown;
+  /** Lowercase hex `SHA-256(partBytes)`, exactly 64 characters. */
+  digest: string;
+}
+
+/**
+ * The Masumi request commitment. Its `digest` is what the escrow's `input_hash`
+ * binds the locked funds to, tying the payment to exactly the job requested.
+ */
+export interface MasumiInputCommitment {
+  /** Literal `"1"`. */
+  version: string;
+  /** Literal `"sha256"`. */
+  algorithm: string;
+  /** Ordered parts with unique `name` values. */
+  parts: MasumiCommitmentPart[];
+  /** Lowercase hex digest over the content-free manifest; equals `terms.inputHash`. */
+  digest: string;
+}
+
+/**
+ * The seller-signed terms. Projected into `signedTerms` together with the
+ * top-level `PaymentRequirements` fields and hashed into `termsDigest`, which
+ * the seller authorizes with a CIP-8 `COSE_Sign1`.
+ *
+ * This is a **closed object**: an unknown field is invalid, and it MUST NOT
+ * repeat a field that is projected from the top level.
+ */
+export interface MasumiTerms {
+  /** Literal `"1"`. */
+  version: string;
+  /** Literal `"Web3CardanoV2"` — selects the contract generation. */
+  paymentType: string;
+  /** Key-credential seller address on the selected network; datum `seller`. */
+  sellerAddress: string;
   /**
-   * Free-form additional metadata.
+   * Optional key-credential payout address; datum `seller_return_address`.
+   * **Omitted** when absent — JSON `null` is invalid.
    */
-  [key: string]: unknown;
+  sellerReturnAddress?: string;
+  /** Exactly 32 fresh cryptographically random bytes as 64 lowercase hex characters. */
+  sellerNonce: string;
+  /** Empty string, or 7–13 bytes as 14–26 lowercase hex characters. */
+  buyerNonce: string;
+  /**
+   * Registry asset identifier. Omitted, `null` or empty means the seller is
+   * unregistered; these are distinct signed wire values and MUST be
+   * reconstructed verbatim into `signedTerms`.
+   */
+  agentIdentifier?: string | null;
+  /** Exactly equal to `inputCommitment.digest`. */
+  inputHash: string;
+  /** POSIX millisecond deadlines as positive canonical base-10 strings. */
+  payByTime: string;
+  submitResultTime: string;
+  unlockTime: string;
+  externalDisputeUnlockTime: string;
+  /** Which ledger the payment may settle on. */
+  settlementPolicy: "auto" | "l1" | "hydra";
+}
+
+/**
+ * Validator parameters baked into the escrow script hash. Omit for the
+ * canonical deployment; when present they replace **only** these three applied
+ * parameters against the same canonical compiled validator.
+ */
+export interface MasumiDeployment {
+  /** Positive canonical base-10 integer string, at most `adminVkeys.length`. */
+  requiredAdmins: string;
+  /**
+   * Ordered non-empty 28-byte lowercase hex key hashes. Duplicates are
+   * preserved and carry voting weight — a key appearing *n* times counts *n*
+   * times toward the threshold.
+   */
+  adminVkeys: string[];
+  /** Non-negative canonical base-10 POSIX-millisecond integer string. */
+  cooldownPeriod: string;
+}
+
+/**
+ * `extra` shape for the Masumi assetTransferMethod — everything a client needs
+ * to build the `vested_pay` escrow lock and a facilitator needs to verify it.
+ *
+ * This is a **closed object**: an unknown field is invalid. `payTo` is not
+ * repeated here; it is signed into `signedTerms` as `contractAddress` and the
+ * verifier re-derives the escrow address from {@link MasumiDeployment} and
+ * requires it to equal `payTo`. `collateral_return_lovelace` is deliberately
+ * absent — the client computes it from the final transaction (see the spec's
+ * "Escrow datum and client-computed collateral").
+ */
+export interface CardanoExtraMasumi extends CardanoExtraPolicies {
   /**
    * Method marker selecting Masumi semantics.
    */
   assetTransferMethod: "masumi";
   /**
-   * Masumi `PaymentSourceType` — selects the contract generation
-   * (`Web3CardanoV2` = the `vested_pay` payment-v2 escrow).
+   * The request commitment whose digest equals `terms.inputHash`.
    */
-  paymentType?: string;
+  inputCommitment: MasumiInputCommitment;
   /**
-   * Escrow (`vested_pay`) script address for this Masumi deployment, from the
-   * purchase. **Required** and must equal `payTo`: a script address is
-   * deployment-specific (its parameters are baked into the hash), so it cannot
-   * be safely defaulted — locking to a wrong escrow silently strands the funds.
-   * For Masumi's canonical deployment, {@link masumiContractAddress} computes it.
+   * The seller-signed terms.
    */
-  contractAddress: string;
+  terms: MasumiTerms;
   /**
-   * Full seller address (public-key credential); datum `seller`.
-   */
-  sellerAddress: string;
-  /**
-   * Optional payout destination; datum `seller_return_address`.
-   */
-  sellerReturnAddress?: string;
-  /**
-   * datum `buyer_return_address`. **Buyer-chosen** — the resource server does
-   * not know the payer when it issues the 402, so the client fills it, and the
-   * facilitator never matches it against `extra` (unlike `sellerReturnAddress`).
-   * The buyer stays bound by the `buyer` = payer rule instead.
-   */
-  buyerReturnAddress?: string;
-  /**
-   * datum `reference_key` (hex) — from the Masumi purchase.
+   * Complete CBOR `COSE_Key` as lowercase hex; datum `reference_key`.
    */
   referenceKey: string;
   /**
-   * datum `reference_signature` (hex; >= 16 bytes) — from the Masumi purchase.
+   * Complete CBOR `COSE_Sign1` as lowercase hex; datum `reference_signature`.
    */
   referenceSignature: string;
   /**
-   * datum `buyer_nonce` (hex). **Buyer-supplied**, for the same reason as
-   * {@link CardanoExtraMasumi.buyerReturnAddress}: it comes from the buyer's
-   * purchase, which is created *after* the 402. The client fills it (from its
-   * Masumi purchase, or a fresh random nonce). A server that already knows the
-   * purchase may declare it, and the facilitator then matches it.
+   * Lowercase hex of the LZString-compressed Masumi compatibility identifier.
    */
-  identifierFromPurchaser?: string;
+  blockchainIdentifier: string;
   /**
-   * datum `seller_nonce` (hex) — from the Masumi purchase.
+   * Optional non-canonical validator parameterization. Preview has no canonical
+   * default and therefore requires this field.
    */
-  sellerNonce: string;
-  /**
-   * datum `agent_identifier` (hex) — the registered Masumi agent.
-   */
-  agentIdentifier: string;
-  /**
-   * datum `input_hash` (hex) — hash of the job input the buyer sends the agent,
-   * so it is **buyer-supplied** too. Defaults to empty when neither side sets it.
-   */
-  inputHash?: string;
-  /**
-   * datum `collateral_return_lovelace` (decimal string; >= 0). Optional;
-   * defaults to 0 when absent.
-   */
-  collateralReturnLovelace?: string;
-  /**
-   * Time bounds as POSIX **milliseconds** (decimal strings) from the Masumi
-   * purchase, ordered `payByTime <= submitResultTime <= unlockTime <=
-   * externalDisputeUnlockTime`.
-   */
-  payByTime: string;
-  submitResultTime: string;
-  unlockTime: string;
-  externalDisputeUnlockTime: string;
+  deployment?: MasumiDeployment;
 }
 
 /**
@@ -163,7 +262,7 @@ export interface CardanoScriptParameter {
 /**
  * `extra` shape for the script assetTransferMethod.
  */
-export interface CardanoExtraScript {
+export interface CardanoExtraScript extends CardanoExtraPolicies {
   /**
    * Free-form additional metadata.
    */
@@ -280,17 +379,36 @@ export interface DecodedCardanoTransaction {
    */
   vkeyWitnessCount: number;
   /**
+   * Lowercase hex of every vkey witness public key, so the verifier can confirm
+   * the buyer credential named by a Masumi datum actually witnessed the tx.
+   */
+  vkeyHashes: string[];
+  /**
    * Number of script witnesses (native + plutus) present. A script-mode
    * payment must carry at least one redeemer; for default/Masumi payments
    * either vkey or bootstrap witnesses suffice.
    */
   scriptWitnessCount: number;
   /**
+   * Number of Plutus redeemers. Only a transaction that runs a Plutus script
+   * can be phase-2 invalid, so a payment with none can never land as a
+   * failed-script transaction that creates no outputs.
+   */
+  redeemerCount: number;
+  /**
    * True when every vkey witness carries a valid Ed25519 signature over the
    * transaction body hash. False signals a forged or stale signature that the
    * chain would reject at submission.
    */
   signaturesValid: boolean;
+  /**
+   * The transaction's ledger `is_valid` flag. When `false` the transaction is a
+   * *failed script* transaction: the ledger consumes its collateral instead of
+   * its inputs and creates **none** of its declared outputs — so the payment
+   * output it advertises never exists, even though the transaction lands under
+   * this exact transaction id.
+   */
+  isValid: boolean;
   /**
    * Index of the auxiliary data hash, if any (kept for parity with future
    * additions; unused today).

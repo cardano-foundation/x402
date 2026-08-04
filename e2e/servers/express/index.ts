@@ -12,7 +12,7 @@ import { KEETA_TESTNET_CAIP2 } from "@x402/keeta";
 import { ExactKeetaScheme } from "@x402/keeta/exact/server";
 import { ExactStellarScheme } from "@x402/stellar/exact/server";
 import { ExactCardanoScheme } from "@x402/cardano/exact/server";
-import { masumiContractAddress } from "@x402/cardano";
+import { issueMasumiRequirements, toMasumiSellerSigner } from "@x402/cardano";
 import { ExactTvmScheme } from "@x402/tvm/exact/server";
 import { ExactNearScheme } from "@x402/near/exact/server";
 import type { XrplAssetTransferMethod } from "@x402/xrpl";
@@ -88,16 +88,53 @@ const CARDANO_DISCOVERY = declareDiscoveryExtension({
     },
   },
 });
-// Masumi lock deadlines for the demo, future-relative so the anchored tx TTL
-// (invalidHereafter = pay_by_time) stays valid across a run. A real integration
-// takes these from the Masumi purchase instead of a fixed offset at startup.
+// How long a Cardano payment stays valid. The Masumi client anchors the tx TTL
+// to pay_by_time, and the facilitator refuses a TTL further ahead than
+// maxTimeoutSeconds, so pay_by_time cannot exceed issuance + this value.
+const CARDANO_MAX_TIMEOUT_SECONDS = 600;
+// Masumi lock deadlines, clearing the spec's minimum intervals: pay_by + 5min <=
+// submit_result, submit_result + 15min <= unlock, unlock + 15min <= dispute.
 const CARDANO_MASUMI_BASE_MS = Date.now();
-const CARDANO_MASUMI_TIMES = {
-  payByTime: (CARDANO_MASUMI_BASE_MS + 30 * 60_000).toString(),
-  submitResultTime: (CARDANO_MASUMI_BASE_MS + 60 * 60_000).toString(),
-  unlockTime: (CARDANO_MASUMI_BASE_MS + 90 * 60_000).toString(),
-  externalDisputeUnlockTime: (CARDANO_MASUMI_BASE_MS + 120 * 60_000).toString(),
-};
+const CARDANO_MASUMI_PAY_BY_MS = CARDANO_MASUMI_BASE_MS + CARDANO_MAX_TIMEOUT_SECONDS * 1000;
+// The seller signs the Masumi terms with its selling wallet. The escrow pays
+// this address, so a real deployment MUST set CARDANO_SELLER_MNEMONIC; the
+// well-known test phrase below only keeps the e2e endpoint self-contained. The
+// key needs no funds — it only authorizes the terms.
+const CARDANO_TEST_SELLER_MNEMONIC =
+  "test test test test test test test test test test test junk";
+const CARDANO_SELLER = CARDANO_PAYEE_ADDRESS
+  ? toMasumiSellerSigner({
+      mnemonic: process.env.CARDANO_SELLER_MNEMONIC || CARDANO_TEST_SELLER_MNEMONIC,
+      network: CARDANO_NETWORK,
+    })
+  : undefined;
+// A spec-conformant Masumi 402 carries a request commitment and a seller
+// signature over termsDigest, so it must be issued rather than hand-written.
+// Issued once at startup for the e2e; a real issuer generates a fresh
+// sellerNonce (and a commitment over the actual request) per 402.
+const CARDANO_MASUMI_REQUIREMENTS = CARDANO_SELLER
+  ? await issueMasumiRequirements({
+      network: CARDANO_NETWORK,
+      asset: CARDANO_ASSET,
+      amount: CARDANO_AMOUNT,
+      maxTimeoutSeconds: CARDANO_MAX_TIMEOUT_SECONDS,
+      sellerAddress: CARDANO_SELLER.sellerAddress,
+      signTerms: CARDANO_SELLER.signTerms,
+      commitment: [
+        {
+          name: "parameters",
+          canonicalization: "jcs",
+          mediaType: "application/json",
+          content: { endpoint: "/exact/cardano/masumi" },
+        },
+      ],
+      payByTime: CARDANO_MASUMI_PAY_BY_MS.toString(),
+      submitResultTime: (CARDANO_MASUMI_PAY_BY_MS + 5 * 60_000).toString(),
+      unlockTime: (CARDANO_MASUMI_PAY_BY_MS + 20 * 60_000).toString(),
+      externalDisputeUnlockTime: (CARDANO_MASUMI_PAY_BY_MS + 35 * 60_000).toString(),
+      settlementPolicy: "l1",
+    })
+  : undefined;
 const TVM_PAYEE_ADDRESS = process.env.TVM_PAYEE_ADDRESS as string | undefined;
 const NEAR_NETWORK = (process.env.NEAR_NETWORK || "near:testnet") as `${string}:${string}`;
 const NEAR_PAYEE_ADDRESS = process.env.NEAR_PAYEE_ADDRESS as string | undefined;
@@ -807,32 +844,24 @@ app.use(
           },
           "GET /exact/cardano/masumi": {
             accepts: {
-              // Locks into the vested_pay escrow (Web3CardanoV2): payTo is the
-              // escrow script address, seller is the payee. For a native-token
-              // lock the escrow output also carries structural lovelace
-              // (min-UTXO + collateral), which the client signer funds itself.
-              payTo: masumiContractAddress(CARDANO_NETWORK),
+              // Locks into the vested_pay escrow (Web3CardanoV2). payTo is the
+              // escrow script address the verifier re-derives from the
+              // deployment parameters — it is never hand-supplied. For a
+              // native-token lock the escrow output also carries structural
+              // lovelace (min-UTXO + collateral) the client computes itself.
+              payTo: CARDANO_MASUMI_REQUIREMENTS!.payTo,
               scheme: "exact",
-              price: { amount: CARDANO_AMOUNT, asset: CARDANO_ASSET },
-              network: CARDANO_NETWORK,
-              extra: {
-                assetTransferMethod: "masumi",
-                paymentType: "Web3CardanoV2",
-                // Escrow address for this deployment (must equal payTo).
-                contractAddress: masumiContractAddress(CARDANO_NETWORK),
-                sellerAddress: CARDANO_PAYEE_ADDRESS!,
-                agentIdentifier: "deadbeefdeadbeefdeadbeefdeadbeef",
-                collateralReturnLovelace: "0",
-                // Seller-side identifiers from the Masumi payment request. Fixed
-                // placeholders keep the e2e lock deterministic. The buyer-side
-                // fields (buyer_nonce, input_hash, buyer_return_address) are
-                // deliberately absent: this 402 answers an unauthenticated
-                // request, so the server cannot know them — the client fills them.
-                referenceKey: "aa".repeat(32),
-                referenceSignature: "bb".repeat(64),
-                sellerNonce: "cc".repeat(32),
-                ...CARDANO_MASUMI_TIMES,
+              price: {
+                amount: CARDANO_MASUMI_REQUIREMENTS!.amount,
+                asset: CARDANO_MASUMI_REQUIREMENTS!.asset,
               },
+              network: CARDANO_NETWORK,
+              maxTimeoutSeconds: CARDANO_MAX_TIMEOUT_SECONDS,
+              // Carries the request commitment, the seller-signed terms, the
+              // CIP-8 authorization over termsDigest and the compatibility
+              // identifier. Reused verbatim on the paid retry: regenerating any
+              // of it would change termsDigest and invalidate the payment.
+              extra: CARDANO_MASUMI_REQUIREMENTS!.extra,
             },
             extensions: { ...CARDANO_DISCOVERY },
           },

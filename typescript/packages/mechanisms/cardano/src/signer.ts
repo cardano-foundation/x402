@@ -3,7 +3,6 @@ import {
   Assets,
   type Chain,
   Client,
-  Data,
   mainnet,
   preprod,
   preview,
@@ -12,6 +11,7 @@ import {
   TransactionInput,
 } from "@evolution-sdk/evolution";
 import { addressFromSeed } from "@evolution-sdk/evolution/sdk/wallet/Derivation";
+import type { PaymentRequirements } from "@x402/core/types";
 
 import {
   ASSET_TRANSFER_METHOD_MASUMI,
@@ -22,10 +22,17 @@ import {
   LOVELACE_ASSET,
   normalizeCardanoNetwork,
 } from "./constants";
-import { masumiTokenLockLovelace } from "./exact/masumi/constants";
-import { buildMasumiLockInline, type MasumiBuyerInput } from "./exact/masumi/lock";
+import { buildMasumiLock, type MasumiBuyerInput } from "./exact/masumi/lock";
+import { verifyMasumiAuthorization, type MasumiRegistryValidator } from "./exact/masumi/verify";
+import { validateMasumiExtra } from "./exact/masumi/schema";
 import { buildScriptDatumInline } from "./exact/script/datum";
-import type { CardanoExtra, CardanoExtraMasumi, CardanoExtraScript } from "./types";
+import type {
+  CardanoExtra,
+  CardanoExtraMasumi,
+  CardanoExtraScript,
+  CardanoSettlementLayer,
+  CardanoSubmissionMode,
+} from "./types";
 import { parseAssetUnit, parseUtxoRef } from "./utils";
 
 /**
@@ -162,6 +169,12 @@ export interface ClientCardanoSignInput {
    * assetTransferMethod and any method-specific metadata).
    */
   extra?: Record<string, unknown>;
+  /**
+   * The submission mode resolved from `extra.submissionPolicy`. In `client`
+   * mode the signer MUST broadcast the transaction before returning, because
+   * the facilitator will authenticate it instead of submitting it.
+   */
+  submissionMode: CardanoSubmissionMode;
 }
 
 /**
@@ -176,12 +189,38 @@ export interface ClientCardanoSignResult {
    * UTXO reference (`txHashHex#index`) used as nonce. MUST appear as a tx input.
    */
   nonce: string;
+  /**
+   * The mode the signer actually honoured. In `client` mode the signer MUST
+   * have broadcast the transaction before returning.
+   */
+  submissionMode?: CardanoSubmissionMode;
+  /**
+   * Masumi only: the ledger the payment settles on.
+   */
+  settlementLayer?: CardanoSettlementLayer;
+  /**
+   * Masumi + Hydra only: the canonical protocol head id.
+   */
+  headId?: string;
 }
 
 /**
  * Status returned by the chain layer for a settled / submitted transaction.
  */
 export type CardanoSettlementStatus = "confirmed" | "mempool";
+
+/**
+ * Authenticated settlement evidence for one transaction.
+ *
+ * `confirmations` reports the strongest verified evidence: `-1` for
+ * authenticated mempool acceptance, `0` for inclusion in a canonical block, and
+ * `n` for `n` newer canonical blocks. It is meaningless when `status` is
+ * `unknown`, which means the ledger has no record of the transaction.
+ */
+export interface CardanoSettlementEvidence {
+  status: "unknown" | "mempool" | "confirmed";
+  confirmations: number;
+}
 
 /**
  * Result of submitting a transaction via a facilitator signer.
@@ -207,7 +246,10 @@ export interface CardanoUtxoSnapshot {
    */
   exists: boolean;
   /**
-   * Optional bech32 address that controls the UTXO. Useful for diagnostics.
+   * The bech32 address that controls the UTXO. Implementations SHOULD report it
+   * even when `exists` is false: in client-submission mode the payment
+   * transaction has already consumed the nonce, and this address is how the
+   * facilitator resolves the payer (and, for Masumi, the datum's `buyer`).
    */
   address?: string;
 }
@@ -297,6 +339,28 @@ export interface FacilitatorCardanoSigner {
   evaluateTransaction?(signedTransactionBase64: string, network: string): Promise<void>;
 
   /**
+   * Optional: reads authenticated settlement evidence for one transaction.
+   *
+   * Required for client-submission mode (the facilitator must authenticate the
+   * transaction the client already broadcast instead of submitting it) and for
+   * any `confirmationPolicy.l1Confirmations` above `0`, which needs the real
+   * canonical depth. A facilitator without this hook advertises `server`
+   * submission only.
+   *
+   * Implementations MUST return `status: "unknown"` when the ledger has no
+   * record of the transaction, and SHOULD throw only on lookup failure. A
+   * transaction the ledger marked phase-2 invalid (`valid_contract: false`)
+   * MUST also report `unknown`: it lands under its own id but consumes
+   * collateral instead of its inputs and creates none of its declared outputs,
+   * so it is not evidence that anything was paid.
+   *
+   * @param txHash - The canonical Cardano transaction id (hex).
+   * @param network - The x402 network identifier.
+   * @returns The strongest verified evidence for that transaction.
+   */
+  getTransactionEvidence?(txHash: string, network: string): Promise<CardanoSettlementEvidence>;
+
+  /**
    * Optional: reads the live `coinsPerUtxoByte` protocol parameter. When
    * implemented, the facilitator's `verify()` uses it to reject payments whose
    * recipient output carries less than the protocol minimum lovelace (a tx the
@@ -331,12 +395,33 @@ export interface ClientCardanoSignerConfig {
   accountIndex?: number;
   /**
    * Supplies the buyer-side datum fields for a Masumi lock, called once per
-   * payment with the server's masumi `extra`. Integrate a Masumi Payment
-   * Service here to return the purchase's `buyer_nonce` / `input_hash` /
-   * return address. Omit it and the client generates a fresh nonce and takes
-   * the contract defaults, which is enough to produce a valid lock.
+   * payment with the server's masumi `extra`. Only `buyer_return_address` is
+   * buyer-chosen — every other datum field comes from the seller-signed
+   * `terms`. Omit it to take the contract default (`None`).
    */
   masumiBuyerInput?: (extra: CardanoExtraMasumi) => MasumiBuyerInput | Promise<MasumiBuyerInput>;
+  /**
+   * Independently validates a Masumi registry claim before paying. Without one,
+   * a 402 whose `terms.agentIdentifier` claims a registered agent is refused
+   * rather than paid on an unverified reputation claim.
+   */
+  validateMasumiRegistryClaim?: MasumiRegistryValidator;
+  /**
+   * The buyer's own content for `inputCommitment` parts the issuer chose not to
+   * echo, keyed by part name. The issuer may omit content for parts derived
+   * from the buyer's own request bytes, and the buyer recomputes those digests
+   * from what it actually sent. A 402 carrying an omitted part that is not
+   * supplied here is **refused**: a seller free to invent that part's digest is
+   * free to bind the escrow to a request that was never made.
+   */
+  masumiRequestContent?: Record<string, unknown>;
+  /**
+   * Explicitly approves a non-canonical `extra.deployment`. Choosing a
+   * deployment is choosing the escrow's dispute arbitrators, so the seller
+   * signature alone is not approval. Default `false`: a custom deployment is
+   * refused.
+   */
+  allowCustomMasumiDeployment?: boolean;
 }
 
 /**
@@ -382,6 +467,65 @@ export function toClientCardanoSigner(config: ClientCardanoSignerConfig): Client
         );
       }
 
+      // Validate the 402 before touching the wallet: a malicious or malformed
+      // Masumi 402 must be refused before any funds are selected, and in client
+      // mode before anything is broadcast.
+      const extra = input.extra as CardanoExtra | undefined;
+      let masumiExtra: CardanoExtraMasumi | undefined;
+      let settlementLayer: CardanoSettlementLayer | undefined;
+      if (extra?.assetTransferMethod === ASSET_TRANSFER_METHOD_MASUMI) {
+        const schema = validateMasumiExtra(extra, input.network);
+        if (!schema.ok) {
+          throw new Error(`Masumi payment requirements are invalid: ${schema.detail}`);
+        }
+        masumiExtra = schema.extra;
+        // The client MUST verify the seller authorization itself — it is about
+        // to move real value, and in client-submission mode it broadcasts before
+        // any facilitator sees the payment. Skipping this would let a malicious
+        // 402 send funds to a non-escrow address or bind them to terms no seller
+        // ever signed.
+        const authorization = verifyMasumiAuthorization(
+          masumiExtra,
+          {
+            scheme: "exact",
+            network: input.network as PaymentRequirements["network"],
+            asset: input.asset,
+            amount: input.amount,
+            payTo: input.payTo,
+            maxTimeoutSeconds: input.maxTimeoutSeconds,
+            extra: extra as unknown as Record<string, unknown>,
+          },
+          {
+            // The client sees the original request, so every commitment part
+            // must verify — an unverifiable one binds the escrow to a request
+            // the buyer never made.
+            requireAllPartContent: true,
+            ...(config.masumiRequestContent
+              ? { localCommitmentContent: config.masumiRequestContent }
+              : {}),
+            ...(config.validateMasumiRegistryClaim
+              ? { validateRegistryClaim: config.validateMasumiRegistryClaim }
+              : {}),
+          },
+        );
+        if (!authorization.ok) {
+          throw new Error(
+            `Masumi seller authorization failed: ${authorization.reason}${
+              authorization.detail ? ` (${authorization.detail})` : ""
+            }`,
+          );
+        }
+        // A non-canonical deployment is a different set of dispute arbitrators,
+        // so the seller signature alone is not approval — the application has to
+        // opt in explicitly.
+        if (masumiExtra.deployment && !config.allowCustomMasumiDeployment) {
+          throw new Error(
+            "Masumi requirements declare a custom deployment; set allowCustomMasumiDeployment to approve it",
+          );
+        }
+        settlementLayer = resolveSettlementLayer(masumiExtra);
+      }
+
       const changeAddress = await client.address();
       const utxos = await client.getWalletUtxos();
       if (utxos.length === 0) {
@@ -393,56 +537,54 @@ export function toClientCardanoSigner(config: ClientCardanoSignerConfig): Client
       const nonceTxHash = Buffer.from(nonceUtxo.transactionId.hash).toString("hex").toLowerCase();
       const nonce = `${nonceTxHash}#${Number(nonceUtxo.index)}`;
 
-      // Masumi attaches an inline lock datum whose `buyer` must equal the payer
-      // the facilitator resolves (the nonce input's owner), so derive it from
-      // that UTXO. The script method attaches the server-supplied inline datum
-      // verbatim (contract-specific; not verified). Other methods pay a plain
-      // output.
-      const extra = input.extra as CardanoExtra | undefined;
-      const masumiExtra =
-        extra?.assetTransferMethod === ASSET_TRANSFER_METHOD_MASUMI
-          ? (extra as CardanoExtraMasumi)
-          : undefined;
+      // Masumi attaches an inline lock datum whose `buyer` must control the
+      // nonce input the facilitator resolves, so derive it from that UTXO. The
+      // script method attaches the server-supplied inline datum verbatim
+      // (contract-specific; not verified). Other methods pay a plain output.
       const scriptExtra =
         extra?.assetTransferMethod === ASSET_TRANSFER_METHOD_SCRIPT
           ? (extra as CardanoExtraScript)
           : undefined;
-      const masumiDatum = masumiExtra
-        ? buildMasumiLockInline(
-            masumiExtra,
-            Address.toBech32(nonceUtxo.address),
-            (await config.masumiBuyerInput?.(masumiExtra)) ?? {},
-          )
-        : undefined;
-      const scriptDatum = scriptExtra ? buildScriptDatumInline(scriptExtra) : undefined;
-      const paymentDatum = masumiDatum ?? scriptDatum;
 
-      let outputAssets = buildOutputAssets(input.asset, BigInt(input.amount));
-      // A native-token Masumi lock carries the token plus purely structural
-      // lovelace, which must cover the post-result min-UTXO and the collateral.
-      // autoMinUtxo only sizes the current (smaller) datum, so top it up here.
-      // An ADA lock's requested amount is the lovelace and is validated instead
-      // by the facilitator against the same floor.
-      if (masumiExtra && masumiDatum && input.asset.toLowerCase() !== LOVELACE_ASSET) {
+      const amount = BigInt(input.amount);
+      const isLovelace = input.asset.toLowerCase() === LOVELACE_ASSET;
+      let outputAssets = buildOutputAssets(input.asset, amount);
+      let paymentDatum = scriptExtra ? buildScriptDatumInline(scriptExtra) : undefined;
+
+      if (masumiExtra) {
+        // The seller never signs `collateral_return_lovelace`; the client derives
+        // it from the requested asset and live protocol parameters so the escrow
+        // still clears min-UTXO after `SubmitResult`.
         const { coinsPerUtxoByte } = await client.getProtocolParameters();
-        const datumBytes = Data.toCBORHex(masumiDatum.data).length / 2;
-        const collateral = masumiExtra.collateralReturnLovelace
-          ? BigInt(masumiExtra.collateralReturnLovelace)
-          : 0n;
-        const { policyId, assetNameHex } = parseAssetUnit(input.asset);
-        outputAssets = Assets.addByHex(
-          Assets.fromLovelace(masumiTokenLockLovelace(datumBytes, collateral, coinsPerUtxoByte)),
-          policyId,
-          assetNameHex,
-          BigInt(input.amount),
+        const lock = buildMasumiLock(
+          masumiExtra,
+          Address.toBech32(nonceUtxo.address),
+          input.asset,
+          amount,
+          coinsPerUtxoByte,
+          (await config.masumiBuyerInput?.(masumiExtra)) ?? {},
         );
+        paymentDatum = lock.datum;
+        // The escrow output carries EXACTLY the requested asset set, with
+        // `lockedLovelace = requestedLovelace + collateral`.
+        if (isLovelace) {
+          outputAssets = Assets.fromLovelace(lock.lockedLovelace);
+        } else {
+          const { policyId, assetNameHex } = parseAssetUnit(input.asset);
+          outputAssets = Assets.addByHex(
+            Assets.fromLovelace(lock.lockedLovelace),
+            policyId,
+            assetNameHex,
+            amount,
+          );
+        }
       }
 
       // Masumi: anchor the tx's validity upper bound to pay_by_time so the lock
       // can never settle past the deadline (Masumi invalidates a late lock).
       // Other methods use maxTimeoutSeconds.
       const ttlMs = masumiExtra
-        ? BigInt(masumiExtra.payByTime)
+        ? BigInt(masumiExtra.terms.payByTime)
         : BigInt(Date.now()) + BigInt(input.maxTimeoutSeconds) * 1000n;
 
       const signBuilder = await client
@@ -459,8 +601,10 @@ export function toClientCardanoSigner(config: ClientCardanoSignerConfig): Client
         .build({
           changeAddress,
           // Bump the output to the protocol min-UTXO for native-asset outputs
-          // and for datum-bearing outputs (an attached datum raises it).
-          autoMinUtxo: input.asset.toLowerCase() !== LOVELACE_ASSET || paymentDatum !== undefined,
+          // and for datum-bearing outputs (an attached datum raises it). A
+          // Masumi lock already carries its exact structural lovelace, and
+          // raising it would break `locked == requested + collateral`.
+          autoMinUtxo: masumiExtra ? false : !isLovelace || paymentDatum !== undefined,
         });
 
       const submitBuilder = await signBuilder.sign();
@@ -472,12 +616,42 @@ export function toClientCardanoSigner(config: ClientCardanoSignerConfig): Client
         auxiliaryData: null,
       });
 
+      // Client mode: the client broadcasts before the paid retry, and the
+      // facilitator authenticates that exact transaction instead of submitting
+      // it. Wait until the chain actually shows it: most providers expose no
+      // mempool read, so retrying immediately gives the facilitator nothing to
+      // authenticate and it rejects the payment as unseen.
+      if (input.submissionMode === "client") {
+        const hash = await client.submitTx(signed);
+        await client.awaitTx(hash);
+      }
+
       return {
         transaction: Buffer.from(Transaction.toCBORBytes(signed)).toString("base64"),
         nonce,
+        submissionMode: input.submissionMode,
+        ...(settlementLayer ? { settlementLayer } : {}),
       };
     },
   };
+}
+
+/**
+ * Resolves the settlement layer a Masumi payment will use.
+ *
+ * A suitable Hydra head has to be open, verified against its on-chain Init
+ * state, and bound to the seller's participant key — none of which this signer
+ * can establish. `auto` therefore resolves to L1 and a policy of `hydra` is
+ * refused rather than settled on a head that cannot be closed.
+ *
+ * @param extra - The validated masumi `extra` block.
+ * @returns The selected settlement layer.
+ */
+function resolveSettlementLayer(extra: CardanoExtraMasumi): CardanoSettlementLayer {
+  if (extra.terms.settlementPolicy === "hydra") {
+    throw new Error("Masumi terms require Hydra settlement, which this signer cannot provide");
+  }
+  return "l1";
 }
 
 /**
@@ -514,6 +688,91 @@ export interface FacilitatorCardanoSignerConfig {
 }
 
 /**
+ * Direct Blockfrost REST access for the two queries the Evolution provider
+ * interface does not expose: authenticated settlement evidence (a
+ * transaction's canonical depth) and the owner of an already-spent UTXO.
+ *
+ * Returns a disabled shim when the signer is configured with another provider;
+ * the facilitator then advertises `server` submission only and cannot service
+ * an `l1Confirmations` above `0`.
+ *
+ * @param provider - The signer's provider connection config.
+ * @returns The Blockfrost query helpers.
+ */
+function blockfrostQueries(provider: CardanoProviderConfig): {
+  enabled: boolean;
+  evidence(txHash: string): Promise<CardanoSettlementEvidence>;
+  spentUtxoAddress(txHash: string, index: number): Promise<{ address?: string }>;
+} {
+  const config = provider.blockfrost;
+  if (!config) {
+    return {
+      enabled: false,
+      evidence: () => Promise.resolve({ status: "unknown", confirmations: -2 }),
+      spentUtxoAddress: () => Promise.resolve({}),
+    };
+  }
+  const baseUrl = config.baseUrl.replace(/\/$/, "");
+  const headers = config.projectId ? { project_id: config.projectId } : undefined;
+
+  /**
+   * Performs one Blockfrost GET.
+   *
+   * @param path - The API path, starting with a slash.
+   * @returns The parsed body, or `null` on 404.
+   */
+  const get = async (path: string): Promise<Record<string, unknown> | null> => {
+    const response = await fetch(`${baseUrl}${path}`, { ...(headers ? { headers } : {}) });
+    if (response.status === 404) return null;
+    if (!response.ok) {
+      throw new Error(`Blockfrost ${path} failed: ${response.status} ${response.statusText}`);
+    }
+    return (await response.json()) as Record<string, unknown>;
+  };
+
+  return {
+    enabled: true,
+
+    async evidence(txHash: string): Promise<CardanoSettlementEvidence> {
+      const tx = await get(`/txs/${txHash}`);
+      if (!tx) {
+        // Not on chain. Blockfrost exposes no mempool read, so an unconfirmed
+        // transaction is indistinguishable from an unknown one.
+        return { status: "unknown", confirmations: -2 };
+      }
+      // A phase-2-invalid transaction is recorded under this id but consumed its
+      // collateral instead of its inputs and produced none of its declared
+      // outputs. It paid nothing, so it is not evidence of settlement.
+      if (tx.valid_contract === false) {
+        return { status: "unknown", confirmations: -2 };
+      }
+      const tip = await get("/blocks/latest");
+      const txHeight = Number(tx.block_height);
+      const tipHeight = Number(tip?.height);
+      if (!Number.isFinite(txHeight) || !Number.isFinite(tipHeight)) {
+        return { status: "confirmed", confirmations: 0 };
+      }
+      // `confirmations` counts blocks NEWER than the one containing the tx.
+      return { status: "confirmed", confirmations: Math.max(0, tipHeight - txHeight) };
+    },
+
+    async spentUtxoAddress(txHash: string, index: number): Promise<{ address?: string }> {
+      try {
+        const utxos = await get(`/txs/${txHash}/utxos`);
+        const outputs = (utxos?.outputs ?? []) as Array<{
+          output_index?: number;
+          address?: string;
+        }>;
+        const output = outputs.find(o => o.output_index === index);
+        return output?.address ? { address: output.address } : {};
+      } catch {
+        return {};
+      }
+    },
+  };
+}
+
+/**
  * Builds a reference {@link FacilitatorCardanoSigner} backed by the Evolution
  * SDK provider for chain queries and transaction submission.
  *
@@ -526,6 +785,7 @@ export function toFacilitatorCardanoSigner(
   const chain = resolveChain(config.network);
   const providerClient = withProvider(Client.make(chain), config.provider);
   const slotConfig = chain.slotConfig;
+  const blockfrost = blockfrostQueries(config.provider);
 
   // The facilitator only broadcasts the client's already-signed transaction and
   // queries the chain — both are provider operations. A mnemonic is optional and
@@ -569,11 +829,26 @@ export function toFacilitatorCardanoSigner(
         index: BigInt(index),
       });
       const utxos = await client.getUtxosByOutRef([input]);
-      if (utxos.length === 0) {
-        return { exists: false };
+      if (utxos.length > 0) {
+        return { exists: true, address: Address.toBech32(utxos[0].address) };
       }
-      return { exists: true, address: Address.toBech32(utxos[0].address) };
+      // Spent (or unknown). Client-submission mode still needs the owner
+      // address to resolve the payer, so read it from the producing transaction
+      // when the provider can serve it.
+      return { exists: false, ...(await blockfrost.spentUtxoAddress(txHash, index)) };
     },
+
+    ...(blockfrost.enabled
+      ? {
+          async getTransactionEvidence(
+            txHash: string,
+            network: string,
+          ): Promise<CardanoSettlementEvidence> {
+            assertNetwork(network);
+            return blockfrost.evidence(txHash);
+          },
+        }
+      : {}),
 
     async getCurrentSlot(network: string): Promise<bigint> {
       assertNetwork(network);
@@ -598,7 +873,15 @@ export function toFacilitatorCardanoSigner(
       if (config.awaitConfirmation === false) {
         return { txHash, status: "mempool" };
       }
-      await client.awaitTx(hash);
+      // The broadcast already succeeded. A failure while WAITING for inclusion
+      // must not be reported as a failed submission: the facilitator would then
+      // treat a transaction that is on its way to the chain as never sent. Report
+      // mempool acceptance instead and let the confirmation policy decide.
+      try {
+        await client.awaitTx(hash);
+      } catch {
+        return { txHash, status: "mempool" };
+      }
       return { txHash, status: "confirmed" };
     },
 

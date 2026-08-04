@@ -17,23 +17,58 @@ import {
 import type { Network, PaymentRequirements } from "@x402/core/types";
 
 import {
+  ASSET_TRANSFER_METHOD_MASUMI,
   ASSET_TRANSFER_METHOD_SCRIPT,
   CARDANO_PREPROD_CAIP2,
   LOVELACE_ASSET,
 } from "../../src/constants";
+import { buildMasumiLock } from "../../src/exact/masumi/lock";
+import { validateMasumiExtra } from "../../src/exact/masumi/schema";
 import { buildScriptDatumInline } from "../../src/exact/script/datum";
 import type { ClientCardanoSigner, FacilitatorCardanoSigner } from "../../src/signer";
 import type { CardanoExtraScript } from "../../src/types";
+import { decodeCardanoTransaction } from "../../src/utils";
 import { buildSignedTx } from "./buildSignedTx";
+
+/** `coinsPerUtxoByte` used by the offline fixtures (current mainnet value). */
+export const STUB_COINS_PER_UTXO_BYTE = 4310n;
+
+/** One buyer wallet per process, so every stub Masumi lock names the same buyer. */
+const STUB_BUYER_MNEMONIC = PrivateKey.generateMnemonic();
+
+/**
+ * The bech32 address of the wallet {@link stubClientSigner} uses for Masumi
+ * locks. The datum names it as `buyer`, so the facilitator's `getUtxo` stub must
+ * report it as the nonce UTXO's owner.
+ *
+ * @returns The buyer bech32 address.
+ */
+export async function stubBuyerAddress(): Promise<string> {
+  return Address.toBech32(
+    await Client.make(preprod).withSeed({ mnemonic: STUB_BUYER_MNEMONIC }).address(),
+  );
+}
 
 /** Network used across the deterministic suites. */
 export const NETWORK: Network = CARDANO_PREPROD_CAIP2;
 
-/** TTL slot comfortably ahead of {@link STUB_CURRENT_SLOT}. */
-export const TTL_SLOT = 200_000_000n;
+/**
+ * Current slot reported by the stub chain layer. Derived from the real clock so
+ * fixtures stay consistent with wall-clock-based logic (TTL retention windows,
+ * Masumi deadlines) instead of drifting into the past as time passes.
+ */
+export const STUB_CURRENT_SLOT =
+  preprod.slotConfig.zeroSlot +
+  BigInt(
+    Math.floor((Date.now() - Number(preprod.slotConfig.zeroTime)) / preprod.slotConfig.slotLength),
+  );
 
-/** Current slot reported by the stub chain layer (below {@link TTL_SLOT}). */
-export const STUB_CURRENT_SLOT = 100_000_000n;
+/**
+ * TTL slot ahead of {@link STUB_CURRENT_SLOT} but still inside the fixtures'
+ * 600-second `maxTimeoutSeconds`, so it satisfies rule 7's upper bound. Preprod
+ * slots are one second long.
+ */
+export const TTL_SLOT = STUB_CURRENT_SLOT + 300n;
 
 /** Fixed nonce UTXO reference forced into every fixture transaction. */
 export const NONCE_REF = `${"a".repeat(64)}#0`;
@@ -62,13 +97,70 @@ export async function freshPreprodAddress(): Promise<string> {
 export function stubFacilitatorSigner(
   overrides: Partial<FacilitatorCardanoSigner> = {},
 ): FacilitatorCardanoSigner {
+  // A transaction only becomes evidence once it has been submitted, exactly as
+  // on a real chain. A stub that reported every transaction as already included
+  // would silently disable the checks that only apply before acceptance.
+  const submitted = new Set<string>();
   return {
     getAddresses: () => [PAYER_ADDRESS],
     getUtxo: async () => ({ exists: true, address: PAYER_ADDRESS }),
     getCurrentSlot: async () => STUB_CURRENT_SLOT,
-    submitTransaction: async () => ({ txHash: "f".repeat(64), status: "confirmed" }),
+    submitTransaction: async transaction => {
+      const { txHash } = decodeCardanoTransaction(transaction);
+      submitted.add(txHash);
+      return { txHash, status: "confirmed" };
+    },
+    // One newer canonical block: satisfies the default confirmationPolicy.
+    getTransactionEvidence: async txHash =>
+      submitted.has(txHash)
+        ? { status: "confirmed", confirmations: 1 }
+        : { status: "unknown", confirmations: -2 },
     ...overrides,
   };
+}
+
+/**
+ * Builds a real signed Masumi escrow lock offline, exactly as the reference
+ * client signer would: the buyer controls the nonce input, the datum comes from
+ * the seller-signed terms, and the escrow output carries precisely
+ * `requestedLovelace + collateral`.
+ *
+ * Exposed so a test can build a *second, different* lock for the same 402 (by
+ * varying the nonce) and exercise the Masumi logical-replay guard.
+ *
+ * @param extra - The masumi `extra` block from the requirements.
+ * @param network - The x402 Cardano network identifier.
+ * @param payTo - The escrow address.
+ * @param asset - The requested asset unit.
+ * @param amount - The requested amount.
+ * @param nonceUtxoRef - The UTXO reference to consume as nonce.
+ * @returns The base64 transaction and its nonce.
+ */
+export async function buildStubMasumiLockTx(
+  extra: Record<string, unknown>,
+  network: string,
+  payTo: string,
+  asset: string,
+  amount: bigint,
+  nonceUtxoRef: string,
+): Promise<{ transaction: string; nonce: string }> {
+  const schema = validateMasumiExtra(extra, network);
+  if (!schema.ok) throw new Error(`invalid masumi extra: ${schema.detail}`);
+  const buyer = await stubBuyerAddress();
+  const lock = buildMasumiLock(schema.extra, buyer, asset, amount, STUB_COINS_PER_UTXO_BYTE);
+  const built = await buildSignedTx({
+    payTo,
+    asset,
+    amount,
+    nonceUtxoRef,
+    ttlSlot: TTL_SLOT,
+    network,
+    datum: lock.datum,
+    outputLovelace: lock.lockedLovelace,
+    mnemonic: STUB_BUYER_MNEMONIC,
+    fundingLovelace: lock.lockedLovelace + 10_000_000n,
+  });
+  return { transaction: built.transaction, nonce: built.nonce };
 }
 
 /**
@@ -82,13 +174,26 @@ export function stubClientSigner(): ClientCardanoSigner {
   return {
     getAddress: () => PAYER_ADDRESS,
     buildAndSignPaymentTransaction: async input => {
-      // Honor the script method's inline datum like the real signer does, so
-      // full-flow script tests exercise datum attachment through the stack.
+      // Honor the script and masumi methods like the real signer does, so
+      // full-flow tests exercise datum attachment through the stack.
       const extra = input.extra as { assetTransferMethod?: string } | undefined;
       const scriptDatum =
         extra?.assetTransferMethod === ASSET_TRANSFER_METHOD_SCRIPT
           ? buildScriptDatumInline(extra as CardanoExtraScript)
           : undefined;
+
+      if (extra?.assetTransferMethod === ASSET_TRANSFER_METHOD_MASUMI) {
+        const built = await buildStubMasumiLockTx(
+          extra,
+          input.network,
+          input.payTo,
+          input.asset,
+          BigInt(input.amount),
+          NONCE_REF,
+        );
+        return { ...built, submissionMode: input.submissionMode, settlementLayer: "l1" };
+      }
+
       const built = await buildSignedTx({
         payTo: input.payTo,
         asset: input.asset,
@@ -98,7 +203,11 @@ export function stubClientSigner(): ClientCardanoSigner {
         network: input.network,
         ...(scriptDatum ? { datum: scriptDatum } : {}),
       });
-      return { transaction: built.transaction, nonce: built.nonce };
+      return {
+        transaction: built.transaction,
+        nonce: built.nonce,
+        submissionMode: input.submissionMode,
+      };
     },
   };
 }

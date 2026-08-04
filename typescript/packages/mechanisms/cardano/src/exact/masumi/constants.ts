@@ -1,44 +1,33 @@
-import { Address, EnterpriseAddress, ScriptHash } from "@evolution-sdk/evolution";
-
-import { getCardanoNetworkId, normalizeCardanoNetwork } from "../../constants";
-
 /**
  * Masumi `PaymentSourceType` targeted by this implementation. `Web3CardanoV2`
- * is the `vested_pay` payment-v2 escrow whose datum this scheme builds.
+ * is the `vested_pay` payment-v2 escrow whose datum this scheme builds. Any
+ * other value MUST be rejected: the field selects the contract generation and
+ * is not advisory.
  */
 export const MASUMI_PAYMENT_SOURCE_TYPE = "Web3CardanoV2";
 
 /**
- * Script hash of Masumi's canonical `vested_pay` payment-v2 escrow, with the
- * deployment parameters applied (`required_admins_multi_sig = 2`, the three
- * Masumi admin key hashes, `cooldown_period = 420000`). Network-independent —
- * only the address header differs per network. Derived with Masumi's own
- * `getPaymentScriptV2` (mesh `1.9.0-beta.102`) and cross-checked by reproducing
- * their published V1 address with the same method.
- *
- * This is really just a fallback: the authoritative escrow address comes from
- * the purchase via the required `extra.contractAddress` (which verify() checks
- * against `payTo`). It only backs the {@link masumiContractAddress} helper as a
- * convenience for the canonical deployment, and must not be treated as
- * authoritative — a different (e.g. self-hosted) deployment has a different
- * address, and this hash goes stale if Masumi ever redeploys.
+ * Global Masumi V2 registry policy id. A non-empty `terms.agentIdentifier`
+ * makes a registry claim and MUST start with this policy — another policy is
+ * not a Masumi V2 registry.
  */
-const MASUMI_ESCROW_SCRIPT_HASH = "2d6abca32e4b22b59e948ef22dfe682017de917a9ec088aa1bc3c64e";
+export const MASUMI_REGISTRY_POLICY_ID = "67ab0c92c4ac1610895a1c965ee50aba41a8f1513b15240723b3bd0b";
 
 /**
- * Default `collateral_return_lovelace` when the requirements omit it (the
- * contract itself defaults this field to 0). All other datum identifiers and
- * time bounds are required from the requirements — they are purchase-bound and
- * must not be defaulted or randomized.
- */
-export const MASUMI_DEFAULT_COLLATERAL_LOVELACE = 0n;
-
-/**
- * Non-zero `collateral_return_lovelace` floor enforced by Masumi's off-chain
- * validation (`checkPaymentAmountsMatch`, `CONSTANTS.MIN_COLLATERAL_LOVELACE`).
- * A positive collateral below this is rejected.
+ * Non-zero `collateral_return_lovelace` floor. The client computes the
+ * collateral itself, but a positive value below this floor is rejected by
+ * Masumi's off-chain validation (`CONSTANTS.MIN_COLLATERAL_LOVELACE`).
  */
 export const MASUMI_MIN_COLLATERAL_LOVELACE = 1_435_230n;
+
+/** Minimum gap from `pay_by_time` to `submit_result_time`. */
+export const MASUMI_MIN_PAY_TO_SUBMIT_MS = 5n * 60n * 1000n;
+
+/** Minimum gap from `submit_result_time` to `unlock_time`. */
+export const MASUMI_MIN_SUBMIT_TO_UNLOCK_MS = 15n * 60n * 1000n;
+
+/** Minimum gap from `unlock_time` to `external_dispute_unlock_time`. */
+export const MASUMI_MIN_UNLOCK_TO_DISPUTE_MS = 15n * 60n * 1000n;
 
 // Min-UTXO for the escrow output must cover the datum as it will look AFTER the
 // seller submits a result, not at lock time: `result_hash` grows from empty to
@@ -86,38 +75,32 @@ export function masumiMinUtxoLovelace(
 }
 
 /**
- * Lovelace a native-token lock must put on the escrow output. The requested
- * amount is the token, so this lovelace is purely structural: it has to clear
- * the post-result min-UTXO and still cover the collateral the seller reclaims,
- * hence the larger of the two.
+ * The `collateral_return_lovelace` a lock must carry.
  *
+ * The seller never supplies or signs this value: the client computes it from
+ * the requested asset and live protocol parameters, and the escrow output must
+ * satisfy `lockedLovelace = requestedLovelace + collateral_return_lovelace`.
+ *
+ * A **lovelace** payment can therefore run with zero collateral when the
+ * requested amount already clears the post-`SubmitResult` min-UTXO. A
+ * **native-token** payment has `requestedLovelace = 0`, so zero collateral
+ * cannot satisfy both rules and the collateral must be at least the larger of
+ * the floor and that min-UTXO.
+ *
+ * @param requestedLovelace - `amount` for a lovelace payment, `0` for a token.
  * @param lockDatumBytes - Byte length of the current (empty-result) lock datum.
- * @param collateralLovelace - The datum's `collateral_return_lovelace`.
+ * @param nativeTokenCount - Distinct native tokens carried by the escrow output.
  * @param coinsPerUtxoByte - Live `coinsPerUtxoByte` protocol parameter.
- * @returns The lovelace to attach to the escrow output.
+ * @returns The collateral to place in the datum.
  */
-export function masumiTokenLockLovelace(
+export function masumiCollateralLovelace(
+  requestedLovelace: bigint,
   lockDatumBytes: number,
-  collateralLovelace: bigint,
+  nativeTokenCount: number,
   coinsPerUtxoByte: bigint,
 ): bigint {
-  const floor = masumiMinUtxoLovelace(lockDatumBytes, 1, coinsPerUtxoByte);
-  return floor > collateralLovelace ? floor : collateralLovelace;
-}
-
-/**
- * Resolves the address of Masumi's canonical `vested_pay` escrow for a network.
- * Fallback convenience only — the authoritative escrow address comes from the
- * purchase via `extra.contractAddress`; a server on a different deployment
- * supplies its own and must not rely on this.
- *
- * @param network - The x402 Cardano network identifier (or a CIP-34 alias).
- * @returns The bech32 enterprise script address of Masumi's canonical escrow.
- */
-export function masumiContractAddress(network: string): string {
-  const enterprise = new EnterpriseAddress.EnterpriseAddress({
-    networkId: getCardanoNetworkId(normalizeCardanoNetwork(network)),
-    paymentCredential: ScriptHash.fromHex(MASUMI_ESCROW_SCRIPT_HASH),
-  });
-  return Address.toBech32(enterprise as unknown as Address.Address);
+  const minUtxo = masumiMinUtxoLovelace(lockDatumBytes, nativeTokenCount, coinsPerUtxoByte);
+  if (requestedLovelace >= minUtxo) return 0n;
+  const shortfall = minUtxo - requestedLovelace;
+  return shortfall > MASUMI_MIN_COLLATERAL_LOVELACE ? shortfall : MASUMI_MIN_COLLATERAL_LOVELACE;
 }

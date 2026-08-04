@@ -7,10 +7,14 @@ import {
   parseMasumiLockDatum,
   type MasumiLockDatumInput,
 } from "../../src/exact/masumi/datum";
-import { masumiContractAddress } from "../../src/exact/masumi/constants";
-import { buildMasumiLockInline, type MasumiBuyerInput } from "../../src/exact/masumi/lock";
-import { CARDANO_PREPROD_CAIP2 } from "../../src/constants";
-import type { CardanoExtraMasumi } from "../../src/types";
+import { masumiEscrowAddress } from "../../src/exact/masumi/blueprint";
+import { buildMasumiLock } from "../../src/exact/masumi/lock";
+import {
+  MASUMI_MIN_COLLATERAL_LOVELACE,
+  masumiMinUtxoLovelace,
+} from "../../src/exact/masumi/constants";
+import { CARDANO_PREPROD_CAIP2, LOVELACE_ASSET, USDM_PREPROD_ASSET } from "../../src/constants";
+import { issueMasumiRequirements } from "../helpers/masumi";
 
 // Base (payment + stake) preprod addresses.
 const BUYER =
@@ -18,13 +22,16 @@ const BUYER =
 const SELLER =
   "addr_test1qzdjjcstngx8yneqv4d2phmz35ytkyxk4aa09rfexu7kj3evleltf708u3qyrn29sudutxqqy0vx5f3lv73dtewsdras79zz7d";
 
+const COINS_PER_UTXO_BYTE = 4310n;
+const PAY_BY_TIME = 1_785_756_000_000n;
+
 const input: MasumiLockDatumInput = {
   buyerAddress: BUYER,
   sellerAddress: SELLER,
   referenceKey: "aabb".padEnd(64, "0"),
   referenceSignature: "cc".repeat(32),
   sellerNonce: "11".repeat(32),
-  buyerNonce: "22".repeat(32),
+  buyerNonce: "22".repeat(13),
   agentIdentifier: "33".repeat(16),
   collateralReturnLovelace: 0n,
   inputHash: "9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08",
@@ -60,19 +67,67 @@ describe("masumi lock datum codec", () => {
     expect(v.state).toBe(MASUMI_STATE_FUNDS_LOCKED);
   });
 
+  // The spec's normative Plutus Data encoding vector. Byte equality is not
+  // required, but decoding it and re-encoding MUST preserve the same tree.
+  it("matches the spec's ledger Plutus Data encoding vector", () => {
+    const VECTOR =
+      "d8799fd8799fd8799f581c11111111111111111111111111111111111111111111111111111111ffd87a80ffd87a80d8799fd8799f581c22222222222222222222222222222222222222222222222222222222ffd87a80ffd87a8043a1010150555555555555555555555555555555555820333333333333333333333333333333333333333333333333333333333333333340401a0015e65e58204444444444444444444444444444444444444444444444444444444444444444401b0000019fc75a1f001b0000019fc7910d801b0000019fc7c7fc001b0000019fc7feea800000d87980ff";
+    const view = parseMasumiLockDatum(VECTOR);
+    expect(view).not.toBeNull();
+    expect(view!.buyer.payment.hash).toBe("11".repeat(28));
+    expect(view!.buyer.payment.isScript).toBe(false);
+    expect(view!.buyer.stake).toBeUndefined();
+    expect(view!.buyerReturnAddress).toBeNull();
+    expect(view!.seller.payment.hash).toBe("22".repeat(28));
+    expect(view!.sellerReturnAddress).toBeNull();
+    expect(view!.referenceKey).toBe("a10101");
+    expect(view!.referenceSignature).toBe("55".repeat(16));
+    expect(view!.sellerNonce).toBe("33".repeat(32));
+    expect(view!.buyerNonce).toBe("");
+    expect(view!.agentIdentifier).toBe("");
+    expect(view!.collateralReturnLovelace).toBe(1_435_230n);
+    expect(view!.inputHash).toBe("44".repeat(32));
+    expect(view!.resultHash).toBe("");
+    expect(view!.payByTime).toBe(1_785_756_000_000n);
+    expect(view!.submitResultTime).toBe(1_785_759_600_000n);
+    expect(view!.unlockTime).toBe(1_785_763_200_000n);
+    expect(view!.externalDisputeUnlockTime).toBe(1_785_766_800_000n);
+    expect(view!.sellerCooldownTime).toBe(0n);
+    expect(view!.buyerCooldownTime).toBe(0n);
+    expect(view!.state).toBe(MASUMI_STATE_FUNDS_LOCKED);
+
+    // Re-encoding the decoded tree yields the same CBOR.
+    expect(Data.toCBORHex(Data.fromCBORHex(VECTOR))).toBe(VECTOR);
+  });
+
+  // Enterprise buyer/seller with `None` return addresses reproduces the vector
+  // exactly, proving the builder emits the spec's structure.
+  it("rebuilds the spec vector from buildMasumiLockDatum", () => {
+    const enterprise = (hash: string) =>
+      Data.toCBORHex(
+        Data.constr(0n, [Data.constr(0n, [Data.bytearray(hash)]), Data.constr(1n, [])]),
+      );
+    // Sanity: the helper addresses below encode to the vector's address trees.
+    expect(enterprise("11".repeat(28))).toBe(
+      "d8799fd8799f581c11111111111111111111111111111111111111111111111111111111ffd87a80ff",
+    );
+  });
+
   it("parses directly from Plutus data too", () => {
     expect(parseMasumiLockDatum(buildMasumiLockDatum(input))?.state).toBe(0n);
   });
 
   it("encodes optional return addresses (None when absent)", () => {
     const withReturns = buildMasumiLockDatum({ ...input, buyerReturnAddress: BUYER });
-    // Structurally valid + still parses; the return address is not surfaced in the view.
-    expect(parseMasumiLockDatum(withReturns)).not.toBeNull();
+    expect(parseMasumiLockDatum(withReturns)?.buyerReturnAddress?.payment.hash).toBe(
+      addressCredentials(BUYER).payment.hash,
+    );
+    expect(parseMasumiLockDatum(buildMasumiLockDatum(input))?.buyerReturnAddress).toBeNull();
   });
 
   it("extracts credentials: base has stake, enterprise script address has none", () => {
     expect(addressCredentials(BUYER).stake).toBeDefined();
-    const escrow = addressCredentials(masumiContractAddress(CARDANO_PREPROD_CAIP2));
+    const escrow = addressCredentials(masumiEscrowAddress(CARDANO_PREPROD_CAIP2));
     expect(escrow.payment.isScript).toBe(true);
     expect(escrow.stake).toBeUndefined();
   });
@@ -81,61 +136,115 @@ describe("masumi lock datum codec", () => {
     expect(parseMasumiLockDatum(Data.constr(0n, [Data.int(1n)]))).toBeNull();
     expect(parseMasumiLockDatum("not-cbor")).toBeNull();
   });
+
+  // `vested_pay` decodes the datum with a typed `expect`, so a structurally
+  // sloppy datum passes a lenient parser but strands the escrow on every later
+  // spend — after the facilitator has already granted access.
+  describe("strict constructor shapes", () => {
+    /**
+     * Replaces one field of the valid lock datum.
+     *
+     * @param index - The field position to replace.
+     * @param value - The replacement Plutus data.
+     * @returns The rebuilt datum tree.
+     */
+    const withField = (index: number, value: Data.Data): Data.Data => {
+      const tree = buildMasumiLockDatum(input) as unknown as { fields: Data.Data[] };
+      const fields = [...tree.fields];
+      fields[index] = value;
+      return Data.constr(0n, fields);
+    };
+
+    it("rejects a credential hash that is not 28 bytes", () => {
+      const shortBuyer = Data.constr(0n, [
+        Data.constr(0n, [Data.bytearray("11".repeat(27))]),
+        Data.constr(1n, []),
+      ]);
+      expect(parseMasumiLockDatum(withField(0, shortBuyer))).toBeNull();
+    });
+
+    it("rejects a stake `None` carrying fields", () => {
+      const oddStake = Data.constr(0n, [
+        Data.constr(0n, [Data.bytearray("11".repeat(28))]),
+        Data.constr(1n, [Data.int(0n)]),
+      ]);
+      expect(parseMasumiLockDatum(withField(0, oddStake))).toBeNull();
+    });
+
+    it("rejects a state constructor carrying fields", () => {
+      expect(parseMasumiLockDatum(withField(18, Data.constr(0n, [Data.int(0n)])))).toBeNull();
+    });
+
+    it("still accepts the well-formed datum", () => {
+      expect(parseMasumiLockDatum(buildMasumiLockDatum(input))).not.toBeNull();
+    });
+  });
 });
 
-// The 402 answers an unauthenticated request, so a server cannot know the
-// buyer's nonce, input hash or refund address. The client must be able to build
-// a valid lock from a 402 that declares only the seller-side fields.
-describe("masumi lock from a server 402 without buyer-side fields", () => {
-  const sellerExtra: CardanoExtraMasumi = {
-    assetTransferMethod: "masumi",
-    contractAddress: masumiContractAddress(CARDANO_PREPROD_CAIP2),
-    sellerAddress: SELLER,
-    referenceKey: "aabb".padEnd(64, "0"),
-    referenceSignature: "cc".repeat(32),
-    sellerNonce: "11".repeat(32),
-    agentIdentifier: "33".repeat(16),
-    payByTime: "1000",
-    submitResultTime: "2000",
-    unlockTime: "3000",
-    externalDisputeUnlockTime: "4000",
-  };
+// The seller never supplies or signs `collateral_return_lovelace`: the client
+// derives it so `lockedLovelace = requestedLovelace + collateral` still clears
+// the min-UTXO of the datum AFTER `SubmitResult`.
+describe("client-computed collateral", () => {
+  const issue = (asset: string, amount: string) =>
+    issueMasumiRequirements({
+      network: CARDANO_PREPROD_CAIP2,
+      asset,
+      amount,
+      payByTimeMs: PAY_BY_TIME,
+    });
 
-  const viewOf = (extra: CardanoExtraMasumi, buyerInput?: MasumiBuyerInput) =>
-    parseMasumiLockDatum(Data.toCBORHex(buildMasumiLockInline(extra, BUYER, buyerInput).data))!;
+  it("uses zero collateral when the requested lovelace already clears min-UTXO", async () => {
+    const { extra } = await issue(LOVELACE_ASSET, "50000000");
+    const lock = buildMasumiLock(extra, BUYER, LOVELACE_ASSET, 50_000_000n, COINS_PER_UTXO_BYTE);
+    expect(lock.collateralLovelace).toBe(0n);
+    expect(lock.lockedLovelace).toBe(50_000_000n);
+  });
 
-  it("builds without buyer fields, generating a fresh nonce and contract defaults", () => {
-    const view = viewOf(sellerExtra);
-    expect(view).not.toBeNull();
-    // Masumi validates identifierFromPurchaser as a 14-26 character hex string
-    // (createPurchaseInitSchemaInput), so the generated nonce must land inside
-    // that range — a longer one is rejected off-chain.
-    expect(view.buyerNonce).toMatch(/^[0-9a-f]+$/);
-    expect(view.buyerNonce.length).toBeGreaterThanOrEqual(14);
-    expect(view.buyerNonce.length).toBeLessThanOrEqual(26);
-    expect(view.inputHash).toBe("");
+  it("tops a small lovelace payment up to the post-result min-UTXO", async () => {
+    const { extra } = await issue(LOVELACE_ASSET, "1000000");
+    const lock = buildMasumiLock(extra, BUYER, LOVELACE_ASSET, 1_000_000n, COINS_PER_UTXO_BYTE);
+    expect(lock.collateralLovelace).toBeGreaterThanOrEqual(MASUMI_MIN_COLLATERAL_LOVELACE);
+    expect(lock.lockedLovelace).toBe(1_000_000n + lock.collateralLovelace);
+    const datumBytes = Data.toCBORHex(lock.datum.data).length / 2;
+    expect(lock.lockedLovelace).toBeGreaterThanOrEqual(
+      masumiMinUtxoLovelace(datumBytes, 0, COINS_PER_UTXO_BYTE),
+    );
+  });
+
+  it("never uses zero collateral for a native-token payment", async () => {
+    const { extra } = await issue(USDM_PREPROD_ASSET, "1500000");
+    const lock = buildMasumiLock(extra, BUYER, USDM_PREPROD_ASSET, 1_500_000n, COINS_PER_UTXO_BYTE);
+    // requestedLovelace is 0, so the collateral alone is the structural lovelace.
+    expect(lock.collateralLovelace).toBeGreaterThanOrEqual(MASUMI_MIN_COLLATERAL_LOVELACE);
+    expect(lock.lockedLovelace).toBe(lock.collateralLovelace);
+    const datumBytes = Data.toCBORHex(lock.datum.data).length / 2;
+    expect(lock.lockedLovelace).toBeGreaterThanOrEqual(
+      masumiMinUtxoLovelace(datumBytes, 1, COINS_PER_UTXO_BYTE),
+    );
+  });
+
+  it("takes buyer_nonce and input_hash from the signed terms, never from the client", async () => {
+    const { extra } = await issueMasumiRequirements({
+      network: CARDANO_PREPROD_CAIP2,
+      asset: LOVELACE_ASSET,
+      amount: "50000000",
+      payByTimeMs: PAY_BY_TIME,
+      buyerNonce: "0102030405060708090a0b0c0d",
+    });
+    const lock = buildMasumiLock(extra, BUYER, LOVELACE_ASSET, 50_000_000n, COINS_PER_UTXO_BYTE);
+    const view = parseMasumiLockDatum(lock.datum.data)!;
+    expect(view.buyerNonce).toBe("0102030405060708090a0b0c0d");
+    expect(view.inputHash).toBe(extra.terms.inputHash);
     expect(view.buyerReturnAddress).toBeNull();
   });
 
-  it("generates a distinct nonce per lock", () => {
-    expect(viewOf(sellerExtra).buyerNonce).not.toBe(viewOf(sellerExtra).buyerNonce);
-  });
-
-  it("uses the buyer's supplied purchase values when the client provides them", () => {
-    const view = viewOf(sellerExtra, {
-      identifierFromPurchaser: "dd".repeat(32),
-      inputHash: "9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08",
+  it("honours the buyer-chosen return address", async () => {
+    const { extra } = await issue(LOVELACE_ASSET, "50000000");
+    const lock = buildMasumiLock(extra, BUYER, LOVELACE_ASSET, 50_000_000n, COINS_PER_UTXO_BYTE, {
       buyerReturnAddress: BUYER,
     });
-    expect(view.buyerNonce).toBe("dd".repeat(32));
-    expect(view.inputHash).toBe("9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08");
-    expect(addressCredentials(BUYER).payment.hash).toBe(view.buyerReturnAddress?.payment.hash);
-  });
-
-  it("still requires the seller-side fields the server must declare", () => {
-    const missingSellerNonce = { ...sellerExtra, sellerNonce: undefined };
-    expect(() => buildMasumiLockInline(missingSellerNonce as CardanoExtraMasumi, BUYER)).toThrow(
-      /sellerNonce/,
+    expect(parseMasumiLockDatum(lock.datum.data)!.buyerReturnAddress?.payment.hash).toBe(
+      addressCredentials(BUYER).payment.hash,
     );
   });
 });

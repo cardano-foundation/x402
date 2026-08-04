@@ -2,10 +2,17 @@
 export * from "./exact";
 
 // Masumi escrow (vested_pay) support
+export * from "./exact/masumi/blueprint";
 export * from "./exact/masumi/constants";
 export * from "./exact/masumi/datum";
-export { buildMasumiLockInline, type MasumiBuyerInput } from "./exact/masumi/lock";
-export { verifyMasumiLock } from "./exact/masumi/verify";
+export * from "./exact/masumi/digests";
+export * from "./exact/masumi/identifier";
+export * from "./exact/masumi/issue";
+export { verifySellerTermsSignature } from "./exact/masumi/cose";
+export { jcs, jcsBytes } from "./exact/masumi/jcs";
+export { buildMasumiLock, type MasumiBuyerInput, type MasumiLock } from "./exact/masumi/lock";
+export { validateMasumiExtra, type MasumiSchemaResult } from "./exact/masumi/schema";
+export { verifyMasumiAuthorization, verifyMasumiLock } from "./exact/masumi/verify";
 
 // Script method (generic contract locking with arbitrary datums)
 export { buildScriptDatumInline } from "./exact/script/datum";
@@ -15,6 +22,9 @@ export * from "./types";
 
 // Constants
 export * from "./constants";
+
+// Submission / confirmation policy helpers
+export * from "./policy";
 
 // Signer protocols
 export * from "./signer";

@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { beforeAll, describe, expect, it } from "vitest";
 import { ExactCardanoScheme as ExactCardanoClient } from "../../src/exact/client/scheme";
 import {
   ExactCardanoScheme as ExactCardanoFacilitator,
@@ -9,10 +9,23 @@ import {
   CARDANO_MAINNET_CAIP2,
   CARDANO_NETWORKS,
   CARDANO_PREPROD_CAIP2,
+  LOVELACE_ASSET,
   USDM_MAINNET_ASSET,
 } from "../../src/constants";
 import type { ClientCardanoSigner, FacilitatorCardanoSigner } from "../../src/signer";
+import { decodeCardanoTransaction } from "../../src/utils";
+import { validateMasumiExtra } from "../../src/exact/masumi/schema";
+import { issueMasumiRequirements } from "../helpers/masumi";
 import type { PaymentRequirements } from "@x402/core/types";
+import { buildSignedTx } from "../helpers/buildSignedTx";
+import {
+  freshPreprodAddress,
+  NONCE_REF,
+  stubFacilitatorSigner as stubFacilitator,
+  TTL_SLOT,
+} from "../helpers/stubs";
+
+const PREPROD = CARDANO_PREPROD_CAIP2;
 
 const TX_HASH = "a".repeat(64);
 
@@ -79,10 +92,63 @@ describe("ExactCardanoScheme client", () => {
   it("returns a payload from the signer for valid requirements", async () => {
     const result = await client.createPaymentPayload(2, buildRequirements());
     expect(result.x402Version).toBe(2);
+    // An absent `submissionPolicy` normalizes to `server`, and the payload
+    // records the mode the signer was asked to honour.
     expect(result.payload).toEqual({
       transaction: "AAAA",
       nonce: `${TX_HASH}#0`,
+      submissionMode: "server",
     });
+  });
+
+  it("selects the mode the server's submissionPolicy dictates", async () => {
+    const seen: string[] = [];
+    const recordingSigner: ClientCardanoSigner = {
+      getAddress: () => "addr1qxsomeaddress00",
+      buildAndSignPaymentTransaction: input => {
+        seen.push(input.submissionMode);
+        return {
+          transaction: "AAAA",
+          nonce: `${TX_HASH}#0`,
+          submissionMode: input.submissionMode,
+        };
+      },
+    };
+    const c = new ExactCardanoClient(recordingSigner);
+    await c.createPaymentPayload(2, buildRequirements({ extra: { submissionPolicy: "client" } }));
+    expect(seen).toEqual(["client"]);
+
+    // `either` leaves the choice to the client's configured preference.
+    const preferring = new ExactCardanoClient(recordingSigner, "client");
+    const result = await preferring.createPaymentPayload(
+      2,
+      buildRequirements({ extra: { submissionPolicy: "either" } }),
+    );
+    expect((result.payload as { submissionMode: string }).submissionMode).toBe("client");
+  });
+
+  it("rejects requirements carrying an invalid policy", async () => {
+    await expect(
+      client.createPaymentPayload(
+        2,
+        buildRequirements({ extra: { confirmationPolicy: { l1Confirmations: 99 } } }),
+      ),
+    ).rejects.toThrow(/invalid submission\/confirmation policy/);
+  });
+
+  it("rejects a signer that ignored client-submission mode", async () => {
+    const lyingSigner: ClientCardanoSigner = {
+      getAddress: () => "addr1qxsomeaddress00",
+      buildAndSignPaymentTransaction: () => ({
+        transaction: "AAAA",
+        nonce: `${TX_HASH}#0`,
+        submissionMode: "server" as const,
+      }),
+    };
+    const c = new ExactCardanoClient(lyingSigner);
+    await expect(
+      c.createPaymentPayload(2, buildRequirements({ extra: { submissionPolicy: "client" } })),
+    ).rejects.toThrow(/honoured submissionMode server, expected client/);
   });
 
   it("rejects signer responses with invalid nonce", async () => {
@@ -109,9 +175,28 @@ describe("ExactCardanoScheme facilitator", () => {
     expect(facilitator.getSigners(CARDANO_MAINNET_CAIP2)).toEqual(["addr1qfacilitator00"]);
   });
 
-  it("returns undefined for getExtra (no metadata required by default)", () => {
+  it("advertises its capabilities via getExtra", () => {
     const facilitator = new ExactCardanoFacilitator(stubFacilitatorSigner);
-    expect(facilitator.getExtra(CARDANO_PREPROD_CAIP2)).toBeUndefined();
+    expect(facilitator.getExtra(CARDANO_PREPROD_CAIP2)).toEqual({
+      assetTransferMethods: ["default", "masumi", "script"],
+      // No Hydra client is configured, so only L1 is offered.
+      settlementLayers: ["l1"],
+      // This stub signer has no evidence hook, so client submission is not offered.
+      submissionModes: ["server"],
+      l1Confirmations: {
+        server: { minimum: 0, maximum: 20 },
+        client: { minimum: 0, maximum: 20 },
+      },
+    });
+  });
+
+  it("advertises client submission once it can authenticate evidence", () => {
+    const facilitator = new ExactCardanoFacilitator({
+      ...stubFacilitatorSigner,
+      getTransactionEvidence: async () => ({ status: "confirmed" as const, confirmations: 3 }),
+    });
+    const extra = facilitator.getExtra(CARDANO_PREPROD_CAIP2)!;
+    expect(extra.submissionModes).toEqual(["server", "client"]);
   });
 
   it("rejects payloads when networks differ", async () => {
@@ -165,31 +250,24 @@ describe("ExactCardanoScheme facilitator", () => {
     expect(supportedCardanoNetworks()).toEqual(CARDANO_NETWORKS);
   });
 
-  it("rejects script assetTransferMethod by default to avoid silent acceptance", async () => {
-    // The base implementation cannot reconstruct script addresses; integrators
-    // must override `runMethodSpecificChecks`. Until then, script payments are
-    // refused even when the funds and address match.
+  it("rejects a script payment whose payTo is not the declared script address", async () => {
     class TestFacilitator extends ExactCardanoFacilitator {}
     const facilitator = new TestFacilitator(stubFacilitatorSigner);
-    // We cannot easily exercise the full happy path without a CSL build, but
-    // we can confirm the method rejects by reaching into the protected hook.
     const result = await (
       facilitator as unknown as {
         runMethodSpecificChecks: (
-          extra: Record<string, unknown> | undefined,
           requirements: PaymentRequirements,
           decoded: unknown,
-          payer: string,
+          context: unknown,
         ) => Promise<{ ok: true } | { ok: false; reason: string }>;
       }
     ).runMethodSpecificChecks(
-      {
-        assetTransferMethod: "script",
-        scriptHash: "deadbeef",
-      },
-      buildRequirements({ payTo: RECIPIENT }),
+      buildRequirements({
+        payTo: RECIPIENT,
+        extra: { assetTransferMethod: "script", scriptHash: "deadbeef" },
+      }),
       { outputs: [] },
-      "addr1qpayer00",
+      { payload: { transaction: "AA", nonce: `${TX_HASH}#0` }, payer: "addr1qpayer00" },
     );
     expect(result).toEqual({
       ok: false,
@@ -197,101 +275,316 @@ describe("ExactCardanoScheme facilitator", () => {
     });
   });
 
-  it("rejects a second concurrent settle as duplicate", async () => {
+  describe("settlement", () => {
+    // `settle()` re-derives its state from the real transaction, so these
+    // isolation tests need a decodable one. Verification itself is stubbed out
+    // by overriding verify(), which settle() still dispatches through.
+    let transaction: string;
+    let reqs: PaymentRequirements;
+
+    /** A facilitator whose verification always passes. */
     class FakeOk extends ExactCardanoFacilitator {
       override async verify() {
         return { isValid: true, payer: "addr1qpayer00" };
       }
     }
-    const facilitator = new FakeOk(stubFacilitatorSigner);
-    const reqs = buildRequirements();
-    const payload = {
+
+    /**
+     * Builds a payment payload around the shared fixture transaction.
+     *
+     * @param submissionMode - Optional payload submission mode.
+     * @returns The payment payload.
+     */
+    const payloadFor = (submissionMode?: "server" | "client") => ({
       x402Version: 2,
       accepted: reqs,
-      payload: { transaction: "AAAA", nonce: `${TX_HASH}#0` },
-    };
-    const first = await facilitator.settle(payload, reqs);
-    const second = await facilitator.settle(payload, reqs);
-    expect(first.success).toBe(true);
-    expect(second.success).toBe(false);
-    expect(second.errorReason).toBe("duplicate_settlement");
-  });
+      payload: { transaction, nonce: NONCE_REF, ...(submissionMode ? { submissionMode } : {}) },
+    });
 
-  it("rejects mempool-only settlements when acceptMempool is disabled (default)", async () => {
-    const mempoolSigner: FacilitatorCardanoSigner = {
-      ...stubFacilitatorSigner,
-      submitTransaction: async () => ({ txHash: "abc", status: "mempool" }),
-    };
-    // Bypass verify() by stubbing it via subclass for this isolation test.
-    class FakeOk extends ExactCardanoFacilitator {
-      override async verify() {
-        return { isValid: true, payer: "addr1qpayer00" };
-      }
-    }
-    const facilitator = new FakeOk(mempoolSigner);
-    const reqs = buildRequirements();
-    const settle = await facilitator.settle(
-      {
-        x402Version: 2,
-        accepted: reqs,
-        payload: { transaction: "AAAA", nonce: `${TX_HASH}#0` },
-      },
-      reqs,
-    );
-    expect(settle.success).toBe(false);
-    expect(settle.errorReason).toBe("exact_cardano_settlement_not_confirmed");
-    expect(settle.transaction).toBe("abc");
-  });
+    beforeAll(async () => {
+      const built = await buildSignedTx({
+        payTo: await freshPreprodAddress(),
+        asset: LOVELACE_ASSET,
+        amount: 2_000_000n,
+        nonceUtxoRef: NONCE_REF,
+        ttlSlot: TTL_SLOT,
+        network: PREPROD,
+      });
+      transaction = built.transaction;
+      reqs = buildRequirements({ network: PREPROD, asset: LOVELACE_ASSET, amount: "2000000" });
+    }, 60_000);
 
-  it("accepts mempool-only settlements when acceptMempool is true", async () => {
-    const mempoolSigner: FacilitatorCardanoSigner = {
-      ...stubFacilitatorSigner,
-      submitTransaction: async () => ({ txHash: "abc", status: "mempool" }),
-    };
-    class FakeOk extends ExactCardanoFacilitator {
-      override async verify() {
-        return { isValid: true, payer: "addr1qpayer00" };
-      }
-    }
-    const facilitator = new FakeOk(mempoolSigner, { acceptMempool: true });
-    const reqs = buildRequirements();
-    const settle = await facilitator.settle(
-      {
-        x402Version: 2,
-        accepted: reqs,
-        payload: { transaction: "AAAA", nonce: `${TX_HASH}#0` },
-      },
-      reqs,
-    );
-    expect(settle.success).toBe(true);
-    expect((settle.extra as { status?: string } | undefined)?.status).toBe("mempool");
-  });
+    it("reports the canonical transaction id, not the submitter's echo", async () => {
+      const facilitator = new FakeOk(stubFacilitator());
+      const first = await facilitator.settle(payloadFor(), reqs);
+      expect(first.success).toBe(true);
+      expect(first.transaction).toBe(decodeCardanoTransaction(transaction).txHash);
+    });
 
-  it("surfaces the underlying error message when submission throws", async () => {
-    const throwingSigner: FacilitatorCardanoSigner = {
-      ...stubFacilitatorSigner,
-      submitTransaction: async () => {
-        throw new Error("BadInputsUTxO (input already spent)");
-      },
-    };
-    class FakeOk extends ExactCardanoFacilitator {
-      override async verify() {
-        return { isValid: true, payer: "addr1qpayer00" };
-      }
-    }
-    const facilitator = new FakeOk(throwingSigner);
-    const reqs = buildRequirements();
-    const settle = await facilitator.settle(
-      {
-        x402Version: 2,
-        accepted: reqs,
-        payload: { transaction: "AAAA", nonce: `${TX_HASH}#0` },
-      },
-      reqs,
-    );
-    expect(settle.success).toBe(false);
-    expect(settle.errorReason).toBe("exact_cardano_settlement_failed");
-    expect(settle.errorMessage).toContain("BadInputsUTxO");
+    // The race the spec's mitigation targets: two callers reaching submission
+    // before either has landed.
+    it("rejects a concurrent second settle for the same transaction", async () => {
+      let release: () => void = () => {};
+      let signalReachedSubmit: () => void = () => {};
+      const gate = new Promise<void>(resolve => {
+        release = resolve;
+      });
+      // Resolves once the first call is genuinely mid-submission, so the second
+      // call races a claim that is in flight rather than one not yet taken.
+      const reachedSubmit = new Promise<void>(resolve => {
+        signalReachedSubmit = resolve;
+      });
+      let submits = 0;
+      const facilitator = new FakeOk(
+        stubFacilitator({
+          submitTransaction: async () => {
+            submits += 1;
+            signalReachedSubmit();
+            await gate;
+            return { txHash: decodeCardanoTransaction(transaction).txHash, status: "confirmed" };
+          },
+          getTransactionEvidence: async () => ({ status: "confirmed", confirmations: 1 }),
+        }),
+      );
+      const first = facilitator.settle(payloadFor(), reqs);
+      await reachedSubmit;
+
+      const second = await facilitator.settle(payloadFor(), reqs);
+      expect(second.success).toBe(false);
+      expect(second.errorReason).toBe("duplicate_settlement");
+
+      release();
+      expect((await first).success).toBe(true);
+      // The duplicate never reached the node.
+      expect(submits).toBe(1);
+    });
+
+    // A transaction that has not reached the required depth returns
+    // payment_pending; the spec REQUIRES the paid retry to resume observing it
+    // rather than be refused, or a fully paid payment could never be released.
+    it("resumes a pending settlement on retry without submitting again", async () => {
+      let submits = 0;
+      let confirmations = 0;
+      const facilitator = new FakeOk(
+        stubFacilitator({
+          submitTransaction: async () => {
+            submits += 1;
+            return { txHash: "abc", status: "confirmed" };
+          },
+          getTransactionEvidence: async () => ({ status: "confirmed", confirmations }),
+        }),
+        { confirmationTimeoutMs: 1, confirmationPollMs: 1 },
+      );
+      const strict = buildRequirements({
+        ...reqs,
+        extra: { confirmationPolicy: { l1Confirmations: 2 } },
+      });
+
+      const pending = await facilitator.settle({ ...payloadFor(), accepted: strict }, strict);
+      expect(pending.success).toBe(false);
+      expect(pending.errorReason).toBe("payment_pending");
+
+      // The chain advances; the retry must now succeed.
+      confirmations = 2;
+      const retry = await facilitator.settle({ ...payloadFor(), accepted: strict }, strict);
+      expect(retry.success).toBe(true);
+      expect(retry.extra).toMatchObject({ confirmations: 2 });
+      expect(submits).toBe(1);
+    });
+
+    // Most providers expose no mempool read, so a just-broadcast transaction is
+    // briefly indistinguishable from an unknown one. That is pending, not proof
+    // the transaction does not exist.
+    it("reports a just-submitted but not-yet-observable transaction as pending", async () => {
+      const facilitator = new FakeOk(
+        stubFacilitator({
+          submitTransaction: async () => ({ txHash: "abc", status: "mempool" }),
+          getTransactionEvidence: async () => ({ status: "unknown", confirmations: -2 }),
+        }),
+        { confirmationTimeoutMs: 1, confirmationPollMs: 1 },
+      );
+      const settle = await facilitator.settle(payloadFor(), reqs);
+      expect(settle.success).toBe(false);
+      // Not `evidence_mismatch`: the node took it, we just cannot see it yet.
+      expect(settle.errorReason).toBe("exact_cardano_settlement_not_confirmed");
+      expect(settle.extra).toMatchObject({ status: "mempool" });
+    });
+
+    // A signer that broadcasts and then waits for inclusion throws on a
+    // confirmation timeout with the transaction already in flight. Releasing the
+    // claim there would make the retry rebroadcast a transaction that may
+    // already have landed — and typically fail on spent inputs, leaving the
+    // payer charged with no resource.
+    it("keeps the claim when submission throws after the transaction landed", async () => {
+      let submits = 0;
+      const facilitator = new FakeOk(
+        stubFacilitator({
+          submitTransaction: async () => {
+            submits += 1;
+            // Broadcast succeeded; the wait for confirmation did not.
+            throw new Error("timed out awaiting confirmation");
+          },
+          // The ledger nonetheless has it.
+          getTransactionEvidence: async () => ({ status: "confirmed", confirmations: 1 }),
+        }),
+        { confirmationTimeoutMs: 1, confirmationPollMs: 1 },
+      );
+
+      // The throw is recovered from: the transaction is on-chain, so this
+      // settles rather than reporting a failed payment.
+      const first = await facilitator.settle(payloadFor(), reqs);
+      expect(first.success).toBe(true);
+      expect(first.extra).toMatchObject({ confirmations: 1 });
+
+      // And the retry resumes observation without a second broadcast.
+      const retry = await facilitator.settle(payloadFor(), reqs);
+      expect(retry.success).toBe(true);
+      expect(submits).toBe(1);
+    });
+
+    it("frees the claim when the transaction never reached the ledger", async () => {
+      let submits = 0;
+      const facilitator = new FakeOk(
+        stubFacilitator({
+          submitTransaction: async () => {
+            submits += 1;
+            throw new Error("BadInputsUTxO (input already spent)");
+          },
+          getTransactionEvidence: async () => ({ status: "unknown", confirmations: -2 }),
+        }),
+      );
+      const failed = await facilitator.settle(payloadFor(), reqs);
+      expect(failed.success).toBe(false);
+      expect(failed.errorReason).toBe("exact_cardano_settlement_failed");
+      expect(failed.errorMessage).toContain("BadInputsUTxO");
+
+      // Nothing landed, so a retry is allowed to attempt submission again.
+      await facilitator.settle(payloadFor(), reqs);
+      expect(submits).toBe(2);
+    });
+
+    it("refuses a retry that flips the normalized submission mode", async () => {
+      const facilitator = new FakeOk(stubFacilitator());
+      const either = buildRequirements({ ...reqs, extra: { submissionPolicy: "either" } });
+      const first = await facilitator.settle({ ...payloadFor("server"), accepted: either }, either);
+      expect(first.success).toBe(true);
+      const flipped = await facilitator.settle(
+        { ...payloadFor("client"), accepted: either },
+        either,
+      );
+      expect(flipped.success).toBe(false);
+      expect(flipped.errorReason).toBe("invalid_exact_cardano_payload_submission_mode_mismatch");
+    });
+
+    it("reports the strongest verified evidence in the response extra", async () => {
+      const facilitator = new FakeOk(
+        stubFacilitator({
+          getTransactionEvidence: async () => ({ status: "confirmed", confirmations: 4 }),
+        }),
+      );
+      const settle = await facilitator.settle(payloadFor(), reqs);
+      expect(settle.success).toBe(true);
+      expect(settle.extra).toMatchObject({
+        status: "confirmed",
+        submissionMode: "server",
+        confirmations: 4,
+      });
+    });
+
+    it("reports payment_pending when evidence is below the confirmation policy", async () => {
+      const facilitator = new FakeOk(
+        stubFacilitator({
+          getTransactionEvidence: async () => ({ status: "confirmed", confirmations: 0 }),
+        }),
+        { confirmationTimeoutMs: 1, confirmationPollMs: 1 },
+      );
+      const strict = buildRequirements({
+        ...reqs,
+        extra: { confirmationPolicy: { l1Confirmations: 3 } },
+      });
+      const settle = await facilitator.settle({ ...payloadFor(), accepted: strict }, strict);
+      expect(settle.success).toBe(false);
+      expect(settle.errorReason).toBe("payment_pending");
+      expect(settle.extra).toMatchObject({ status: "pending", confirmations: 0 });
+    });
+
+    it("rejects mempool-only settlements when acceptMempool is disabled (default)", async () => {
+      const facilitator = new FakeOk(
+        stubFacilitator({
+          submitTransaction: async () => ({ txHash: "abc", status: "mempool" }),
+          getTransactionEvidence: undefined,
+        }),
+      );
+      const settle = await facilitator.settle(payloadFor(), reqs);
+      expect(settle.success).toBe(false);
+      expect(settle.errorReason).toBe("exact_cardano_settlement_not_confirmed");
+    });
+
+    it("accepts mempool-only settlements when acceptMempool is true and the policy allows -1", async () => {
+      const facilitator = new FakeOk(
+        stubFacilitator({
+          submitTransaction: async () => ({ txHash: "abc", status: "mempool" }),
+          getTransactionEvidence: undefined,
+        }),
+        { acceptMempool: true },
+      );
+      const lenient = buildRequirements({
+        ...reqs,
+        extra: { confirmationPolicy: { l1Confirmations: -1 } },
+      });
+      const settle = await facilitator.settle({ ...payloadFor(), accepted: lenient }, lenient);
+      expect(settle.success).toBe(true);
+      expect(settle.extra).toMatchObject({ status: "mempool", confirmations: -1 });
+    });
+
+    it("surfaces the underlying error message when submission throws", async () => {
+      const facilitator = new FakeOk(
+        stubFacilitator({
+          submitTransaction: async () => {
+            throw new Error("BadInputsUTxO (input already spent)");
+          },
+        }),
+      );
+      const settle = await facilitator.settle(payloadFor(), reqs);
+      expect(settle.success).toBe(false);
+      expect(settle.errorReason).toBe("exact_cardano_settlement_failed");
+      expect(settle.errorMessage).toContain("BadInputsUTxO");
+    });
+
+    it("never submits in client mode, settling from authenticated evidence alone", async () => {
+      let submitted = 0;
+      const facilitator = new FakeOk(
+        stubFacilitator({
+          submitTransaction: async () => {
+            submitted += 1;
+            return { txHash: "abc", status: "confirmed" };
+          },
+          getTransactionEvidence: async () => ({ status: "confirmed", confirmations: 2 }),
+        }),
+      );
+      const clientReqs = buildRequirements({
+        ...reqs,
+        extra: { submissionPolicy: "client" },
+      });
+      const settle = await facilitator.settle(
+        { ...payloadFor("client"), accepted: clientReqs },
+        clientReqs,
+      );
+      expect(settle.success).toBe(true);
+      expect(submitted).toBe(0);
+      expect(settle.extra).toMatchObject({ submissionMode: "client", confirmations: 2 });
+    });
+
+    it("refuses a payload whose mode the policy does not allow", async () => {
+      const facilitator = new FakeOk(stubFacilitator());
+      const serverOnly = buildRequirements({ ...reqs, extra: { submissionPolicy: "server" } });
+      const settle = await facilitator.settle(
+        { ...payloadFor("client"), accepted: serverOnly },
+        serverOnly,
+      );
+      expect(settle.success).toBe(false);
+      expect(settle.errorReason).toBe("invalid_exact_cardano_payload_submission_mode_mismatch");
+    });
   });
 });
 
@@ -327,7 +620,11 @@ describe("ExactCardanoScheme server", () => {
     expect(small.amount).toBe("1000000");
   });
 
-  it("enhancePaymentRequirements merges supported kind extra", async () => {
+  // `/supported` extra is capability advertisement, not payload semantics.
+  // Merging it into the requirements would put `assetTransferMethods`,
+  // `settlementLayers` and friends inside `extra` — and the Masumi `extra` is a
+  // CLOSED object, so every Masumi 402 would be invalid on arrival.
+  it("enhancePaymentRequirements leaves the requirements' extra untouched", async () => {
     const server = new ExactCardanoServer();
     const baseRequirements = buildRequirements({ extra: { foo: "bar" } });
     const enhanced = await server.enhancePaymentRequirements(
@@ -336,10 +633,34 @@ describe("ExactCardanoScheme server", () => {
         x402Version: 2,
         scheme: "exact",
         network: CARDANO_MAINNET_CAIP2,
-        extra: { policy: "default" },
+        extra: {
+          assetTransferMethods: ["default", "masumi", "script"],
+          settlementLayers: ["l1"],
+        },
       },
       [],
     );
-    expect(enhanced.extra).toEqual({ policy: "default", foo: "bar" });
+    expect(enhanced.extra).toEqual({ foo: "bar" });
+  });
+
+  it("keeps an issued Masumi extra schema-valid through enhancement", async () => {
+    const { requirements } = await issueMasumiRequirements({
+      network: CARDANO_PREPROD_CAIP2,
+      asset: LOVELACE_ASSET,
+      amount: "5000000",
+      payByTimeMs: 1_785_756_000_000n,
+    });
+    const server = new ExactCardanoServer();
+    const enhanced = await server.enhancePaymentRequirements(
+      requirements,
+      {
+        x402Version: 2,
+        scheme: "exact",
+        network: CARDANO_PREPROD_CAIP2,
+        extra: new ExactCardanoFacilitator(stubFacilitator()).getExtra(CARDANO_PREPROD_CAIP2),
+      },
+      [],
+    );
+    expect(validateMasumiExtra(enhanced.extra, CARDANO_PREPROD_CAIP2).ok).toBe(true);
   });
 });

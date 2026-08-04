@@ -1,436 +1,539 @@
-import { describe, expect, it } from "vitest";
-import { Data } from "@evolution-sdk/evolution";
+import { Address, Client, Data, PrivateKey, preprod } from "@evolution-sdk/evolution";
 import type { PaymentRequirements } from "@x402/core/types";
+import { beforeAll, describe, expect, it } from "vitest";
 
-import { buildMasumiLockDatum, type MasumiLockDatumInput } from "../../src/exact/masumi/datum";
+import { CARDANO_PREPROD_CAIP2, LOVELACE_ASSET, USDM_PREPROD_ASSET } from "../../src/constants";
+import { MASUMI_DEFAULT_DEPLOYMENT } from "../../src/exact/masumi/blueprint";
+import { buildMasumiLockDatum, inlineDatum } from "../../src/exact/masumi/datum";
+import { buildMasumiLock, type MasumiLock } from "../../src/exact/masumi/lock";
+import { verifyMasumiLock, type MasumiRegistryValidator } from "../../src/exact/masumi/verify";
+import type { CardanoExtraMasumi, ExactCardanoPayload } from "../../src/types";
+import { decodeCardanoTransaction, slotToPosixMs } from "../../src/utils";
+import { buildSignedTx } from "../helpers/buildSignedTx";
 import {
-  masumiContractAddress,
-  masumiMinUtxoLovelace,
-  masumiTokenLockLovelace,
-} from "../../src/exact/masumi/constants";
-import { verifyMasumiLock } from "../../src/exact/masumi/verify";
-import { CARDANO_PREPROD_CAIP2, USDM_PREPROD_ASSET } from "../../src/constants";
-import type { CardanoExtraMasumi, DecodedCardanoTransaction } from "../../src/types";
+  freshKeyAddress,
+  issueMasumiRequirements,
+  type IssueMasumiOptions,
+} from "../helpers/masumi";
+import { NONCE_REF, STUB_COINS_PER_UTXO_BYTE, TTL_SLOT } from "../helpers/stubs";
 
 const NETWORK = CARDANO_PREPROD_CAIP2;
-const CONTRACT = masumiContractAddress(NETWORK);
-const BUYER =
-  "addr_test1qp7573my7h0fyj9cd2fwrws5v6ep0e6urpx007pz0pjnmakny46m3vmfawqwv3m48dv2s6eysht6tjfdk48lrzrkmj5qpmyq7l";
-const SELLER =
-  "addr_test1qzdjjcstngx8yneqv4d2phmz35ytkyxk4aa09rfexu7kj3evleltf708u3qyrn29sudutxqqy0vx5f3lv73dtewsdras79zz7d";
+/** `pay_by_time` must be on/after the fixture TTL's wall-clock time. */
+const PAY_BY_TIME = BigInt(slotToPosixMs(NETWORK, TTL_SLOT));
 
-// pay_by_time well in the future; a valid tx TTL is a preprod slot at/before it.
-const PAY_BY_TIME = 1_900_000_000_000n;
-const VALID_TTL_SLOT = 244_000_000n; // slotToPosixMs ~ 1_899_683_200_000 <= PAY_BY_TIME
-const PAST_TTL_SLOT = 245_000_000n; // slotToPosixMs ~ 1_900_683_200_000 > PAY_BY_TIME
+/** A built Masumi payment: requirements, decoded transaction and payload. */
+interface Fixture {
+  requirements: PaymentRequirements;
+  extra: CardanoExtraMasumi;
+  decoded: ReturnType<typeof decodeCardanoTransaction>;
+  payload: ExactCardanoPayload;
+  buyer: string;
+}
 
-const baseDatum: MasumiLockDatumInput = {
-  buyerAddress: BUYER,
-  sellerAddress: SELLER,
-  referenceKey: "aa".repeat(32),
-  referenceSignature: "bb".repeat(32),
-  sellerNonce: "cc".repeat(32),
-  buyerNonce: "dd".repeat(32),
-  agentIdentifier: "ee".repeat(16),
-  collateralReturnLovelace: 0n,
-  inputHash: "",
-  payByTime: PAY_BY_TIME,
-  submitResultTime: PAY_BY_TIME + 100_000n,
-  unlockTime: PAY_BY_TIME + 200_000n,
-  externalDisputeUnlockTime: PAY_BY_TIME + 300_000n,
+type FixtureOptions = Partial<IssueMasumiOptions> & {
+  mutateLock?: (extra: CardanoExtraMasumi, buyer: string) => MasumiLock;
 };
-
-const datumHex = (overrides: Partial<MasumiLockDatumInput> = {}): string =>
-  Data.toCBORHex(buildMasumiLockDatum({ ...baseDatum, ...overrides }));
 
 /**
- * Rebuilds a lock datum with one `Constr` field replaced, for invariants the
- * builder can't express (a fresh lock always writes empty result_hash / zero
- * cooldowns).
+ * Issues a Masumi 402 and builds the matching signed lock transaction.
  *
- * @param datum - The source datum CBOR hex.
- * @param index - The datum field index to replace.
- * @param value - The replacement Plutus data.
- * @returns The mutated datum CBOR hex.
+ * @param options - Overrides forwarded to the issuer, plus an optional lock override.
+ * @returns The complete fixture.
  */
-const withField = (datum: string, index: number, value: Data.Data): string => {
-  const fields = [...(Data.fromCBORHex(datum) as unknown as { fields: Data.Data[] }).fields];
-  fields[index] = value;
-  return Data.toCBORHex(Data.constr(0n, fields));
-};
-
-type DecodeOpts = {
-  coin?: bigint;
-  assets?: Record<string, bigint>;
-  ttlSlot?: bigint;
-  noTtl?: boolean;
-  hasReferenceScript?: boolean;
-};
-
-const decoded = (datum: string | undefined, opts: DecodeOpts = {}): DecodedCardanoTransaction =>
-  ({
-    txHash: "ab",
-    networkId: 0,
-    ttlSlot: opts.noTtl ? undefined : (opts.ttlSlot ?? VALID_TTL_SLOT),
-    inputs: [],
-    outputs: [
-      {
-        address: CONTRACT,
-        coin: opts.coin ?? 5_000_000n,
-        assets: opts.assets ?? {},
-        datum,
-        hasReferenceScript: opts.hasReferenceScript ?? false,
-      },
-    ],
-    vkeyWitnessCount: 1,
-    scriptWitnessCount: 0,
-    signaturesValid: true,
-  }) as DecodedCardanoTransaction;
-
-const requirements = (
-  extra: Partial<CardanoExtraMasumi> = {},
-  over: Partial<PaymentRequirements> = {},
-): PaymentRequirements => ({
-  scheme: "exact",
-  network: NETWORK,
-  asset: "lovelace",
-  amount: "5000000",
-  payTo: CONTRACT,
-  maxTimeoutSeconds: 600,
-  extra: {
-    assetTransferMethod: "masumi",
-    contractAddress: CONTRACT,
-    sellerAddress: SELLER,
-    ...extra,
-  },
-  ...over,
-});
-
-const run = (opts: {
-  extra?: Partial<CardanoExtraMasumi>;
-  over?: Partial<PaymentRequirements>;
-  datum?: string;
-  payer?: string;
-  payTo?: string;
-  decode?: DecodeOpts;
-  coinsPerUtxoByte?: bigint;
-}) => {
-  const req = requirements(opts.extra, opts.over);
-  if (opts.payTo) req.payTo = opts.payTo;
-  return verifyMasumiLock(
-    req.extra as CardanoExtraMasumi,
-    req,
-    decoded(opts.datum ?? datumHex(), opts.decode),
-    opts.payer ?? BUYER,
-    opts.coinsPerUtxoByte,
-  );
-};
-
-describe("verifyMasumiLock", () => {
-  it("accepts a valid FundsLocked lock into the escrow", () => {
-    expect(run({})).toEqual({ ok: true });
+async function buildFixture(options: FixtureOptions = {}): Promise<Fixture> {
+  const asset = options.asset ?? LOVELACE_ASSET;
+  const amount = options.amount ?? "50000000";
+  const { requirements, extra } = await issueMasumiRequirements({
+    payByTimeMs: PAY_BY_TIME,
+    ...options,
+    network: NETWORK,
+    asset,
+    amount,
   });
 
-  it("accepts and clears the post-result min-UTXO when coinsPerUtxoByte is supplied", () => {
-    expect(run({ coinsPerUtxoByte: 4310n })).toEqual({ ok: true });
+  const mnemonic = PrivateKey.generateMnemonic();
+  const buyer = Address.toBech32(await Client.make(preprod).withSeed({ mnemonic }).address());
+  const lock =
+    options.mutateLock?.(extra, buyer) ??
+    buildMasumiLock(extra, buyer, asset, BigInt(amount), STUB_COINS_PER_UTXO_BYTE);
+
+  const built = await buildSignedTx({
+    payTo: requirements.payTo,
+    asset,
+    amount: BigInt(amount),
+    nonceUtxoRef: NONCE_REF,
+    ttlSlot: TTL_SLOT,
+    network: NETWORK,
+    datum: lock.datum,
+    outputLovelace: lock.lockedLovelace,
+    mnemonic,
+    fundingLovelace: lock.lockedLovelace + 10_000_000n,
   });
 
-  it("rejects when payTo is not the declared escrow address", () => {
-    expect(run({ payTo: SELLER }).ok).toBe(false);
+  return {
+    requirements,
+    extra,
+    decoded: decodeCardanoTransaction(built.transaction),
+    payload: { transaction: built.transaction, nonce: built.nonce, settlementLayer: "l1" },
+    buyer,
+  };
+}
+
+/**
+ * Runs the Masumi lock check against a fixture.
+ *
+ * @param fixture - The fixture under test.
+ * @param overrides - Optional replacements for `extra`, requirements or payload.
+ * @returns The check result.
+ */
+function check(
+  fixture: Fixture,
+  overrides: {
+    extra?: unknown;
+    requirements?: PaymentRequirements;
+    payload?: ExactCardanoPayload;
+    validateRegistryClaim?: MasumiRegistryValidator;
+  } = {},
+) {
+  const requirements = overrides.requirements ?? fixture.requirements;
+  return verifyMasumiLock(overrides.extra ?? requirements.extra, requirements, fixture.decoded, {
+    payload: overrides.payload ?? fixture.payload,
+    payer: fixture.buyer,
+    coinsPerUtxoByte: STUB_COINS_PER_UTXO_BYTE,
+    ...(overrides.validateRegistryClaim
+      ? { validateRegistryClaim: overrides.validateRegistryClaim }
+      : {}),
+  });
+}
+
+/**
+ * Rebuilds a lock datum from the signed terms with selected fields overridden,
+ * so a fixture can violate exactly one invariant at a time.
+ *
+ * @param extra - The issued masumi extra.
+ * @param buyer - The buyer address controlling the nonce input.
+ * @param patch - Datum fields to override.
+ * @param lockedLovelace - Optional exact escrow lovelace.
+ * @returns The mutated lock.
+ */
+function lockWithDatum(
+  extra: CardanoExtraMasumi,
+  buyer: string,
+  patch: Record<string, unknown> = {},
+  lockedLovelace?: bigint,
+): MasumiLock {
+  const base = buildMasumiLock(extra, buyer, LOVELACE_ASSET, 50_000_000n, STUB_COINS_PER_UTXO_BYTE);
+  const datum = buildMasumiLockDatum({
+    buyerAddress: buyer,
+    sellerAddress: extra.terms.sellerAddress,
+    sellerReturnAddress: extra.terms.sellerReturnAddress,
+    referenceKey: extra.referenceKey,
+    referenceSignature: extra.referenceSignature,
+    sellerNonce: extra.terms.sellerNonce,
+    buyerNonce: extra.terms.buyerNonce,
+    agentIdentifier:
+      typeof extra.terms.agentIdentifier === "string" ? extra.terms.agentIdentifier : "",
+    collateralReturnLovelace: base.collateralLovelace,
+    inputHash: extra.terms.inputHash,
+    payByTime: BigInt(extra.terms.payByTime),
+    submitResultTime: BigInt(extra.terms.submitResultTime),
+    unlockTime: BigInt(extra.terms.unlockTime),
+    externalDisputeUnlockTime: BigInt(extra.terms.externalDisputeUnlockTime),
+    ...patch,
+  });
+  return {
+    datum: inlineDatum(datum),
+    collateralLovelace: base.collateralLovelace,
+    lockedLovelace: lockedLovelace ?? base.lockedLovelace,
+  };
+}
+
+describe("masumi lock verification", () => {
+  let fixture: Fixture;
+
+  beforeAll(async () => {
+    fixture = await buildFixture();
+  }, 60_000);
+
+  it("accepts a well-formed lovelace lock", () => {
+    expect(check(fixture)).toEqual({ ok: true });
   });
 
-  it("rejects when contractAddress is absent (not defaulted)", () => {
-    expect(run({ extra: { contractAddress: undefined } }).ok).toBe(false);
+  it("accepts a native-token lock whose lovelace is purely structural", async () => {
+    const tokenFixture = await buildFixture({ asset: USDM_PREPROD_ASSET, amount: "1500000" });
+    expect(check(tokenFixture)).toEqual({ ok: true });
   });
 
-  it("rejects when the escrow output has no inline datum", () => {
-    const req = requirements();
-    expect(
-      verifyMasumiLock(req.extra as CardanoExtraMasumi, req, decoded(undefined), BUYER).ok,
-    ).toBe(false);
+  it("accepts a registered seller once an independent validator confirms the claim", async () => {
+    const registered = await buildFixture({
+      agentIdentifier: `67ab0c92c4ac1610895a1c965ee50aba41a8f1513b15240723b3bd0b${"01".repeat(8)}`,
+    });
+    expect(check(registered, { validateRegistryClaim: () => true })).toEqual({ ok: true });
   });
 
-  it("rejects when the escrow output carries a reference script", () => {
-    expect(run({ decode: { hasReferenceScript: true } }).ok).toBe(false);
+  // The policy prefix proves nothing: anyone can copy a registered agent's
+  // identifier into their own terms and sign with their own key.
+  it("refuses a registry claim it cannot independently validate", async () => {
+    const registered = await buildFixture({
+      agentIdentifier: `67ab0c92c4ac1610895a1c965ee50aba41a8f1513b15240723b3bd0b${"01".repeat(8)}`,
+    });
+    expect(check(registered)).toMatchObject({
+      ok: false,
+      reason: "invalid_exact_cardano_requirements_masumi_agent_identifier",
+    });
   });
 
-  it("rejects when the tx has no validity upper bound (TTL)", () => {
-    expect(run({ decode: { noTtl: true } }).ok).toBe(false);
+  it("refuses a registry claim the validator rejects", async () => {
+    const registered = await buildFixture({
+      agentIdentifier: `67ab0c92c4ac1610895a1c965ee50aba41a8f1513b15240723b3bd0b${"01".repeat(8)}`,
+    });
+    expect(check(registered, { validateRegistryClaim: () => false })).toMatchObject({
+      ok: false,
+      reason: "invalid_exact_cardano_requirements_masumi_agent_identifier",
+    });
   });
 
-  it("rejects when the tx could settle past pay_by_time", () => {
-    expect(run({ decode: { ttlSlot: PAST_TTL_SLOT } }).ok).toBe(false);
+  it("accepts a signed buyer nonce and a declared seller return address", async () => {
+    const seller = freshKeyAddress(NETWORK);
+    const withReturn = await buildFixture({
+      buyerNonce: "0102030405060708090a0b0c0d",
+      sellerReturnAddress: seller.address,
+    });
+    expect(check(withReturn)).toEqual({ ok: true });
   });
 
-  it("rejects a non-zero cooldown timer on a fresh lock", () => {
-    expect(run({ datum: withField(datumHex(), 16, Data.int(5n)) }).ok).toBe(false);
-    expect(run({ datum: withField(datumHex(), 17, Data.int(5n)) }).ok).toBe(false);
-  });
+  describe("closed-object schema", () => {
+    /**
+     * Asserts that an `extra` override is rejected by the wire schema.
+     *
+     * @param extra - The malformed extra.
+     * @returns Nothing.
+     */
+    const expectSchemaRejection = (extra: unknown): void => {
+      expect(check(fixture, { extra })).toMatchObject({
+        ok: false,
+        reason: "invalid_exact_cardano_requirements_masumi_schema",
+      });
+    };
 
-  // Masumi's own decodeV2ContractDatum rejects a datum in which any participant
-  // or return address IS the escrow: a tagged payout would land back at the
-  // script, where vested_pay's continuation parsing aborts the spend.
-  it("rejects a return address that is the escrow itself", () => {
-    expect(run({ datum: datumHex({ buyerReturnAddress: CONTRACT }) }).ok).toBe(false);
-    expect(
-      run({
-        extra: { sellerReturnAddress: CONTRACT },
-        datum: datumHex({ sellerReturnAddress: CONTRACT }),
-      }).ok,
-    ).toBe(false);
-  });
-
-  it("rejects a non-empty result_hash on a fresh lock", () => {
-    expect(run({ datum: withField(datumHex(), 11, Data.bytearray("aa".repeat(32))) }).ok).toBe(
-      false,
-    );
-  });
-
-  it("rejects collateral above the locked lovelace", () => {
-    expect(run({ datum: datumHex({ collateralReturnLovelace: 5_000_001n }) }).ok).toBe(false);
-  });
-
-  it("rejects positive collateral below the floor", () => {
-    expect(run({ datum: datumHex({ collateralReturnLovelace: 100n }) }).ok).toBe(false);
-  });
-
-  it("accepts collateral at the floor within the locked lovelace", () => {
-    expect(
-      run({
-        datum: datumHex({ collateralReturnLovelace: 1_435_230n }),
-        over: { amount: "3000000" }, // coin 5M >= 3M amount + 1.435M collateral
-        extra: { collateralReturnLovelace: "1435230" },
-      }),
-    ).toEqual({ ok: true });
-  });
-
-  it("rejects when locked lovelace < amount + collateral", () => {
-    expect(
-      run({
-        datum: datumHex({ collateralReturnLovelace: 1_435_230n }),
-        over: { amount: "4000000" }, // 5M < 4M + 1.435M
-        extra: { collateralReturnLovelace: "1435230" },
-      }).ok,
-    ).toBe(false);
-  });
-
-  it("rejects when the output lovelace is below the post-result min-UTXO", () => {
-    expect(
-      run({ over: { amount: "1000000" }, decode: { coin: 1_000_000n }, coinsPerUtxoByte: 4310n })
-        .ok,
-    ).toBe(false);
-  });
-
-  it("rejects when the datum buyer is not the payer", () => {
-    expect(run({ payer: SELLER }).ok).toBe(false);
-  });
-
-  it("rejects when the datum seller is not the declared seller", () => {
-    expect(run({ datum: datumHex({ sellerAddress: BUYER }) }).ok).toBe(false);
-  });
-
-  it("rejects a reference_signature shorter than 16 bytes", () => {
-    expect(run({ datum: datumHex({ referenceSignature: "aa" }) }).ok).toBe(false);
-  });
-
-  it("rejects out-of-order time bounds", () => {
-    expect(run({ datum: datumHex({ payByTime: PAY_BY_TIME + 500_000n }) }).ok).toBe(false);
-  });
-
-  it("rejects a server-declared field that does not match the datum", () => {
-    expect(run({ extra: { payByTime: "1234" } }).ok).toBe(false);
-  });
-
-  it("accepts when the server declares fields that DO match the datum", () => {
-    expect(
-      run({
-        extra: {
-          referenceKey: "aa".repeat(32),
-          agentIdentifier: "ee".repeat(16),
-          payByTime: PAY_BY_TIME.toString(),
-        },
-      }),
-    ).toEqual({ ok: true });
-  });
-
-  // Native-token (USDM) locks: the token amount MUST match exactly, while the
-  // escrow output's lovelace is structural (covers collateral + min-UTXO).
-  const usdm = (over: Partial<PaymentRequirements>, decode: DecodeOpts, cpb?: bigint) =>
-    run({ over: { asset: USDM_PREPROD_ASSET, ...over }, decode, coinsPerUtxoByte: cpb });
-
-  it("accepts a USDM lock whose token amount matches exactly", () => {
-    expect(
-      usdm(
-        { amount: "1500000" },
-        { assets: { [USDM_PREPROD_ASSET]: 1_500_000n }, coin: 2_000_000n },
-      ),
-    ).toEqual({ ok: true });
-  });
-
-  it("rejects a USDM lock that overpays the token amount", () => {
-    expect(
-      usdm(
-        { amount: "1500000" },
-        { assets: { [USDM_PREPROD_ASSET]: 1_500_001n }, coin: 2_000_000n },
-      ).ok,
-    ).toBe(false);
-  });
-
-  it("rejects a USDM lock missing the requested token", () => {
-    expect(usdm({ amount: "1500000" }, { assets: {}, coin: 2_000_000n }).ok).toBe(false);
-  });
-
-  it("rejects a USDM lock whose structural lovelace is below the post-result min-UTXO", () => {
-    expect(
-      usdm(
-        { amount: "1500000" },
-        { assets: { [USDM_PREPROD_ASSET]: 1_500_000n }, coin: 1_000_000n },
-        4310n,
-      ).ok,
-    ).toBe(false);
-  });
-
-  it("rejects a lovelace lock carrying extra native tokens (token-count mismatch)", () => {
-    expect(run({ decode: { assets: { [USDM_PREPROD_ASSET]: 1n } } }).ok).toBe(false);
-  });
-
-  it("rejects a USDM lock carrying an extra unrequested token", () => {
-    expect(
-      usdm(
-        { amount: "1500000" },
-        {
-          assets: { [USDM_PREPROD_ASSET]: 1_500_000n, [`${"ab".repeat(28)}.beef`]: 1n },
-          coin: 2_000_000n,
-        },
-      ).ok,
-    ).toBe(false);
-  });
-
-  // seller_return_address (datum field 3) is server-declared, so it must match
-  // the declared extra exactly in both directions.
-  it("accepts when a declared seller return address matches the datum", () => {
-    expect(
-      run({
-        extra: { sellerReturnAddress: SELLER },
-        datum: datumHex({ sellerReturnAddress: SELLER }),
-      }),
-    ).toEqual({ ok: true });
-  });
-
-  it("rejects a datum seller return address the server did not declare", () => {
-    expect(run({ datum: datumHex({ sellerReturnAddress: SELLER }) }).ok).toBe(false);
-  });
-
-  it("rejects when the server declares a seller return address the datum omits", () => {
-    expect(run({ extra: { sellerReturnAddress: SELLER } }).ok).toBe(false);
-  });
-
-  it("rejects when a declared seller return address differs from the datum", () => {
-    expect(
-      run({
-        extra: { sellerReturnAddress: SELLER },
-        datum: datumHex({ sellerReturnAddress: BUYER }),
-      }).ok,
-    ).toBe(false);
-  });
-
-  // buyer_return_address (datum field 1) is buyer-supplied: the 402 answers an
-  // unauthenticated request, so the server cannot know the payer's refund
-  // address and normally omits it.
-  it("accepts a buyer return address the server did not declare", () => {
-    expect(run({ datum: datumHex({ buyerReturnAddress: BUYER }) })).toEqual({ ok: true });
-  });
-
-  it("accepts an omitted buyer return address", () => {
-    expect(run({})).toEqual({ ok: true });
-  });
-
-  // The buyer picks its own refund address, so the facilitator does not match it
-  // even when a server declares one — it has no authoritative value to compare
-  // against. The buyer stays pinned by the `buyer` = payer rule instead.
-  it("does not match the buyer return address against extra", () => {
-    expect(
-      run({
-        extra: { buyerReturnAddress: BUYER },
-        datum: datumHex({ buyerReturnAddress: BUYER }),
-      }),
-    ).toEqual({ ok: true });
-    expect(
-      run({
-        extra: { buyerReturnAddress: BUYER },
-        datum: datumHex({ buyerReturnAddress: SELLER }),
-      }),
-    ).toEqual({ ok: true });
-  });
-});
-
-// Cross-implementation min-UTXO fixture — must stay in sync with the Java
-// facilitator's twin (MasumiTransferVerifierTest / MasumiConstants fixture):
-// the SAME 367-byte Evolution-encoded 19-field lock datum at coinsPerUtxoByte
-// 4310 must yield the SAME floor in both implementations. TS re-serializes the
-// datum to measure it while Java reads the raw wire bytes, so this fixture also
-// pins that Evolution's encoding is round-trip stable — the precondition for
-// the two measurements agreeing on canonical encodings.
-describe("cross-implementation min-UTXO fixture", () => {
-  const FIXTURE_BYTES = 367;
-  const CPB = 4310n;
-
-  it("the base lock datum encodes to exactly the fixture size, stable under re-encoding", () => {
-    const hex = datumHex();
-    expect(hex.length / 2).toBe(FIXTURE_BYTES);
-    expect(Data.toCBORHex(Data.fromCBORHex(hex))).toBe(hex);
-  });
-
-  it("computes the pinned floors the Java implementation must reproduce", () => {
-    expect(masumiMinUtxoLovelace(FIXTURE_BYTES, 0, CPB)).toBe(3_124_750n);
-    expect(masumiMinUtxoLovelace(FIXTURE_BYTES, 1, CPB)).toBe(3_340_250n);
-  });
-});
-
-// A native-token lock's lovelace is purely structural: the client signer funds it
-// itself as max(post-result min-UTXO, collateral) rather than from the requested
-// amount. These pin that rule to the floor the facilitator derives independently
-// from the decoded datum — if the two ever diverge, a correctly built lock is
-// rejected, or an underfunded one is accepted and strands the seller's payout.
-describe("masumi native-token structural lovelace", () => {
-  const COINS_PER_UTXO_BYTE = 4310n;
-  const TOKEN_AMOUNT = 1_500_000n;
-
-  /** The funding the client signer attaches, via the same helper it calls. */
-  const clientFunding = (datum: string, collateral: bigint): bigint =>
-    masumiTokenLockLovelace(datum.length / 2, collateral, COINS_PER_UTXO_BYTE);
-
-  const lock = (datum: string, coin: bigint, extra: Partial<CardanoExtraMasumi> = {}) =>
-    run({
-      extra,
-      over: { asset: USDM_PREPROD_ASSET, amount: TOKEN_AMOUNT.toString() },
-      datum,
-      decode: { coin, assets: { [USDM_PREPROD_ASSET]: TOKEN_AMOUNT } },
-      coinsPerUtxoByte: COINS_PER_UTXO_BYTE,
+    it("rejects an unknown field in extra", () => {
+      expectSchemaRejection({ ...fixture.extra, contractAddress: fixture.requirements.payTo });
     });
 
-  it("funds enough lovelace to clear the facilitator's post-result min-UTXO", () => {
-    const datum = datumHex();
-    expect(lock(datum, clientFunding(datum, 0n))).toEqual({ ok: true });
+    it("rejects a terms field that duplicates a projected top-level field", () => {
+      expectSchemaRejection({
+        ...fixture.extra,
+        terms: { ...fixture.extra.terms, amount: "50000000" },
+      });
+    });
+
+    it("rejects a paymentType other than Web3CardanoV2", () => {
+      expectSchemaRejection({
+        ...fixture.extra,
+        terms: { ...fixture.extra.terms, paymentType: "Web3CardanoV1" },
+      });
+    });
+
+    it("rejects a JSON null sellerReturnAddress", () => {
+      expectSchemaRejection({
+        ...fixture.extra,
+        terms: { ...fixture.extra.terms, sellerReturnAddress: null },
+      });
+    });
+
+    it("rejects a buyerNonce outside 14-26 hex characters", () => {
+      expectSchemaRejection({
+        ...fixture.extra,
+        terms: { ...fixture.extra.terms, buyerNonce: "0102" },
+      });
+    });
+
+    it("rejects a confirmationPolicy outside -1..20", () => {
+      expectSchemaRejection({ ...fixture.extra, confirmationPolicy: { l1Confirmations: 21 } });
+    });
+
+    it("rejects an inputHash that is not the commitment digest", () => {
+      expectSchemaRejection({
+        ...fixture.extra,
+        terms: { ...fixture.extra.terms, inputHash: "0".repeat(64) },
+      });
+    });
   });
 
-  it("funds no more than needed — one lovelace less is rejected", () => {
-    const datum = datumHex();
-    expect(lock(datum, clientFunding(datum, 0n) - 1n).ok).toBe(false);
+  describe("commitment and seller authorization", () => {
+    it("rejects a tampered part digest", () => {
+      const parts = fixture.extra.inputCommitment.parts.map(part => ({
+        ...part,
+        digest: "0".repeat(64),
+      }));
+      expect(
+        check(fixture, {
+          extra: {
+            ...fixture.extra,
+            inputCommitment: { ...fixture.extra.inputCommitment, parts },
+          },
+        }),
+      ).toMatchObject({
+        ok: false,
+        reason: "invalid_exact_cardano_requirements_masumi_commitment",
+      });
+    });
+
+    it("rejects content that does not hash to its declared digest", () => {
+      const parts = fixture.extra.inputCommitment.parts.map(part => ({
+        ...part,
+        content: { days: 4, units: "metric" },
+      }));
+      expect(
+        check(fixture, {
+          extra: {
+            ...fixture.extra,
+            inputCommitment: { ...fixture.extra.inputCommitment, parts },
+          },
+        }),
+      ).toMatchObject({
+        ok: false,
+        reason: "invalid_exact_cardano_requirements_masumi_commitment",
+      });
+    });
+
+    it("rejects terms whose digest the seller never signed", () => {
+      expect(
+        check(fixture, {
+          extra: { ...fixture.extra, terms: { ...fixture.extra.terms, settlementPolicy: "auto" } },
+        }),
+      ).toMatchObject({
+        ok: false,
+        reason: "invalid_exact_cardano_requirements_masumi_seller_signature",
+      });
+    });
+
+    it("rejects a top-level amount the seller did not sign", () => {
+      expect(
+        check(fixture, {
+          requirements: { ...fixture.requirements, amount: "49999999" },
+          extra: fixture.extra,
+        }),
+      ).toMatchObject({
+        ok: false,
+        reason: "invalid_exact_cardano_requirements_masumi_seller_signature",
+      });
+    });
+
+    it("rejects an agentIdentifier from another policy id", async () => {
+      const other = await buildFixture({ agentIdentifier: `${"ff".repeat(28)}01` });
+      expect(check(other)).toMatchObject({
+        ok: false,
+        reason: "invalid_exact_cardano_requirements_masumi_agent_identifier",
+      });
+    });
+
+    it("rejects a blockchainIdentifier that decodes to different values", () => {
+      expect(
+        check(fixture, {
+          extra: {
+            ...fixture.extra,
+            blockchainIdentifier:
+              "230d7c6574f41d1c0acc96ade8eae04360019f607004d8809c07d005c053019cae007700bce8058680d89818c04e44002c035931a2c00daf5e00ac9bf00b6c401b80473c6535d00e6003cb8b110199db615001ca8eecc6019b58076c603b13763a80",
+          },
+        }),
+      ).toMatchObject({
+        ok: false,
+        reason: "invalid_exact_cardano_requirements_masumi_identifier",
+      });
+    });
   });
 
-  it("raises the funding to the collateral when it exceeds the min-UTXO", () => {
-    const collateral = 6_000_000n;
-    const extra = { collateralReturnLovelace: collateral.toString() };
-    const datum = datumHex({ collateralReturnLovelace: collateral });
-    const floor = masumiMinUtxoLovelace(datum.length / 2, 1, COINS_PER_UTXO_BYTE);
+  describe("deployment and escrow address", () => {
+    it("rejects a payTo that is not the derived escrow address", () => {
+      expect(
+        check(fixture, {
+          requirements: { ...fixture.requirements, payTo: freshKeyAddress(NETWORK).address },
+          extra: fixture.extra,
+        }),
+      ).toMatchObject({
+        ok: false,
+        reason: "invalid_exact_cardano_requirements_masumi_deployment",
+      });
+    });
 
-    // Guards the fixture: the collateral must actually dominate for this to test
-    // the max(), not just the min-UTXO branch again.
-    expect(collateral).toBeGreaterThan(floor);
+    it("rejects a custom deployment whose parameters change the address", () => {
+      expect(
+        check(fixture, {
+          extra: {
+            ...fixture.extra,
+            deployment: { ...MASUMI_DEFAULT_DEPLOYMENT, cooldownPeriod: "999999" },
+          },
+        }),
+      ).toMatchObject({
+        ok: false,
+        reason: "invalid_exact_cardano_requirements_masumi_deployment",
+      });
+    });
+  });
 
-    expect(lock(datum, clientFunding(datum, collateral), extra)).toEqual({ ok: true });
-    // Funding the bare min-UTXO and ignoring the collateral bricks the payout.
-    expect(lock(datum, floor, extra).ok).toBe(false);
+  describe("settlement layer", () => {
+    it("requires a settlementLayer on the payload", () => {
+      expect(
+        check(fixture, { payload: { ...fixture.payload, settlementLayer: undefined } }),
+      ).toMatchObject({
+        ok: false,
+        reason: "invalid_exact_cardano_payload_settlement_layer_mismatch",
+      });
+    });
+
+    it("rejects a layer the signed settlementPolicy forbids", () => {
+      expect(
+        check(fixture, { payload: { ...fixture.payload, settlementLayer: "hydra" } }),
+      ).toMatchObject({
+        ok: false,
+        reason: "invalid_exact_cardano_payload_settlement_layer_mismatch",
+      });
+    });
+
+    // Hydra needs verified Init state, head parameters, a seller-participant
+    // binding and SnapshotConfirmed evidence. None of that exists here, and
+    // authenticating a Hydra payment against L1 evidence would be a lie.
+    it("rejects hydra outright, even when the terms allow it", async () => {
+      const hydra = await buildFixture({ settlementPolicy: "hydra" });
+      expect(
+        check(hydra, { payload: { ...hydra.payload, settlementLayer: "hydra" } }),
+      ).toMatchObject({
+        ok: false,
+        reason: "invalid_exact_cardano_payload_settlement_layer_unsupported",
+      });
+    });
+
+    it("rejects an auto policy resolved to hydra", async () => {
+      const auto = await buildFixture({ settlementPolicy: "auto" });
+      expect(check(auto, { payload: { ...auto.payload, settlementLayer: "hydra" } })).toMatchObject(
+        {
+          ok: false,
+          reason: "invalid_exact_cardano_payload_settlement_layer_unsupported",
+        },
+      );
+    });
+  });
+
+  describe("lock invariants", () => {
+    it("rejects a datum whose seller_nonce differs from the signed terms", async () => {
+      const mutated = await buildFixture({
+        mutateLock: (extra, buyer) => lockWithDatum(extra, buyer, { sellerNonce: "cd".repeat(32) }),
+      });
+      expect(check(mutated)).toMatchObject({
+        ok: false,
+        reason: "invalid_exact_cardano_payload_masumi_datum_mismatch",
+      });
+    });
+
+    it("rejects a datum whose buyer does not control the nonce input", async () => {
+      const mutated = await buildFixture({
+        mutateLock: (extra, buyer) =>
+          lockWithDatum(extra, buyer, { buyerAddress: freshKeyAddress(NETWORK).address }),
+      });
+      expect(check(mutated)).toMatchObject({
+        ok: false,
+        reason: "invalid_exact_cardano_payload_masumi_datum_mismatch",
+      });
+    });
+
+    it("rejects a non-zero cooldown on a fresh lock", async () => {
+      const mutated = await buildFixture({
+        mutateLock: (extra, buyer) => {
+          const base = lockWithDatum(extra, buyer);
+          const tree = base.datum.data as unknown as { index: bigint; fields: Data.Data[] };
+          const fields = [...tree.fields];
+          fields[16] = Data.int(1n);
+          return { ...base, datum: inlineDatum(Data.constr(0n, fields)) };
+        },
+      });
+      expect(check(mutated)).toMatchObject({
+        ok: false,
+        reason: "invalid_exact_cardano_payload_masumi_datum_invalid",
+        detail: "cooldown",
+      });
+    });
+
+    it("rejects aggregated payouts (buyer target equals seller target)", async () => {
+      const mutated = await buildFixture({
+        mutateLock: (extra, buyer) =>
+          lockWithDatum(extra, buyer, { buyerReturnAddress: extra.terms.sellerAddress }),
+      });
+      expect(check(mutated)).toMatchObject({
+        ok: false,
+        reason: "invalid_exact_cardano_payload_masumi_datum_invalid",
+      });
+    });
+
+    it("rejects a lock whose value is not requested + collateral", async () => {
+      const mutated = await buildFixture({
+        mutateLock: (extra, buyer) => lockWithDatum(extra, buyer, {}, 50_000_001n),
+      });
+      expect(check(mutated)).toMatchObject({
+        ok: false,
+        reason: "invalid_exact_cardano_payload_masumi_collateral",
+      });
+    });
+
+    it("rejects a collateral below the Masumi floor", async () => {
+      const mutated = await buildFixture({
+        amount: "1000000",
+        mutateLock: (extra, buyer) => {
+          const base = buildMasumiLock(
+            extra,
+            buyer,
+            LOVELACE_ASSET,
+            1_000_000n,
+            STUB_COINS_PER_UTXO_BYTE,
+          );
+          const tree = base.datum.data as unknown as { fields: Data.Data[] };
+          const fields = [...tree.fields];
+          fields[9] = Data.int(1n);
+          return {
+            datum: inlineDatum(Data.constr(0n, fields)),
+            collateralLovelace: 1n,
+            lockedLovelace: 1_000_001n,
+          };
+        },
+      });
+      expect(check(mutated)).toMatchObject({
+        ok: false,
+        reason: "invalid_exact_cardano_payload_masumi_collateral",
+      });
+    });
+
+    it("rejects a datum that is not the 19-field vested_pay schema", async () => {
+      const mutated = await buildFixture({
+        mutateLock: () => ({
+          datum: inlineDatum(Data.constr(0n, [Data.int(1n)])),
+          collateralLovelace: 0n,
+          lockedLovelace: 50_000_000n,
+        }),
+      });
+      expect(check(mutated)).toMatchObject({
+        ok: false,
+        reason: "invalid_exact_cardano_payload_masumi_datum_invalid",
+      });
+    });
+  });
+
+  it("rejects a lock whose TTL is after pay_by_time", async () => {
+    const late = await buildFixture({
+      payByTimeMs: BigInt(slotToPosixMs(NETWORK, TTL_SLOT)) - 1000n,
+    });
+    expect(check(late)).toMatchObject({
+      ok: false,
+      reason: "invalid_exact_cardano_payload_masumi_deadline",
+    });
+  });
+
+  it("rejects deadlines that do not clear the minimum intervals", async () => {
+    // The seller signs these short intervals, so the signature verifies — the
+    // minimums are a lock invariant the facilitator enforces regardless.
+    const short = await buildFixture({ submitResultTimeMs: PAY_BY_TIME + 1000n });
+    expect(check(short)).toMatchObject({
+      ok: false,
+      reason: "invalid_exact_cardano_payload_masumi_deadline",
+    });
   });
 });
