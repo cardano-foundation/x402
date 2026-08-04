@@ -151,11 +151,26 @@ describe("client-side Masumi authorization", () => {
     await expect(
       clientSigner().buildAndSignPaymentTransaction(signInput(requirements)),
     ).rejects.toThrow(/custom deployment requires explicit application approval/);
+    let inspectedDeployment: unknown;
     await expect(
-      clientSigner({ allowCustomMasumiDeployment: true }).buildAndSignPaymentTransaction(
+      clientSigner({
+        validateCustomMasumiDeployment: claim => {
+          inspectedDeployment = claim;
+          return claim.deployment.cooldownPeriod === custom.cooldownPeriod;
+        },
+      }).buildAndSignPaymentTransaction(signInput(requirements)),
+    ).rejects.toThrow(/Blockfrost/);
+    expect(inspectedDeployment).toMatchObject({
+      network: CARDANO_PREPROD_CAIP2,
+      payTo: requirements.payTo,
+      deployment: custom,
+    });
+
+    await expect(
+      clientSigner({ validateCustomMasumiDeployment: () => false }).buildAndSignPaymentTransaction(
         signInput(requirements),
       ),
-    ).rejects.toThrow(/Blockfrost/);
+    ).rejects.toThrow(/custom deployment was not approved/);
   });
 
   it("refuses a registry claim it cannot independently validate", async () => {

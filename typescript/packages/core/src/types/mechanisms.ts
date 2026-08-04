@@ -189,6 +189,8 @@ export type SchemeEnrichPaymentRequiredResponseHook = (
 export interface SchemeNetworkServer {
   readonly scheme: string;
   readonly schemeHooks?: SchemeServerHooks;
+  /** Require an optional client-carried resource to equal the current protected resource. */
+  readonly requireMatchingPayloadResource?: boolean;
   enrichPaymentRequiredResponse?: SchemeEnrichPaymentRequiredResponseHook;
   enrichSettlementPayload?: SchemeEnrichSettlementPayloadHook;
   enrichSettlementResponse?: SchemeEnrichSettlementResponseHook;

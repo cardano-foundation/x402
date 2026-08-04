@@ -18,7 +18,7 @@ import { toClientCardanoSigner, toFacilitatorCardanoSigner } from "../../src/sig
 import { LOVELACE_ASSET, USDM_PREPROD_ASSET } from "../../src/constants";
 import { buildScriptDatumInline } from "../../src/exact/script/datum";
 import { decodeCardanoTransaction, slotToPosixMs } from "../../src/utils";
-import { buildSignedTx } from "../helpers/buildSignedTx";
+import { buildSignedTx, getFixtureInputSnapshot } from "../helpers/buildSignedTx";
 import { issueMasumiRequirements } from "../helpers/masumi";
 import {
   buildRequirements,
@@ -27,7 +27,6 @@ import {
   MINIMAL_PLUTUS_V3,
   NETWORK,
   NONCE_REF,
-  PAYER_ADDRESS,
   scriptAddressFor,
   stubBuyerAddress,
   stubClientSigner,
@@ -125,7 +124,7 @@ describe("Cardano Integration Tests (deterministic, offline)", () => {
 
       const verifyResponse = await server.verifyPayment(paymentPayload, accepted!);
       expect(verifyResponse.isValid).toBe(true);
-      expect(verifyResponse.payer).toBe(PAYER_ADDRESS);
+      expect(verifyResponse.payer).toBe(getFixtureInputSnapshot(NONCE_REF)?.address);
 
       const settleResponse = await server.settlePayment(paymentPayload, accepted!);
       expect(settleResponse.success).toBe(true);
@@ -255,9 +254,8 @@ describe("Cardano Integration Tests (deterministic, offline)", () => {
       // The datum's buyer must control the nonce input, so the facilitator has
       // to resolve that UTXO's real owner.
       const buyer = await stubBuyerAddress();
-      const buyerOwned = new ExactCardanoFacilitator(
-        stubFacilitatorSigner({ getUtxo: async () => ({ exists: true, address: buyer }) }),
-      );
+      expect(buyer).toBeTruthy();
+      const buyerOwned = new ExactCardanoFacilitator(stubFacilitatorSigner());
       const verifyResponse = await buyerOwned.verify(paymentPayload, accepted!);
       expect(verifyResponse.isValid).toBe(true);
 
@@ -307,9 +305,8 @@ describe("Cardano Integration Tests (deterministic, offline)", () => {
       expect(firstTx).not.toBe(secondTx);
 
       const buyer = await stubBuyerAddress();
-      const facilitator = new ExactCardanoFacilitator(
-        stubFacilitatorSigner({ getUtxo: async () => ({ exists: true, address: buyer }) }),
-      );
+      expect(buyer).toBeTruthy();
+      const facilitator = new ExactCardanoFacilitator(stubFacilitatorSigner());
       expect((await facilitator.settle(first, requirements)).success).toBe(true);
 
       const duplicate = await facilitator.settle(second, requirements);
@@ -353,7 +350,7 @@ describe("Cardano Integration Tests (deterministic, offline)", () => {
       const payload = await fixturePayload(recipient, 1_000_000n);
       const result = await facilitator.verify(payload, buildRequirements(recipient, "1000000"));
       expect(result.isValid).toBe(true);
-      expect(result.payer).toBe(PAYER_ADDRESS);
+      expect(result.payer).toBe(getFixtureInputSnapshot(NONCE_REF)?.address);
     });
 
     it("rejects when the output pays a different recipient (rule 3)", async () => {
@@ -512,9 +509,13 @@ describe("Cardano Integration Tests (deterministic, offline)", () => {
       expect(ok.isValid).toBe(true);
 
       // The coin-selected (non-nonce) input is already spent → rejected.
+      const unspentSigner = stubFacilitatorSigner();
       const spent = await new ExactCardanoFacilitator(
         stubFacilitatorSigner({
-          getUtxo: async ref => ({ exists: !ref.startsWith("bbbb"), address: PAYER_ADDRESS }),
+          getUtxo: async (ref, network) => ({
+            ...(await unspentSigner.getUtxo(ref, network)),
+            exists: !ref.startsWith("bbbb"),
+          }),
         }),
       ).verify(payload, requirements);
       expect(spent.isValid).toBe(false);

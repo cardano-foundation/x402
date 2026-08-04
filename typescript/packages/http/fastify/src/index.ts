@@ -450,7 +450,12 @@ export function paymentMiddlewareFromHTTPServer(
         x402Context.paymentPayload,
         x402Context.paymentRequirements,
         x402Context.declaredExtensions,
-        { request: x402Context.requestContext, responseBody, responseHeaders },
+        {
+          request: x402Context.requestContext,
+          responseBody,
+          responseHeaders,
+          responseStatus: reply.statusCode,
+        },
       );
 
       if (!settleResult.success) {

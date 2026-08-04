@@ -37,6 +37,7 @@ import {
   ERR_SETTLEMENT_NOT_CONFIRMED,
   ERR_SUBMISSION_MODE_MISMATCH,
   ERR_TRANSACTION_DECODE_FAILED,
+  ERR_TRANSACTION_PHASE1_INVALID,
   ERR_TRANSACTION_PHASE2_INVALID,
   ERR_TRANSACTION_UNSIGNED,
   ERR_TTL_EXPIRED,
@@ -177,6 +178,43 @@ function describeErrorChain(error: unknown, maxDepth = 5): string {
     current = (current as { cause?: unknown }).cause;
   }
   return parts.join(" | ");
+}
+
+/** Value totals used by the supported payment-only phase-1 check. */
+interface TransactionValue {
+  coin: bigint;
+  assets: Map<string, bigint>;
+}
+
+/**
+ * Adds one Cardano value to a mutable total.
+ *
+ * @param total - Accumulator to update.
+ * @param coin - Lovelace amount.
+ * @param assets - Native assets keyed by canonical unit.
+ */
+function addValue(total: TransactionValue, coin: bigint, assets: Record<string, bigint>): void {
+  total.coin += coin;
+  for (const [unit, amount] of Object.entries(assets)) {
+    const normalized = unit.toLowerCase();
+    total.assets.set(normalized, (total.assets.get(normalized) ?? 0n) + amount);
+  }
+}
+
+/**
+ * Compares two complete Cardano values.
+ *
+ * @param left - First value.
+ * @param right - Second value.
+ * @returns Whether lovelace and every native asset amount are equal.
+ */
+function valuesEqual(left: TransactionValue, right: TransactionValue): boolean {
+  if (left.coin !== right.coin) return false;
+  const units = new Set([...left.assets.keys(), ...right.assets.keys()]);
+  for (const unit of units) {
+    if ((left.assets.get(unit) ?? 0n) !== (right.assets.get(unit) ?? 0n)) return false;
+  }
+  return true;
 }
 
 /**
@@ -413,6 +451,11 @@ export class ExactCardanoScheme implements SchemeNetworkFacilitator {
           verified.payload.transaction,
           requirements.network,
         );
+        if (submission.txHash.toLowerCase() !== decoded.txHash.toLowerCase()) {
+          throw new Error(
+            `submitter returned transaction ${submission.txHash}, expected ${decoded.txHash}`,
+          );
+        }
         submissionStatus = submission.status;
         this.markSubmitted(decoded.txHash);
       } catch (cause) {
@@ -553,6 +596,71 @@ export class ExactCardanoScheme implements SchemeNetworkFacilitator {
       return { ok: true };
     }
     return { ok: false, reason: ERR_UNSUPPORTED_SCHEME };
+  }
+
+  /**
+   * Validates the phase-1 rules needed before a server-submitted payment can
+   * safely reach the protected handler. The supported shape is deliberately a
+   * plain payment: every funding input is controlled by a present vkey witness,
+   * and inputs equal outputs plus fee for lovelace and every native asset.
+   * Balance-changing certificates, withdrawals, minting and governance actions
+   * are rejected because their additional ledger accounting is outside this
+   * mechanism.
+   *
+   * Client-submitted transactions do not use this approximation: authenticated
+   * ledger evidence already proves the node accepted their phase-1 checks.
+   *
+   * @param decoded - Decoded signed transaction.
+   * @param snapshots - Authenticated snapshots for every regular input.
+   * @returns Success, or a stable diagnostic for rejection.
+   */
+  private validatePaymentPhase1(
+    decoded: DecodedCardanoTransaction,
+    snapshots: CardanoUtxoSnapshot[],
+  ): { ok: true } | { ok: false; detail: string } {
+    if (decoded.unsupportedPhase1Operations.length > 0) {
+      return {
+        ok: false,
+        detail: `unsupported balance-changing operations: ${decoded.unsupportedPhase1Operations.join(", ")}`,
+      };
+    }
+    if (new Set(decoded.inputs.map(ref => ref.toLowerCase())).size !== decoded.inputs.length) {
+      return { ok: false, detail: "transaction contains a duplicate input" };
+    }
+
+    const witnessKeys = new Set(decoded.vkeyHashes.map(hash => hash.toLowerCase()));
+    const inputValue: TransactionValue = { coin: 0n, assets: new Map() };
+    for (let index = 0; index < snapshots.length; index += 1) {
+      const snapshot = snapshots[index];
+      if (snapshot.coin === undefined || snapshot.assets === undefined) {
+        return {
+          ok: false,
+          detail: `input ${decoded.inputs[index]} is missing authenticated value data`,
+        };
+      }
+      if (!snapshot.paymentKeyHash) {
+        return {
+          ok: false,
+          detail: `input ${decoded.inputs[index]} is not controlled by a supported payment-key address`,
+        };
+      }
+      if (!witnessKeys.has(snapshot.paymentKeyHash.toLowerCase())) {
+        return {
+          ok: false,
+          detail: `input ${decoded.inputs[index]} has no matching vkey witness`,
+        };
+      }
+      addValue(inputValue, snapshot.coin, snapshot.assets);
+    }
+
+    const spentValue: TransactionValue = { coin: decoded.fee, assets: new Map() };
+    for (const output of decoded.outputs) {
+      addValue(spentValue, output.coin, output.assets);
+    }
+    if (!valuesEqual(inputValue, spentValue)) {
+      return { ok: false, detail: "transaction inputs do not equal outputs plus fee" };
+    }
+    return { ok: true };
   }
 
   /**
@@ -884,6 +992,43 @@ export class ExactCardanoScheme implements SchemeNetworkFacilitator {
             payer: "",
           },
         };
+      }
+
+      // In server mode the protected handler can run before submitTransaction.
+      // Prove the supported phase-1 payment shape here so an unrelated valid
+      // witness or an unbalanced transaction cannot trigger application work
+      // that the ledger will later reject. Client mode already has authenticated
+      // acceptance evidence for this exact transaction.
+      if (!acceptedByLedger) {
+        if (this.signer.validatePhase1Transaction) {
+          try {
+            await this.signer.validatePhase1Transaction(
+              cardanoPayload.transaction,
+              requirements.network,
+            );
+          } catch (cause) {
+            return {
+              response: {
+                isValid: false,
+                invalidReason: ERR_TRANSACTION_PHASE1_INVALID,
+                invalidMessage: cause instanceof Error ? cause.message : String(cause),
+                payer,
+              },
+            };
+          }
+        } else {
+          const phase1 = this.validatePaymentPhase1(decoded, inputSnapshots);
+          if (!phase1.ok) {
+            return {
+              response: {
+                isValid: false,
+                invalidReason: ERR_TRANSACTION_PHASE1_INVALID,
+                invalidMessage: phase1.detail,
+                payer,
+              },
+            };
+          }
+        }
       }
 
       // Rules 2, 3, 4: at least one output MUST pay the requested amount of

@@ -54,7 +54,10 @@ const stubFacilitatorSigner: FacilitatorCardanoSigner = {
   getAddresses: () => ["addr1qfacilitator00"],
   getUtxo: async () => ({ exists: true, address: "addr1qpayer00" }),
   getCurrentSlot: async () => 100n,
-  submitTransaction: async () => ({ txHash: "deadbeef", status: "confirmed" }),
+  submitTransaction: async transaction => ({
+    txHash: decodeCardanoTransaction(transaction).txHash,
+    status: "confirmed",
+  }),
 };
 
 describe("ExactCardanoScheme client", () => {
@@ -327,6 +330,7 @@ describe("ExactCardanoScheme facilitator", () => {
     // isolation tests need a decodable one. Verification itself is stubbed out
     // by overriding verify(), which settle() still dispatches through.
     let transaction: string;
+    let canonicalTxHash: string;
     let reqs: PaymentRequirements;
 
     /** A facilitator whose verification always passes. */
@@ -358,14 +362,21 @@ describe("ExactCardanoScheme facilitator", () => {
         network: PREPROD,
       });
       transaction = built.transaction;
+      canonicalTxHash = decodeCardanoTransaction(transaction).txHash;
       reqs = buildRequirements({ network: PREPROD, asset: LOVELACE_ASSET, amount: "2000000" });
     }, 60_000);
 
-    it("reports the canonical transaction id, not the submitter's echo", async () => {
-      const facilitator = new FakeOk(stubFacilitator());
-      const first = await facilitator.settle(payloadFor(), reqs);
-      expect(first.success).toBe(true);
-      expect(first.transaction).toBe(decodeCardanoTransaction(transaction).txHash);
+    it("rejects a submitter response for a different transaction id", async () => {
+      const facilitator = new FakeOk(
+        stubFacilitator({
+          submitTransaction: async () => ({ txHash: "b".repeat(64), status: "confirmed" }),
+          getTransactionEvidence: async () => ({ status: "unknown", confirmations: -2 }),
+        }),
+      );
+      const result = await facilitator.settle(payloadFor(), reqs);
+      expect(result.success).toBe(false);
+      expect(result.errorReason).toBe("exact_cardano_settlement_failed");
+      expect(result.errorMessage).toContain(`expected ${canonicalTxHash}`);
     });
 
     // The race the spec's mitigation targets: two callers reaching submission
@@ -388,7 +399,7 @@ describe("ExactCardanoScheme facilitator", () => {
             submits += 1;
             signalReachedSubmit();
             await gate;
-            return { txHash: decodeCardanoTransaction(transaction).txHash, status: "confirmed" };
+            return { txHash: canonicalTxHash, status: "confirmed" };
           },
           getTransactionEvidence: async () => ({ status: "confirmed", confirmations: 1 }),
         }),
@@ -416,7 +427,7 @@ describe("ExactCardanoScheme facilitator", () => {
         stubFacilitator({
           submitTransaction: async () => {
             submits += 1;
-            return { txHash: "abc", status: "confirmed" };
+            return { txHash: canonicalTxHash, status: "confirmed" };
           },
           getTransactionEvidence: async () => ({ status: "confirmed", confirmations }),
         }),
@@ -445,7 +456,7 @@ describe("ExactCardanoScheme facilitator", () => {
     it("reports a just-submitted but not-yet-observable transaction as pending", async () => {
       const facilitator = new FakeOk(
         stubFacilitator({
-          submitTransaction: async () => ({ txHash: "abc", status: "mempool" }),
+          submitTransaction: async () => ({ txHash: canonicalTxHash, status: "mempool" }),
           getTransactionEvidence: async () => ({ status: "unknown", confirmations: -2 }),
         }),
         { confirmationTimeoutMs: 1, confirmationPollMs: 1 },
@@ -579,7 +590,7 @@ describe("ExactCardanoScheme facilitator", () => {
     it("rejects mempool-only settlements when acceptMempool is disabled (default)", async () => {
       const facilitator = new FakeOk(
         stubFacilitator({
-          submitTransaction: async () => ({ txHash: "abc", status: "mempool" }),
+          submitTransaction: async () => ({ txHash: canonicalTxHash, status: "mempool" }),
           getTransactionEvidence: undefined,
         }),
       );
@@ -591,7 +602,7 @@ describe("ExactCardanoScheme facilitator", () => {
     it("accepts mempool-only settlements when acceptMempool is true and the policy allows -1", async () => {
       const facilitator = new FakeOk(
         stubFacilitator({
-          submitTransaction: async () => ({ txHash: "abc", status: "mempool" }),
+          submitTransaction: async () => ({ txHash: canonicalTxHash, status: "mempool" }),
           getTransactionEvidence: undefined,
         }),
         { acceptMempool: true },
@@ -657,6 +668,104 @@ describe("ExactCardanoScheme facilitator", () => {
 });
 
 describe("ExactCardanoScheme server", () => {
+  it("claims the payment before the handler and replays its stored result", async () => {
+    const payTo = await freshPreprodAddress();
+    const built = await buildSignedTx({
+      payTo,
+      asset: LOVELACE_ASSET,
+      amount: 2_000_000n,
+      nonceUtxoRef: NONCE_REF,
+      ttlSlot: TTL_SLOT,
+      network: PREPROD,
+    });
+    const requirements = buildRequirements({
+      network: PREPROD,
+      payTo,
+      asset: LOVELACE_ASSET,
+      amount: "2000000",
+    });
+    const paymentPayload = {
+      x402Version: 2,
+      accepted: requirements,
+      payload: { transaction: built.transaction, nonce: built.nonce },
+    };
+    const transport = (body: unknown) => ({
+      request: {
+        method: "POST",
+        adapter: {
+          getMethod: () => "POST",
+          getUrl: () => "https://example.com/jobs",
+          getHeader: () => "application/json",
+          getBody: () => body,
+        },
+      },
+    });
+    const hookContext = (transportContext: ReturnType<typeof transport>) => ({
+      paymentPayload,
+      requirements,
+      declaredExtensions: {},
+      transportContext,
+      result: { isValid: true, payer: "addr_test1payer" },
+    });
+
+    const server = new ExactCardanoServer();
+    const hooks = server.schemeHooks;
+    const owner = transport({ job: 1 });
+    expect(
+      await hooks.onAfterVerify!({
+        ...hookContext(owner),
+        result: { isValid: false, invalidReason: "input_unavailable", payer: "" },
+      }),
+    ).toBeUndefined();
+    expect(await hooks.onAfterVerify!(hookContext(owner))).toBeUndefined();
+
+    const concurrent = transport({ job: 1 });
+    expect(await hooks.onAfterVerify!(hookContext(concurrent))).toMatchObject({
+      abort: true,
+      reason: "duplicate_settlement",
+    });
+    // Canceling the rejected duplicate must not release the original claim.
+    await hooks.onVerifiedPaymentCanceled!({
+      ...hookContext(concurrent),
+      reason: "after_verify_aborted",
+    });
+    expect(await hooks.onAfterVerify!(hookContext(transport({ job: 1 })))).toMatchObject({
+      abort: true,
+    });
+
+    await hooks.onAfterSettle!({
+      ...hookContext({
+        ...owner,
+        responseBody: Buffer.from('{"jobId":"job-1"}'),
+        responseHeaders: { "content-type": "application/json", "x-job": "job-1" },
+        responseStatus: 201,
+      }),
+      result: {
+        success: false,
+        transaction: decodeCardanoTransaction(built.transaction).txHash,
+        network: PREPROD,
+        errorReason: "payment_pending",
+      },
+    });
+
+    const retry = await hooks.onAfterVerify!(hookContext(transport({ job: 1 })));
+    expect(retry).toEqual({
+      skipHandler: true,
+      response: {
+        status: 201,
+        contentType: "application/json",
+        headers: { "x-job": "job-1" },
+        body: { jobId: "job-1" },
+        isRaw: false,
+      },
+    });
+    expect(await hooks.onAfterVerify!(hookContext(transport({ job: 2 })))).toMatchObject({
+      abort: true,
+      reason: "payment_replay_conflict",
+      status: 409,
+    });
+  });
+
   it("parses Money strings to USDM atomic units", async () => {
     const server = new ExactCardanoServer();
     const result = await server.parsePrice("$1.50", CARDANO_MAINNET_CAIP2);
@@ -672,6 +781,40 @@ describe("ExactCardanoScheme server", () => {
     );
     expect(result.amount).toBe("12345");
     expect(result.extra?.tier).toBe("premium");
+  });
+
+  it("rejects non-canonical AssetAmount values before issuing requirements", async () => {
+    const server = new ExactCardanoServer();
+    await expect(
+      server.parsePrice({ amount: "0", asset: LOVELACE_ASSET }, CARDANO_MAINNET_CAIP2),
+    ).rejects.toThrow(/positive canonical integer/);
+    await expect(
+      server.parsePrice({ amount: "001", asset: LOVELACE_ASSET }, CARDANO_MAINNET_CAIP2),
+    ).rejects.toThrow(/positive canonical integer/);
+    await expect(
+      server.parsePrice(
+        { amount: "1", asset: USDM_MAINNET_ASSET.toUpperCase() },
+        CARDANO_MAINNET_CAIP2,
+      ),
+    ).rejects.toThrow(/canonical lowercase Cardano form/);
+  });
+
+  it("rejects non-canonical custom money parser results", async () => {
+    const server = new ExactCardanoServer();
+    server.registerMoneyParser(async () => ({
+      amount: "01",
+      asset: USDM_MAINNET_ASSET,
+    }));
+    await expect(server.parsePrice("1", CARDANO_MAINNET_CAIP2)).rejects.toThrow(
+      /positive canonical integer/,
+    );
+  });
+
+  it("rejects a Money value that rounds to zero atomic units", async () => {
+    const server = new ExactCardanoServer();
+    await expect(server.parsePrice("$0.0000001", CARDANO_MAINNET_CAIP2)).rejects.toThrow(
+      /too small to represent/,
+    );
   });
 
   it("supports MoneyParser chaining", async () => {

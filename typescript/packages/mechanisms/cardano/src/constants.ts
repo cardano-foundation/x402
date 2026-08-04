@@ -299,6 +299,8 @@ export const ERR_INVALID_SIGNATURE = "invalid_exact_cardano_payload_invalid_sign
  * creates none of its declared outputs, so it pays nothing.
  */
 export const ERR_TRANSACTION_PHASE2_INVALID = "invalid_exact_cardano_payload_phase2_invalid";
+/** Error: transaction fails the supported phase-1 payment shape or value/witness checks. */
+export const ERR_TRANSACTION_PHASE1_INVALID = "invalid_exact_cardano_payload_phase1_invalid";
 /** Error: the recipient output's lovelace is below the protocol min-UTXO. */
 export const ERR_MIN_UTXO_INSUFFICIENT = "invalid_exact_cardano_payload_min_utxo_insufficient";
 /** Error: masumi payTo is not the known Masumi escrow address for the network. */

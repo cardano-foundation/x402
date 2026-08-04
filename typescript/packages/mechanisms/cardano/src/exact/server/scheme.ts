@@ -6,16 +6,72 @@ import type {
   PaymentRequirements,
   Price,
   SchemeNetworkServer,
+  SchemeServerHooks,
   SupportedKind,
 } from "@x402/core/types";
+import { sha256 } from "@noble/hashes/sha2.js";
 import { convertToTokenAmount, numberToDecimalString, parseMoneyString } from "@x402/core/utils";
 import {
-  CARDANO_ASSET_REGEX,
+  CANONICAL_CARDANO_ASSET_REGEX,
+  POSITIVE_CANONICAL_AMOUNT_REGEX,
   getDefaultUsdmAsset,
   isCardanoNetwork,
   SCHEME_EXACT,
   USDM_DEFAULT_DECIMALS,
 } from "../../constants";
+import type { CardanoExtraMasumi } from "../../types";
+import { decodeCardanoTransaction, slotToPosixMs } from "../../utils";
+import { buildSignedTerms, computeTermsDigest } from "../masumi/digests";
+import { jcs } from "../masumi/jcs";
+
+/** Cached protected-handler result bound to one payment and request. */
+interface HandlerReplayRecord {
+  txHash: string;
+  fingerprint: string;
+  expiresAt: number;
+  response?: {
+    status: number;
+    contentType: string;
+    headers: Record<string, string>;
+    body: unknown;
+    isRaw: boolean;
+  };
+}
+
+/** HTTP-like transport fields used without coupling the mechanism to one adapter. */
+interface ReplayTransportContext {
+  request?: {
+    method?: string;
+    adapter?: {
+      getMethod?(): string;
+      getUrl?(): string;
+      getHeader?(name: string): string | undefined;
+      getBody?(): unknown;
+    };
+  };
+  responseBody?: Buffer;
+  responseHeaders?: Record<string, string>;
+  responseStatus?: number;
+}
+
+/** Headers that describe the buffered transfer, not the reusable representation. */
+const NON_REPLAYABLE_RESPONSE_HEADERS = new Set([
+  "cache-control",
+  "content-length",
+  "payment-response",
+  "settlement-overrides",
+  "transfer-encoding",
+]);
+
+/**
+ * Returns lowercase hexadecimal bytes.
+ *
+ * @param bytes - Bytes to encode.
+ * @returns Lowercase hexadecimal string.
+ */
+function bytesToHex(bytes: Uint8Array): string {
+  return Buffer.from(bytes).toString("hex").toLowerCase();
+}
 
 /**
  * Cardano server-side implementation for the Exact scheme.
@@ -26,12 +82,25 @@ import {
  */
 export class ExactCardanoScheme implements SchemeNetworkServer {
   readonly scheme = SCHEME_EXACT;
+  readonly requireMatchingPayloadResource = true;
+  readonly schemeHooks: SchemeServerHooks;
   private readonly moneyParsers: MoneyParser[] = [];
+  private readonly replayRecords = new Map<string, HandlerReplayRecord>();
+  private readonly replayOwners = new WeakMap<object, string>();
+
+  /** Creates a server scheme with its Cardano replay lifecycle hooks. */
+  constructor() {
+    this.schemeHooks = {
+      onAfterVerify: async context => this.claimProtectedOperation(context),
+      onAfterSettle: async context => this.storeProtectedResult(context),
+      onSettleFailure: async context => this.storeProtectedResult(context),
+      onVerifiedPaymentCanceled: async context => this.releaseProtectedOperation(context),
+    };
+  }
 
   /**
    * Registers a custom Money parser. Parsers are tried in registration order;
-   * the first non-null result wins. Returns `null` to defer to the next
-   * parser.
+   * the first non-null result wins. Returns `null` to defer to the next parser.
    *
    * @param parser - The parser to register.
    * @returns This instance for chaining.
@@ -42,9 +111,8 @@ export class ExactCardanoScheme implements SchemeNetworkServer {
   }
 
   /**
-   * Converts a price into an AssetAmount. AssetAmount inputs are passed
-   * through (after asset validation); Money inputs are parsed via the parser
-   * chain falling back to the default USDM conversion.
+   * Converts a price into an AssetAmount. AssetAmount inputs are passed through
+   * after validation. Money inputs use the parser chain, then USDM conversion.
    *
    * @param price - The price to parse.
    * @param network - The Cardano network identifier.
@@ -55,29 +123,28 @@ export class ExactCardanoScheme implements SchemeNetworkServer {
       if (!price.asset) {
         throw new Error(`Asset unit must be specified for AssetAmount on network ${network}`);
       }
-      if (!CARDANO_ASSET_REGEX.test(price.asset)) {
-        throw new Error(`Invalid Cardano asset unit: ${price.asset}`);
-      }
-      return { amount: price.amount, asset: price.asset, extra: price.extra ?? {} };
+      return this.validateAssetAmount(
+        { amount: price.amount, asset: price.asset, extra: price.extra ?? {} },
+        "AssetAmount",
+      );
     }
 
     const decimal = this.parseMoneyToDecimal(price as Money);
     for (const parser of this.moneyParsers) {
       const result = await parser(decimal, network);
       if (result !== null) {
-        if (!CARDANO_ASSET_REGEX.test(result.asset)) {
-          throw new Error(`Custom money parser returned invalid Cardano asset: ${result.asset}`);
-        }
-        return result;
+        return this.validateAssetAmount(result, "Custom money parser result");
       }
     }
-    return this.defaultMoneyConversion(decimal, network);
+    return this.validateAssetAmount(
+      this.defaultMoneyConversion(decimal, network),
+      "Default money conversion",
+    );
   }
 
   /**
-   * Returns the decimal precision for the supplied asset. Currently we assume
-   * USDM/USDC decimals (6) when the asset matches the default; integrators
-   * should subclass to provide custom decimals for other tokens.
+   * Returns the decimal precision for the supplied asset. The default is six;
+   * integrators can subclass this scheme for another token precision.
    *
    * @param _asset - The asset unit string.
    * @param _network - The Cardano network identifier.
@@ -90,21 +157,13 @@ export class ExactCardanoScheme implements SchemeNetworkServer {
   }
 
   /**
-   * Enhances payment requirements before they are returned to the client.
-   *
-   * The requirements' own `extra` is passed through **unchanged**. A
-   * facilitator's `/supported` extra is capability advertisement — which
-   * transfer methods, settlement layers and confirmation ranges it can service
-   * — and is not payload semantics, so merging it here would be wrong twice
-   * over: `PaymentRequirements.extra` selects what the payment *is*, and the
-   * Masumi `extra` is a **closed object** whose unknown fields are a rejection.
-   * Copying `assetTransferMethods`/`settlementLayers`/`submissionModes` into it
-   * would make every Masumi 402 invalid on arrival.
+   * Leaves requirement extras unchanged. `/supported` extras advertise
+   * capabilities; they are not payment semantics and Masumi extras are closed.
    *
    * @param paymentRequirements - The base payment requirements.
    * @param supportedKind - The matching SupportedKind.
-   * @param extensionKeys - The list of facilitator extension keys.
-   * @returns Promise resolving to enhanced payment requirements.
+   * @param extensionKeys - The facilitator extension keys.
+   * @returns The unchanged payment requirements.
    */
   enhancePaymentRequirements(
     paymentRequirements: PaymentRequirements,
@@ -116,6 +175,278 @@ export class ExactCardanoScheme implements SchemeNetworkServer {
       throw new Error(`Unsupported Cardano network: ${supportedKind.network}`);
     }
     return Promise.resolve(paymentRequirements);
+  }
+
+  /**
+   * Claims a canonical transaction (or Masumi terms digest) before the handler
+   * runs. Identical paid retries receive the stored result; concurrent or
+   * mismatched uses cannot execute the handler again.
+   *
+   * @param context - Core after-verify hook context.
+   * @returns A skip or abort directive when a prior claim exists.
+   */
+  private async claimProtectedOperation(
+    context: Parameters<NonNullable<SchemeServerHooks["onAfterVerify"]>>[0],
+  ): Promise<
+    | void
+    | { skipHandler: true; response: NonNullable<HandlerReplayRecord["response"]> }
+    | { abort: true; reason: string; message: string; status?: number }
+  > {
+    if (!context.result.isValid) return;
+    const transport = this.asReplayTransport(context.transportContext);
+    if (!transport) return;
+
+    let identity: { key: string; txHash: string; expiresAt: number };
+    try {
+      identity = this.paymentIdentity(context.paymentPayload, context.requirements);
+    } catch (cause) {
+      return {
+        abort: true,
+        reason: "invalid_exact_cardano_payload",
+        message: cause instanceof Error ? cause.message : String(cause),
+      };
+    }
+    const fingerprint = this.requestFingerprint(transport);
+    this.pruneReplayRecords(Date.now());
+
+    const existing = this.replayRecords.get(identity.key);
+    if (existing) {
+      if (existing.txHash !== identity.txHash) {
+        return {
+          abort: true,
+          reason: "duplicate_settlement",
+          message: "payment terms are already bound to a different Cardano transaction",
+          status: 409,
+        };
+      }
+      if (existing.fingerprint !== fingerprint) {
+        return {
+          abort: true,
+          reason: "payment_replay_conflict",
+          message: "Cardano transaction is already bound to a different protected request",
+          status: 409,
+        };
+      }
+      if (existing.response) {
+        return {
+          skipHandler: true,
+          response: {
+            ...existing.response,
+            body: Buffer.isBuffer(existing.response.body)
+              ? Buffer.from(existing.response.body)
+              : existing.response.body,
+          },
+        };
+      }
+      return {
+        abort: true,
+        reason: "duplicate_settlement",
+        message: "the protected operation for this Cardano payment is already in progress",
+        status: 409,
+      };
+    }
+
+    this.replayRecords.set(identity.key, {
+      txHash: identity.txHash,
+      fingerprint,
+      expiresAt: identity.expiresAt,
+    });
+    this.replayOwners.set(this.replayOwner(transport), identity.key);
+  }
+
+  /**
+   * Stores the completed handler response after settlement, including pending
+   * settlement. A later identical paid retry resumes settlement without
+   * running the protected operation again.
+   *
+   * @param context - Core after-settle hook context.
+   * @param context.transportContext - Transport carrying the buffered handler response.
+   */
+  private async storeProtectedResult(context: { transportContext?: unknown }): Promise<void> {
+    const transport = this.asReplayTransport(context.transportContext);
+    if (!transport) return;
+    const owner = this.replayOwner(transport);
+    const key = this.replayOwners.get(owner);
+    if (!key) return;
+    const record = this.replayRecords.get(key);
+    if (!record || !transport.responseBody) return;
+
+    const responseHeaders = transport.responseHeaders ?? {};
+    const contentType =
+      Object.entries(responseHeaders).find(
+        ([name]) => name.toLowerCase() === "content-type",
+      )?.[1] ?? "application/octet-stream";
+    const replayHeaders = Object.fromEntries(
+      Object.entries(responseHeaders).filter(
+        ([name]) =>
+          name.toLowerCase() !== "content-type" &&
+          !NON_REPLAYABLE_RESPONSE_HEADERS.has(name.toLowerCase()),
+      ),
+    );
+    const isJson = contentType.toLowerCase().includes("application/json");
+    let body: Buffer | unknown = Buffer.from(transport.responseBody);
+    if (isJson) {
+      try {
+        body = JSON.parse(transport.responseBody.toString("utf8"));
+      } catch {
+        // A malformed JSON response must still replay byte-for-byte.
+      }
+    }
+    record.response = {
+      status: transport.responseStatus ?? 200,
+      contentType,
+      headers: replayHeaders,
+      body,
+      isRaw: !isJson || Buffer.isBuffer(body),
+    };
+    this.replayOwners.delete(owner);
+  }
+
+  /**
+   * Releases only a claim owned by the request whose handler failed. An abort
+   * from a concurrent duplicate must not release the original request's claim.
+   *
+   * @param context - Verified-payment cancellation context.
+   */
+  private async releaseProtectedOperation(
+    context: Parameters<NonNullable<SchemeServerHooks["onVerifiedPaymentCanceled"]>>[0],
+  ): Promise<void> {
+    const transport = this.asReplayTransport(context.transportContext);
+    if (!transport) return;
+    const owner = this.replayOwner(transport);
+    const key = this.replayOwners.get(owner);
+    if (!key) return;
+    this.replayRecords.delete(key);
+    this.replayOwners.delete(owner);
+  }
+
+  /**
+   * Returns an object transport context suitable for WeakMap ownership.
+   *
+   * @param value - Untrusted transport context.
+   * @returns Object context, when present.
+   */
+  private asReplayTransport(value: unknown): ReplayTransportContext | undefined {
+    return typeof value === "object" && value !== null
+      ? (value as ReplayTransportContext)
+      : undefined;
+  }
+
+  /**
+   * Uses the stable request adapter as claim owner across verify and settle.
+   *
+   * @param transport - Transport context.
+   * @returns Stable ownership object.
+   */
+  private replayOwner(transport: ReplayTransportContext): object {
+    return transport.request?.adapter ?? transport;
+  }
+
+  /**
+   * Computes the logical replay key, canonical transaction id and retention.
+   *
+   * @param paymentPayload - Verified Cardano payment.
+   * @param requirements - Canonical requirements.
+   * @returns Replay identity and expiry.
+   */
+  private paymentIdentity(
+    paymentPayload: Parameters<
+      NonNullable<SchemeServerHooks["onAfterVerify"]>
+    >[0]["paymentPayload"],
+    requirements: Parameters<NonNullable<SchemeServerHooks["onAfterVerify"]>>[0]["requirements"],
+  ): { key: string; txHash: string; expiresAt: number } {
+    const transaction = (paymentPayload.payload as { transaction?: unknown }).transaction;
+    if (typeof transaction !== "string") throw new Error("Cardano transaction is missing");
+    const decoded = decodeCardanoTransaction(transaction);
+    const extra = requirements.extra as Record<string, unknown> | undefined;
+    const key =
+      extra?.assetTransferMethod === "masumi"
+        ? `masumi:${computeTermsDigest(
+            buildSignedTerms(
+              extra as unknown as CardanoExtraMasumi,
+              requirements as unknown as PaymentRequirements,
+            ),
+          )}`
+        : `transaction:${decoded.txHash}`;
+    const now = Date.now();
+    const fallback = now + requirements.maxTimeoutSeconds * 1000 + 600_000;
+    let expiresAt = fallback;
+    if (decoded.ttlSlot !== undefined) {
+      try {
+        expiresAt = Math.max(
+          fallback,
+          slotToPosixMs(requirements.network, decoded.ttlSlot) + 600_000,
+        );
+      } catch {
+        // The verified facilitator already validated the network and TTL.
+      }
+    }
+    return { key, txHash: decoded.txHash, expiresAt };
+  }
+
+  /**
+   * Builds a deterministic fingerprint for the protected HTTP operation.
+   *
+   * @param transport - Transport carrying request data.
+   * @returns Lowercase SHA-256 fingerprint.
+   */
+  private requestFingerprint(transport: ReplayTransportContext): string {
+    const adapter = transport.request?.adapter;
+    const method = transport.request?.method ?? adapter?.getMethod?.() ?? "";
+    const url = adapter?.getUrl?.() ?? "";
+    const contentType = adapter?.getHeader?.("content-type") ?? "";
+    const body = adapter?.getBody?.();
+    let canonicalBody = "";
+    if (body !== undefined) {
+      try {
+        canonicalBody = jcs(body);
+      } catch {
+        try {
+          canonicalBody =
+            JSON.stringify(body, (_key, value) =>
+              typeof value === "bigint" ? value.toString() : value,
+            ) ?? String(body);
+        } catch {
+          canonicalBody = Object.prototype.toString.call(body);
+        }
+      }
+    }
+    return bytesToHex(
+      sha256(
+        new TextEncoder().encode(
+          `${method.toUpperCase()}\n${url}\n${contentType}\n${canonicalBody}`,
+        ),
+      ),
+    );
+  }
+
+  /**
+   * Removes replay records only after their transaction validity and grace.
+   *
+   * @param now - Current POSIX milliseconds.
+   */
+  private pruneReplayRecords(now: number): void {
+    for (const [key, record] of this.replayRecords) {
+      if (record.expiresAt <= now) this.replayRecords.delete(key);
+    }
+  }
+
+  /**
+   * Ensures requirements use the same canonical wire forms enforced by the
+   * Cardano client and facilitator.
+   *
+   * @param value - Parsed amount and asset.
+   * @param source - Label included in validation errors.
+   * @returns The unchanged, validated value.
+   */
+  private validateAssetAmount(value: AssetAmount, source: string): AssetAmount {
+    if (!POSITIVE_CANONICAL_AMOUNT_REGEX.test(value.amount)) {
+      throw new Error(`${source} amount must be a positive canonical integer: ${value.amount}`);
+    }
+    if (!CANONICAL_CARDANO_ASSET_REGEX.test(value.asset)) {
+      throw new Error(`${source} asset must use canonical lowercase Cardano form: ${value.asset}`);
+    }
+    return value;
   }
 
   /**

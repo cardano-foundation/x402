@@ -37,7 +37,13 @@ const buildRequirements = (extra: Record<string, unknown> = {}): PaymentRequirem
 
 const stubSigner: FacilitatorCardanoSigner = {
   getAddresses: () => ["addr1qfacilitator00"],
-  getUtxo: async () => ({ exists: true, address: "addr1qpayer00" }),
+  getUtxo: async () => ({
+    exists: true,
+    address: "addr1qpayer00",
+    coin: 0n,
+    assets: { [USDM_MAINNET_ASSET.toLowerCase()]: 10_000n },
+    paymentKeyHash: "payer",
+  }),
   getCurrentSlot: async () => 100n,
   submitTransaction: async () => ({ txHash: "deadbeef", status: "confirmed" }),
   getTransactionEvidence: async () => ({ status: "unknown", confirmations: -2 }),
@@ -50,6 +56,8 @@ describe("Cardano facilitator security", () => {
     ttlSlot: undefined,
     validityStartSlot: undefined,
     inputs: [`${TX_HASH}#0`],
+    fee: 0n,
+    unsupportedPhase1Operations: [],
     outputs: [
       {
         address: RECIPIENT,
@@ -57,7 +65,7 @@ describe("Cardano facilitator security", () => {
         assets: { [USDM_MAINNET_ASSET.toLowerCase()]: 10_000n },
       },
     ],
-    vkeyHashes: [],
+    vkeyHashes: ["payer"],
     isValid: true,
     vkeyWitnessCount: 1,
     scriptWitnessCount: 0,
@@ -83,6 +91,8 @@ describe("Cardano facilitator security", () => {
       ttlSlot: undefined,
       validityStartSlot: undefined,
       inputs: [`${TX_HASH}#0`],
+      fee: 0n,
+      unsupportedPhase1Operations: [],
       outputs: [
         {
           address: RECIPIENT,
@@ -90,7 +100,7 @@ describe("Cardano facilitator security", () => {
           assets: { [USDM_MAINNET_ASSET.toLowerCase()]: 10_000n },
         },
       ],
-      vkeyHashes: [],
+      vkeyHashes: ["payer"],
       isValid: true,
       vkeyWitnessCount: 1,
       scriptWitnessCount: 0,
@@ -123,6 +133,8 @@ describe("Cardano facilitator security", () => {
       ttlSlot: undefined,
       validityStartSlot: undefined,
       inputs: [`${TX_HASH}#0`],
+      fee: 0n,
+      unsupportedPhase1Operations: [],
       outputs: [
         {
           address: RECIPIENT,
@@ -130,7 +142,7 @@ describe("Cardano facilitator security", () => {
           assets: { [USDM_MAINNET_ASSET.toLowerCase()]: 10_000n },
         },
       ],
-      vkeyHashes: [],
+      vkeyHashes: ["payer"],
       isValid: true,
       vkeyWitnessCount: 1,
       scriptWitnessCount: 0,
@@ -180,6 +192,73 @@ describe("Cardano facilitator security", () => {
     expect(result.invalidReason).toBe("exact_cardano_facilitator_evidence_unavailable");
   });
 
+  it("rejects a transaction whose inputs are not controlled by its witnesses", async () => {
+    vi.mocked(decodeCardanoTransaction).mockReturnValueOnce({
+      ...decodedPayment(),
+      vkeyHashes: ["unrelated"],
+    });
+    const requirements = buildRequirements({ confirmationPolicy: { l1Confirmations: 0 } });
+    const result = await new ExactCardanoFacilitator(stubSigner).verify(
+      {
+        x402Version: 2,
+        accepted: requirements,
+        payload: { transaction: "AAAA", nonce: `${TX_HASH}#0` },
+      },
+      requirements,
+    );
+    expect(result.invalidReason).toBe("invalid_exact_cardano_payload_phase1_invalid");
+    expect(result.invalidMessage).toContain("no matching vkey witness");
+  });
+
+  it("rejects a transaction whose inputs do not balance its outputs and fee", async () => {
+    vi.mocked(decodeCardanoTransaction).mockReturnValueOnce(decodedPayment());
+    const unbalancedSigner: FacilitatorCardanoSigner = {
+      ...stubSigner,
+      getUtxo: async () => ({
+        exists: true,
+        address: "addr1qpayer00",
+        coin: 0n,
+        assets: { [USDM_MAINNET_ASSET.toLowerCase()]: 10_001n },
+        paymentKeyHash: "payer",
+      }),
+    };
+    const requirements = buildRequirements({ confirmationPolicy: { l1Confirmations: 0 } });
+    const result = await new ExactCardanoFacilitator(unbalancedSigner).verify(
+      {
+        x402Version: 2,
+        accepted: requirements,
+        payload: { transaction: "AAAA", nonce: `${TX_HASH}#0` },
+      },
+      requirements,
+    );
+    expect(result.invalidReason).toBe("invalid_exact_cardano_payload_phase1_invalid");
+    expect(result.invalidMessage).toContain("outputs plus fee");
+  });
+
+  it("uses an explicit full phase-1 validator for non-payment transaction shapes", async () => {
+    vi.mocked(decodeCardanoTransaction).mockReturnValueOnce({
+      ...decodedPayment(),
+      unsupportedPhase1Operations: ["mint"],
+      vkeyHashes: ["unrelated"],
+    });
+    const validatePhase1Transaction = vi.fn(async () => undefined);
+    const advancedSigner: FacilitatorCardanoSigner = {
+      ...stubSigner,
+      validatePhase1Transaction,
+    };
+    const requirements = buildRequirements({ confirmationPolicy: { l1Confirmations: 0 } });
+    const result = await new ExactCardanoFacilitator(advancedSigner).verify(
+      {
+        x402Version: 2,
+        accepted: requirements,
+        payload: { transaction: "AAAA", nonce: `${TX_HASH}#0` },
+      },
+      requirements,
+    );
+    expect(result.isValid).toBe(true);
+    expect(validatePhase1Transaction).toHaveBeenCalledWith("AAAA", CARDANO_MAINNET_CAIP2);
+  });
+
   // `is_valid` sits outside the transaction body, so it is not covered by the
   // transaction id: a client can broadcast the failing (`is_valid = false`) form
   // and hand the facilitator the identical payload claiming `true`. Evidence
@@ -192,6 +271,8 @@ describe("Cardano facilitator security", () => {
       ttlSlot: undefined,
       validityStartSlot: undefined,
       inputs: [`${TX_HASH}#0`],
+      fee: 0n,
+      unsupportedPhase1Operations: [],
       outputs: [
         {
           address: RECIPIENT,
@@ -199,7 +280,7 @@ describe("Cardano facilitator security", () => {
           assets: { [USDM_MAINNET_ASSET.toLowerCase()]: 10_000n },
         },
       ],
-      vkeyHashes: [],
+      vkeyHashes: ["payer"],
       isValid: true,
       vkeyWitnessCount: 1,
       scriptWitnessCount: 1,

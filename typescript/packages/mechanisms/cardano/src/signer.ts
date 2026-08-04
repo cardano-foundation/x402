@@ -3,6 +3,7 @@ import {
   Assets,
   type Chain,
   Client,
+  Credential,
   mainnet,
   preprod,
   preview,
@@ -23,7 +24,11 @@ import {
   normalizeCardanoNetwork,
 } from "./constants";
 import { buildMasumiLock, type MasumiBuyerInput } from "./exact/masumi/lock";
-import { verifyMasumiAuthorization, type MasumiRegistryValidator } from "./exact/masumi/verify";
+import {
+  verifyMasumiAuthorization,
+  type MasumiDeploymentValidator,
+  type MasumiRegistryValidator,
+} from "./exact/masumi/verify";
 import { isKeyCredentialAddressOn, validateMasumiExtra } from "./exact/masumi/schema";
 import { buildScriptDatumInline } from "./exact/script/datum";
 import type {
@@ -254,6 +259,15 @@ export interface CardanoUtxoSnapshot {
    * facilitator resolves the payer (and, for Masumi, the datum's `buyer`).
    */
   address?: string;
+  /** Lovelace held by the UTXO, required for pre-submit phase-1 validation. */
+  coin?: bigint;
+  /** Native assets held by the UTXO, keyed by canonical asset unit. */
+  assets?: Record<string, bigint>;
+  /**
+   * Lowercase payment-key hash controlling this UTXO. Required before server
+   * submission; omitted for script or legacy addresses.
+   */
+  paymentKeyHash?: string;
 }
 
 /**
@@ -287,6 +301,20 @@ export interface FacilitatorCardanoSigner {
    * @returns A snapshot describing the UTXO presence.
    */
   getUtxo(ref: string, network: string): Promise<CardanoUtxoSnapshot>;
+
+  /**
+   * Optional full ledger phase-1 validator for server-submitted transactions.
+   * Use this to support script-controlled funding inputs or balance-changing
+   * operations outside the reference payment-only shape. It MUST throw unless
+   * the exact signed transaction passes all phase-1 ledger rules against the
+   * authenticated current UTXO set and protocol parameters. Transaction
+   * evaluation alone is insufficient because it permits unbalanced and
+   * unauthenticated transactions.
+   *
+   * @param signedTransactionBase64 - Exact signed transaction CBOR.
+   * @param network - The x402 network identifier.
+   */
+  validatePhase1Transaction?(signedTransactionBase64: string, network: string): Promise<void>;
 
   /**
    * Returns the current absolute slot number for the supplied network.
@@ -425,12 +453,11 @@ export interface ClientCardanoSignerConfig {
    */
   masumiRequestContent?: Record<string, unknown>;
   /**
-   * Explicitly approves a non-canonical `extra.deployment`. Choosing a
-   * deployment is choosing the escrow's dispute arbitrators, so the seller
-   * signature alone is not approval. Default `false`: a custom deployment is
-   * refused.
+   * Explicitly approves one non-canonical `extra.deployment`. Choosing a
+   * deployment is choosing the escrow's dispute arbitrators, so approval must
+   * inspect the exact network, address and applied parameters.
    */
-  allowCustomMasumiDeployment?: boolean;
+  validateCustomMasumiDeployment?: MasumiDeploymentValidator;
 }
 
 /**
@@ -517,7 +544,9 @@ export function toClientCardanoSigner(config: ClientCardanoSignerConfig): Client
               ? { validateRegistryClaim: config.validateMasumiRegistryClaim }
               : {}),
             ...(input.resource ? { resource: input.resource } : {}),
-            ...(config.allowCustomMasumiDeployment ? { validateCustomDeployment: () => true } : {}),
+            ...(config.validateCustomMasumiDeployment
+              ? { validateCustomDeployment: config.validateCustomMasumiDeployment }
+              : {}),
           },
         );
         if (!authorization.ok) {
@@ -631,12 +660,20 @@ export function toClientCardanoSigner(config: ClientCardanoSignerConfig): Client
 
       // Client mode: the client broadcasts before the paid retry, and the
       // facilitator authenticates that exact transaction instead of submitting
-      // it. Wait until the chain actually shows it: most providers expose no
-      // mempool read, so retrying immediately gives the facilitator nothing to
-      // authenticate and it rejects the payment as unseen.
+      // it. Try to wait until the chain shows it because most providers expose
+      // no mempool read. A wait failure is still ambiguous after broadcast and
+      // must not cause the wallet to build a second payment.
       if (input.submissionMode === "client") {
         const hash = await client.submitTx(signed);
-        await client.awaitTx(hash);
+        // Broadcast already succeeded. Observation failure is ambiguous: the
+        // transaction can still land, so return the exact signed payload and let
+        // the paid retry/facilitator report pending evidence instead of forcing
+        // the caller to build another transaction.
+        try {
+          await client.awaitTx(hash);
+        } catch {
+          // Intentionally continue with the original signed transaction.
+        }
       }
 
       return {
@@ -843,7 +880,28 @@ export function toFacilitatorCardanoSigner(
       });
       const utxos = await client.getUtxosByOutRef([input]);
       if (utxos.length > 0) {
-        return { exists: true, address: Address.toBech32(utxos[0].address) };
+        const utxo = utxos[0];
+        const assets: Record<string, bigint> = {};
+        if (utxo.assets.multiAsset) {
+          for (const [policyId, innerMap] of utxo.assets.multiAsset.map) {
+            const policyHex = Buffer.from(policyId.hash).toString("hex").toLowerCase();
+            for (const [assetName, quantity] of innerMap) {
+              const assetNameHex = Buffer.from(assetName.bytes).toString("hex").toLowerCase();
+              assets[`${policyHex}.${assetNameHex}`] = quantity;
+            }
+          }
+        }
+        const address = Address.toBech32(utxo.address);
+        const paymentCredential = Address.getPaymentCredential(Address.toHex(utxo.address));
+        return {
+          exists: true,
+          address,
+          coin: utxo.assets.lovelace,
+          assets,
+          ...(paymentCredential?._tag === "KeyHash"
+            ? { paymentKeyHash: Credential.toHex(paymentCredential).toLowerCase() }
+            : {}),
+        };
       }
       // Spent (or unknown). Client-submission mode still needs the owner
       // address to resolve the payer, so read it from the producing transaction

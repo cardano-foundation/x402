@@ -849,6 +849,11 @@ describe("x402HTTPResourceServer", () => {
       // Create payment payload with matching requirements
       const payload = buildPaymentPayload({
         accepted: matchingRequirements,
+        resource: {
+          url: "https://example.com/api/test",
+          description: "",
+          mimeType: "",
+        },
       });
 
       // Use proper encoding for payment header
@@ -917,7 +922,14 @@ describe("x402HTTPResourceServer", () => {
         maxTimeoutSeconds: 300,
         extra: {},
       });
-      const payload = buildPaymentPayload({ accepted: matchingRequirements });
+      const payload = buildPaymentPayload({
+        accepted: matchingRequirements,
+        resource: {
+          url: "https://example.com/api/test",
+          description: "",
+          mimeType: "",
+        },
+      });
       const { decodePaymentRequiredHeader, encodePaymentSignatureHeader } = await import(
         "../../../src/http"
       );
@@ -938,6 +950,57 @@ describe("x402HTTPResourceServer", () => {
         );
         expect(sawFailedPayload).toBe(true);
         expect(paymentRequired.accepts[0].extra.ChannelState).toEqual({ channelId: "0x123" });
+      }
+    });
+
+    it("rejects a client-carried resource that differs from the protected route", async () => {
+      Object.assign(mockScheme, { requireMatchingPayloadResource: true });
+      const routes = {
+        "/api/test": {
+          accepts: {
+            scheme: "exact",
+            payTo: "0xabc",
+            price: "$1.00" as Price,
+            network: "eip155:8453" as Network,
+          },
+        },
+      };
+      const requirements = buildPaymentRequirements({
+        scheme: "exact",
+        network: "eip155:8453" as Network,
+        payTo: "0xabc",
+        amount: "1000000",
+        asset: "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913",
+        maxTimeoutSeconds: 300,
+        extra: {},
+      });
+      const payload = buildPaymentPayload({
+        accepted: requirements,
+        resource: {
+          url: "https://example.com/api/other",
+          description: "",
+          mimeType: "",
+        },
+      });
+      const { decodePaymentRequiredHeader, encodePaymentSignatureHeader } = await import(
+        "../../../src/http"
+      );
+      const adapter = new MockHTTPAdapter({
+        "payment-signature": encodePaymentSignatureHeader(payload),
+      });
+
+      const result = await new x402HTTPResourceServer(ResourceServer, routes).processHTTPRequest({
+        adapter,
+        path: "/api/test",
+        method: "GET",
+      });
+
+      expect(mockFacilitator.verifyCalls).toHaveLength(0);
+      expect(result.type).toBe("payment-error");
+      if (result.type === "payment-error") {
+        const response = decodePaymentRequiredHeader(result.response.headers["PAYMENT-REQUIRED"]);
+        expect(response.error).toBe("Payment resource does not match the protected resource");
+        expect(response.resource.url).toBe("https://example.com/api/test");
       }
     });
 
@@ -1330,13 +1393,17 @@ describe("x402HTTPResourceServer", () => {
       ResourceServer.onAfterVerify(async () => ({
         skipHandler: true,
         response: {
-          contentType: "application/json",
-          body: { message: "Refund acknowledged" },
+          status: 202,
+          contentType: "text/plain",
+          headers: { "X-Replayed-Result": "true" },
+          body: Buffer.from("Refund acknowledged"),
+          isRaw: true,
         },
       }));
 
       const routes = {
         "/api/refund": {
+          resource: "https://example.com/api/refund",
           accepts: {
             scheme: "exact",
             payTo: "0xabc",
@@ -1357,7 +1424,14 @@ describe("x402HTTPResourceServer", () => {
         maxTimeoutSeconds: 300,
         extra: {},
       });
-      const payload = buildPaymentPayload({ accepted: matchingRequirements });
+      const payload = buildPaymentPayload({
+        accepted: matchingRequirements,
+        resource: {
+          url: "https://example.com/api/refund",
+          description: "",
+          mimeType: "",
+        },
+      });
       const { encodePaymentSignatureHeader } = await import("../../../src/http");
       const paymentHeader = encodePaymentSignatureHeader(payload);
 
@@ -1375,10 +1449,12 @@ describe("x402HTTPResourceServer", () => {
 
       expect(result.type).toBe("payment-error");
       if (result.type === "payment-error") {
-        expect(result.response.status).toBe(200);
+        expect(result.response.status).toBe(202);
         expect(result.response.headers["PAYMENT-RESPONSE"]).toBeDefined();
+        expect(result.response.headers["X-Replayed-Result"]).toBe("true");
         expect(result.response.headers["Cache-Control"]).toBe("private");
-        expect(result.response.body).toEqual({ message: "Refund acknowledged" });
+        expect(result.response.body).toEqual(Buffer.from("Refund acknowledged"));
+        expect(result.response.isRaw).toBe(true);
       }
     });
 
