@@ -104,6 +104,9 @@ export function stubFacilitatorSigner(
   return {
     getAddresses: () => [PAYER_ADDRESS],
     getUtxo: async ref => getFixtureInputSnapshot(ref) ?? { exists: true, address: PAYER_ADDRESS },
+    // Fixtures are built by the real transaction builder. Model the complete
+    // ledger preflight that production server-submission signers must provide.
+    validatePhase1Transaction: async () => undefined,
     getCurrentSlot: async () => STUB_CURRENT_SLOT,
     submitTransaction: async transaction => {
       const { txHash } = decodeCardanoTransaction(transaction);

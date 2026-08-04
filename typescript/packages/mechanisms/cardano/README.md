@@ -75,7 +75,7 @@ Overriding `runMethodSpecificChecks` is **not** required for any built-in method
 
 ## Submission and confirmation policy
 
-`requirements.extra.submissionPolicy` selects who broadcasts: `server` (the default when absent), `client`, or `either`. The paid payload echoes the normalized `submissionMode`, which must be allowed by the policy and must stay the same across retries for one transaction. In client mode the client broadcasts before the paid retry and the facilitator authenticates that exact transaction instead of submitting it — which requires the optional `getTransactionEvidence` signer hook, so a facilitator without it advertises `server` only.
+`requirements.extra.submissionPolicy` selects who broadcasts: `server` (the default when absent), `client`, or `either`. The paid payload echoes the normalized `submissionMode`, which must be allowed by the policy and must stay the same across retries for one transaction. Server mode requires a complete ledger phase-1 validator through `validatePhase1Transaction`; script evaluation alone is not enough. Client mode requires `getTransactionEvidence`, because the client broadcasts before the paid retry and the facilitator must authenticate that exact transaction. `/supported` advertises only modes for which these hooks exist.
 
 `requirements.extra.confirmationPolicy.l1Confirmations` sets the evidence required before `settle()` reports success: `-1` authenticated mempool acceptance, `0` canonical block inclusion, `1..20` that many newer blocks. It defaults to `1`. Below the threshold, `settle()` returns `errorReason: "payment_pending"` with the strongest evidence in `extra`; the paid retry resumes observing the same transaction without resubmitting it.
 
@@ -86,6 +86,8 @@ Hydra settlement is **not implemented**: a `settlementLayer: "hydra"` payload is
 `settle()` is idempotent per canonical transaction ID, not one-shot. The spec requires a paid retry to repeat the exact original `PAYMENT-SIGNATURE` and the verifier to resume observing the same transaction, so a terminal "already settled" state would strand any payment that needs more confirmations than a single call can wait for. What this package guarantees is that a given transaction is **broadcast at most once** and always reports the same ledger truth.
 
 Binding a settled payment to a **single protected operation** is the resource server's responsibility, which the spec assigns explicitly: key the record by canonical transaction ID for `default` and `script`. For `masumi` the binding is stronger and already enforced here — `termsDigest` covers exactly one issued 402, so a payment cannot be reused against a second one (each carries a fresh `sellerNonce`).
+
+The built-in replay stores are bounded and process-local. Multi-worker resource servers must supply one atomic shared `CardanoOperationStore`; multi-worker facilitators must supply one atomic shared `CardanoSettlementStore`. Run authentication before the x402 middleware. By default, replay fingerprints bind the authorization, cookie and x-api-key headers; use `requestBinding` when identity comes from another source. Cached responses never replay authentication or cookie headers.
 
 ## Masumi registry claims
 

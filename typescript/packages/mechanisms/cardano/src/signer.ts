@@ -381,8 +381,8 @@ export interface FacilitatorCardanoSigner {
    * Required for client-submission mode (the facilitator must authenticate the
    * transaction the client already broadcast instead of submitting it) and for
    * any `confirmationPolicy.l1Confirmations` above `0`, which needs the real
-   * canonical depth. A facilitator without this hook advertises `server`
-   * submission only.
+   * canonical depth. Without this hook, the facilitator cannot advertise
+   * `client` submission or confirmation depths above canonical inclusion.
    *
    * Implementations MUST return `status: "unknown"` when the ledger has no
    * record of the transaction, and SHOULD throw only on lookup failure. A
@@ -735,6 +735,13 @@ export interface FacilitatorCardanoSignerConfig {
    * scheme rejects mempool-only settlements unless `acceptMempool` is enabled.
    */
   awaitConfirmation?: boolean;
+  /**
+   * Complete Cardano ledger phase-1 validation used before server submission.
+   * The Evolution provider's `evaluateTx` only evaluates Plutus execution and
+   * is not sufficient. Without this callback, the reference signer does not
+   * advertise or accept server submission.
+   */
+  validatePhase1Transaction?: (signedTransactionBase64: string, network: string) => Promise<void>;
 }
 
 /**
@@ -743,8 +750,8 @@ export interface FacilitatorCardanoSignerConfig {
  * transaction's canonical depth) and the owner of an already-spent UTXO.
  *
  * Returns a disabled shim when the signer is configured with another provider;
- * the facilitator then advertises `server` submission only and cannot service
- * an `l1Confirmations` above `0`.
+ * the facilitator then cannot authenticate client submission or confirmation
+ * depths above canonical inclusion.
  *
  * @param provider - The signer's provider connection config.
  * @returns The Blockfrost query helpers.
@@ -870,6 +877,18 @@ export function toFacilitatorCardanoSigner(
     getAddresses(): readonly string[] {
       return addresses;
     },
+
+    ...(config.validatePhase1Transaction
+      ? {
+          async validatePhase1Transaction(
+            signedTransactionBase64: string,
+            network: string,
+          ): Promise<void> {
+            assertNetwork(network);
+            await config.validatePhase1Transaction!(signedTransactionBase64, network);
+          },
+        }
+      : {}),
 
     async getUtxo(ref: string, network: string): Promise<CardanoUtxoSnapshot> {
       assertNetwork(network);

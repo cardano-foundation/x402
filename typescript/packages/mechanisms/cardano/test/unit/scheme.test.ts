@@ -14,6 +14,10 @@ import {
 } from "../../src/constants";
 import type { ClientCardanoSigner, FacilitatorCardanoSigner } from "../../src/signer";
 import { decodeCardanoTransaction } from "../../src/utils";
+import {
+  InMemoryCardanoOperationStore,
+  InMemoryCardanoSettlementStore,
+} from "../../src/idempotency";
 import { validateMasumiExtra } from "../../src/exact/masumi/schema";
 import { issueMasumiRequirements } from "../helpers/masumi";
 import type { PaymentRequirements } from "@x402/core/types";
@@ -53,6 +57,7 @@ const stubSigner: ClientCardanoSigner = {
 const stubFacilitatorSigner: FacilitatorCardanoSigner = {
   getAddresses: () => ["addr1qfacilitator00"],
   getUtxo: async () => ({ exists: true, address: "addr1qpayer00" }),
+  validatePhase1Transaction: async () => undefined,
   getCurrentSlot: async () => 100n,
   submitTransaction: async transaction => ({
     txHash: decodeCardanoTransaction(transaction).txHash,
@@ -230,6 +235,19 @@ describe("ExactCardanoScheme facilitator", () => {
     expect(extra.submissionModes).toEqual(["server", "client"]);
     expect(extra.l1Confirmations).toEqual({
       server: { minimum: 0, maximum: 20 },
+      client: { minimum: 0, maximum: 20 },
+    });
+  });
+
+  it("does not advertise server submission without a complete phase-1 validator", () => {
+    const facilitator = new ExactCardanoFacilitator({
+      ...stubFacilitatorSigner,
+      validatePhase1Transaction: undefined,
+      getTransactionEvidence: async () => ({ status: "confirmed" as const, confirmations: 3 }),
+    });
+    const extra = facilitator.getExtra(CARDANO_PREPROD_CAIP2)!;
+    expect(extra.submissionModes).toEqual(["client"]);
+    expect(extra.l1Confirmations).toEqual({
       client: { minimum: 0, maximum: 20 },
     });
   });
@@ -414,6 +432,40 @@ describe("ExactCardanoScheme facilitator", () => {
       release();
       expect((await first).success).toBe(true);
       // The duplicate never reached the node.
+      expect(submits).toBe(1);
+    });
+
+    it("coordinates settlement claims across facilitator instances", async () => {
+      let release: () => void = () => {};
+      let signalReachedSubmit: () => void = () => {};
+      const gate = new Promise<void>(resolve => {
+        release = resolve;
+      });
+      const reachedSubmit = new Promise<void>(resolve => {
+        signalReachedSubmit = resolve;
+      });
+      let submits = 0;
+      const signer = stubFacilitator({
+        submitTransaction: async () => {
+          submits += 1;
+          signalReachedSubmit();
+          await gate;
+          return { txHash: canonicalTxHash, status: "confirmed" };
+        },
+        getTransactionEvidence: async () => ({ status: "confirmed", confirmations: 1 }),
+      });
+      const settlementStore = new InMemoryCardanoSettlementStore();
+      const firstFacilitator = new FakeOk(signer, { settlementStore });
+      const secondFacilitator = new FakeOk(signer, { settlementStore });
+
+      const first = firstFacilitator.settle(payloadFor(), reqs);
+      await reachedSubmit;
+      const duplicate = await secondFacilitator.settle(payloadFor(), reqs);
+
+      expect(duplicate.success).toBe(false);
+      expect(duplicate.errorReason).toBe("duplicate_settlement");
+      release();
+      expect((await first).success).toBe(true);
       expect(submits).toBe(1);
     });
 
@@ -689,13 +741,13 @@ describe("ExactCardanoScheme server", () => {
       accepted: requirements,
       payload: { transaction: built.transaction, nonce: built.nonce },
     };
-    const transport = (body: unknown) => ({
+    const transport = (body: unknown, headers: Record<string, string> = {}) => ({
       request: {
         method: "POST",
         adapter: {
           getMethod: () => "POST",
           getUrl: () => "https://example.com/jobs",
-          getHeader: () => "application/json",
+          getHeader: (name: string) => headers[name.toLowerCase()],
           getBody: () => body,
         },
       },
@@ -708,9 +760,16 @@ describe("ExactCardanoScheme server", () => {
       result: { isValid: true, payer: "addr_test1payer" },
     });
 
-    const server = new ExactCardanoServer();
+    const operationStore = new InMemoryCardanoOperationStore();
+    const server = new ExactCardanoServer({ operationStore });
+    const peerServer = new ExactCardanoServer({ operationStore });
     const hooks = server.schemeHooks;
-    const owner = transport({ job: 1 });
+    const peerHooks = peerServer.schemeHooks;
+    const requesterHeaders = {
+      "content-type": "application/json",
+      authorization: "Bearer owner-token",
+    };
+    const owner = transport({ job: 1 }, requesterHeaders);
     expect(
       await hooks.onAfterVerify!({
         ...hookContext(owner),
@@ -719,25 +778,30 @@ describe("ExactCardanoScheme server", () => {
     ).toBeUndefined();
     expect(await hooks.onAfterVerify!(hookContext(owner))).toBeUndefined();
 
-    const concurrent = transport({ job: 1 });
-    expect(await hooks.onAfterVerify!(hookContext(concurrent))).toMatchObject({
+    const concurrent = transport({ job: 1 }, requesterHeaders);
+    expect(await peerHooks.onAfterVerify!(hookContext(concurrent))).toMatchObject({
       abort: true,
       reason: "duplicate_settlement",
     });
     // Canceling the rejected duplicate must not release the original claim.
-    await hooks.onVerifiedPaymentCanceled!({
+    await peerHooks.onVerifiedPaymentCanceled!({
       ...hookContext(concurrent),
       reason: "after_verify_aborted",
     });
-    expect(await hooks.onAfterVerify!(hookContext(transport({ job: 1 })))).toMatchObject({
-      abort: true,
-    });
+    expect(
+      await peerHooks.onAfterVerify!(hookContext(transport({ job: 1 }, requesterHeaders))),
+    ).toMatchObject({ abort: true });
 
     await hooks.onAfterSettle!({
       ...hookContext({
         ...owner,
         responseBody: Buffer.from('{"jobId":"job-1"}'),
-        responseHeaders: { "content-type": "application/json", "x-job": "job-1" },
+        responseHeaders: {
+          "content-type": "application/json",
+          "x-job": "job-1",
+          "set-cookie": "session=private",
+          "www-authenticate": "Bearer realm=private",
+        },
         responseStatus: 201,
       }),
       result: {
@@ -748,7 +812,9 @@ describe("ExactCardanoScheme server", () => {
       },
     });
 
-    const retry = await hooks.onAfterVerify!(hookContext(transport({ job: 1 })));
+    const retry = await peerHooks.onAfterVerify!(
+      hookContext(transport({ job: 1 }, requesterHeaders)),
+    );
     expect(retry).toEqual({
       skipHandler: true,
       response: {
@@ -759,7 +825,20 @@ describe("ExactCardanoScheme server", () => {
         isRaw: false,
       },
     });
-    expect(await hooks.onAfterVerify!(hookContext(transport({ job: 2 })))).toMatchObject({
+    expect(
+      await hooks.onAfterVerify!(
+        hookContext(
+          transport({ job: 1 }, { ...requesterHeaders, authorization: "Bearer other-token" }),
+        ),
+      ),
+    ).toMatchObject({
+      abort: true,
+      reason: "payment_replay_conflict",
+      status: 409,
+    });
+    expect(
+      await hooks.onAfterVerify!(hookContext(transport({ job: 2 }, requesterHeaders))),
+    ).toMatchObject({
       abort: true,
       reason: "payment_replay_conflict",
       status: 409,

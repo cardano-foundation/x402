@@ -25,6 +25,9 @@ export { buildScriptDatumInline } from "./exact/script/datum";
 // Types
 export * from "./types";
 
+// Replay and settlement idempotency stores
+export * from "./idempotency";
+
 // Constants
 export * from "./constants";
 

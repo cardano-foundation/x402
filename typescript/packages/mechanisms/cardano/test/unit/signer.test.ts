@@ -19,6 +19,23 @@ const makeSigner = (): ReturnType<typeof toFacilitatorCardanoSigner> =>
   });
 
 describe("toFacilitatorCardanoSigner", () => {
+  it("exposes and network-guards an injected complete phase-1 validator", async () => {
+    const calls: Array<{ transaction: string; network: string }> = [];
+    const signer = toFacilitatorCardanoSigner({
+      network: CARDANO_PREPROD_CAIP2,
+      provider: { blockfrost: { baseUrl: "http://offline.invalid" } },
+      validatePhase1Transaction: async (transaction, network) => {
+        calls.push({ transaction, network });
+      },
+    });
+
+    await signer.validatePhase1Transaction!("AAAA", CARDANO_PREPROD_CIP34);
+    expect(calls).toEqual([{ transaction: "AAAA", network: CARDANO_PREPROD_CIP34 }]);
+    await expect(signer.validatePhase1Transaction!("AAAA", CARDANO_MAINNET_CAIP2)).rejects.toThrow(
+      /configured for cardano:preprod/,
+    );
+  });
+
   it("derives the current slot from the chain slot config (no network)", async () => {
     const signer = makeSigner();
     const slot = await signer.getCurrentSlot(CARDANO_PREPROD_CAIP2);
