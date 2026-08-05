@@ -1,6 +1,13 @@
-import { Address } from "@evolution-sdk/evolution";
+import { AddressEras } from "@evolution-sdk/evolution";
 
 import { getCardanoNetworkId } from "../../constants";
+import {
+  MAX_MASUMI_ADMIN_KEYS,
+  MAX_MASUMI_COMMITMENT_CONTENT_BYTES,
+  MAX_MASUMI_COMMITMENT_PARTS,
+  MAX_MASUMI_COSE_BYTES,
+  MAX_MASUMI_IDENTIFIER_COMPRESSED_BYTES,
+} from "../../limits";
 import { normalizeConfirmationPolicy, normalizeSubmissionPolicy } from "../../policy";
 import type {
   CardanoExtraMasumi,
@@ -70,6 +77,13 @@ const HEX_28_BYTES = /^[0-9a-f]{56}$/;
 const POSITIVE_INT = /^[1-9][0-9]*$/;
 /** Non-negative canonical base-10 integer with no leading zero. */
 const NON_NEGATIVE_INT = /^(0|[1-9][0-9]*)$/;
+const BASE64URL = /^[A-Za-z0-9_-]*$/;
+const MAX_JSON_DEPTH = 64;
+const MAX_JSON_VALUES = 100_000;
+const MAX_PART_NAME_CHARS = 128;
+const MAX_MEDIA_TYPE_CHARS = 256;
+const MAX_POSIX_DIGITS = 20;
+const MAX_AGENT_IDENTIFIER_HEX_CHARS = 120;
 
 /**
  * Whether a value is a plain (non-array, non-null) object.
@@ -93,8 +107,111 @@ function unknownKey(value: Record<string, unknown>, allowed: Set<string>): strin
 }
 
 /**
- * Whether a bech32 address parses, carries a verification-key payment
- * credential, and belongs to the selected network.
+ * Checks one commitment payload before digest code recursively canonicalizes it.
+ *
+ * @param value - Declared part content.
+ * @param canonicalization - Declared byte encoding.
+ * @returns Rejection detail, or undefined when within budget.
+ */
+function commitmentContentError(
+  value: unknown,
+  canonicalization: "jcs" | "raw",
+): string | undefined {
+  if (canonicalization === "raw") {
+    if (typeof value !== "string" || !BASE64URL.test(value)) {
+      return "raw content must be canonical unpadded base64url";
+    }
+    const decoded = Buffer.from(value, "base64url");
+    if (
+      decoded.length > MAX_MASUMI_COMMITMENT_CONTENT_BYTES ||
+      decoded.toString("base64url") !== value
+    ) {
+      return "raw content exceeds the byte limit or is not canonical base64url";
+    }
+    return undefined;
+  }
+
+  const pending: Array<
+    { value: unknown; depth: number; leave?: false } | { value: object; leave: true }
+  > = [{ value, depth: 0 }];
+  const seen = new WeakSet<object>();
+  let values = 0;
+  let bytes = 0;
+  while (pending.length > 0) {
+    const current = pending.pop()!;
+    if (current.leave) {
+      seen.delete(current.value);
+      continue;
+    }
+    values++;
+    if (values > MAX_JSON_VALUES) return "JCS content exceeds the value limit";
+    if (current.depth > MAX_JSON_DEPTH) return "JCS content exceeds the nesting limit";
+    if (current.value === null || typeof current.value === "boolean") continue;
+    if (typeof current.value === "number") {
+      if (!Number.isFinite(current.value)) return "JCS content contains a non-finite number";
+      continue;
+    }
+    if (typeof current.value === "string") {
+      bytes += Buffer.byteLength(current.value, "utf8");
+      if (bytes > MAX_MASUMI_COMMITMENT_CONTENT_BYTES) {
+        return "JCS content exceeds the byte limit";
+      }
+      continue;
+    }
+    if (typeof current.value !== "object") return "JCS content is not valid JSON";
+    if (seen.has(current.value)) return "JCS content contains a cycle";
+    seen.add(current.value);
+    pending.push({ value: current.value, leave: true });
+    if (Array.isArray(current.value)) {
+      for (const item of current.value) {
+        pending.push({ value: item, depth: current.depth + 1 });
+      }
+      continue;
+    }
+    const prototype = Object.getPrototypeOf(current.value);
+    if (prototype !== Object.prototype && prototype !== null) {
+      return "JCS content must contain only plain JSON objects";
+    }
+    for (const [key, item] of Object.entries(current.value as Record<string, unknown>)) {
+      bytes += Buffer.byteLength(key, "utf8");
+      if (bytes > MAX_MASUMI_COMMITMENT_CONTENT_BYTES) {
+        return "JCS content exceeds the byte limit";
+      }
+      pending.push({ value: item, depth: current.depth + 1 });
+    }
+  }
+  return undefined;
+}
+
+/**
+ * Whether a value is a deadline the scheme can safely convert with `BigInt`: a
+ * bounded, positive, canonical decimal string of POSIX milliseconds.
+ *
+ * Callers rely on this as a guard, not just as a schema rule — `BigInt("")` and
+ * `BigInt("12x")` throw a raw `SyntaxError`, which would escape a validator as
+ * an unhelpful crash instead of a precise rejection.
+ *
+ * @param value - The candidate deadline.
+ * @returns True when the value converts cleanly.
+ */
+export function isPosixMsString(value: unknown): value is string {
+  return typeof value === "string" && value.length <= MAX_POSIX_DIGITS && POSITIVE_INT.test(value);
+}
+
+/**
+ * Whether a bech32 address parses, belongs to the selected network, and uses an
+ * address form the Masumi escrow lifecycle can carry end to end: an enterprise
+ * address with a key payment credential, or a base address whose payment **and**
+ * stake credentials are both key hashes.
+ *
+ * A script payment credential is refused because `vested_pay` does
+ * `expect Some(vk) = address_to_verification_key(...)` on every spend path — the
+ * contract could never release the funds. A script stake credential and a
+ * pointer stake reference are refused for a narrower but equally terminal
+ * reason: Masumi's own `getPubKeyAddressDatum` accepts neither, and every later
+ * transition rebuilds the continuation datum through it while the validator
+ * demands `new_datum.buyer == buyer` exactly. Locking such an address strands
+ * the escrow for Masumi tooling with no recovery path.
  *
  * @param value - The candidate address.
  * @param network - The x402 Cardano network identifier.
@@ -103,11 +220,10 @@ function unknownKey(value: Record<string, unknown>, allowed: Set<string>): strin
 export function isKeyCredentialAddressOn(value: unknown, network: string): boolean {
   if (typeof value !== "string" || value.length === 0) return false;
   try {
-    const address = Address.fromBech32(value) as {
-      networkId?: number;
-      paymentCredential?: { _tag?: string };
-    };
-    if (address.paymentCredential?._tag !== "KeyHash") return false;
+    const address = AddressEras.fromBech32(value);
+    if (address._tag !== "BaseAddress" && address._tag !== "EnterpriseAddress") return false;
+    if (address.paymentCredential._tag !== "KeyHash") return false;
+    if (address._tag === "BaseAddress" && address.stakeCredential._tag !== "KeyHash") return false;
     return address.networkId === getCardanoNetworkId(network);
   } catch {
     return false;
@@ -128,19 +244,31 @@ function validateDeployment(
   if (extraneous) return { ok: false, detail: `deployment has unknown field ${extraneous}` };
 
   const { requiredAdmins, adminVkeys, cooldownPeriod } = value;
-  if (!Array.isArray(adminVkeys) || adminVkeys.length === 0) {
+  if (
+    !Array.isArray(adminVkeys) ||
+    adminVkeys.length === 0 ||
+    adminVkeys.length > MAX_MASUMI_ADMIN_KEYS
+  ) {
     return { ok: false, detail: "deployment.adminVkeys must be a non-empty array" };
   }
   if (!adminVkeys.every(vkey => typeof vkey === "string" && HEX_28_BYTES.test(vkey))) {
     return { ok: false, detail: "deployment.adminVkeys must be 28-byte lowercase hex" };
   }
-  if (typeof requiredAdmins !== "string" || !POSITIVE_INT.test(requiredAdmins)) {
+  if (
+    typeof requiredAdmins !== "string" ||
+    requiredAdmins.length > 3 ||
+    !POSITIVE_INT.test(requiredAdmins)
+  ) {
     return { ok: false, detail: "deployment.requiredAdmins must be a positive integer string" };
   }
   if (BigInt(requiredAdmins) > BigInt(adminVkeys.length)) {
     return { ok: false, detail: "deployment.requiredAdmins exceeds adminVkeys length" };
   }
-  if (typeof cooldownPeriod !== "string" || !NON_NEGATIVE_INT.test(cooldownPeriod)) {
+  if (
+    typeof cooldownPeriod !== "string" ||
+    cooldownPeriod.length > MAX_POSIX_DIGITS ||
+    !NON_NEGATIVE_INT.test(cooldownPeriod)
+  ) {
     return {
       ok: false,
       detail: "deployment.cooldownPeriod must be a non-negative integer string",
@@ -168,17 +296,24 @@ function validatePart(
   if (extraneous) return { ok: false, detail: `parts[${index}] has unknown field ${extraneous}` };
 
   const { name, canonicalization, mediaType, digest } = value;
-  if (typeof name !== "string" || name.length === 0) {
+  if (typeof name !== "string" || name.length === 0 || name.length > MAX_PART_NAME_CHARS) {
     return { ok: false, detail: `parts[${index}].name must be a non-empty string` };
   }
   if (canonicalization !== "jcs" && canonicalization !== "raw") {
     return { ok: false, detail: `parts[${index}].canonicalization must be jcs or raw` };
   }
-  if (mediaType !== undefined && typeof mediaType !== "string") {
+  if (
+    mediaType !== undefined &&
+    (typeof mediaType !== "string" || mediaType.length > MAX_MEDIA_TYPE_CHARS)
+  ) {
     return { ok: false, detail: `parts[${index}].mediaType must be a string` };
   }
   if (typeof digest !== "string" || !HEX_32_BYTES.test(digest)) {
     return { ok: false, detail: `parts[${index}].digest must be 32-byte lowercase hex` };
+  }
+  if ("content" in value) {
+    const contentError = commitmentContentError(value.content, canonicalization);
+    if (contentError) return { ok: false, detail: `parts[${index}].content ${contentError}` };
   }
   return {
     ok: true,
@@ -212,7 +347,11 @@ function validateCommitment(
   if (typeof value.digest !== "string" || !HEX_32_BYTES.test(value.digest)) {
     return { ok: false, detail: "inputCommitment.digest must be 32-byte lowercase hex" };
   }
-  if (!Array.isArray(value.parts) || value.parts.length === 0) {
+  if (
+    !Array.isArray(value.parts) ||
+    value.parts.length === 0 ||
+    value.parts.length > MAX_MASUMI_COMMITMENT_PARTS
+  ) {
     return { ok: false, detail: "inputCommitment.parts must be a non-empty array" };
   }
 
@@ -281,7 +420,9 @@ function validateTerms(
   if (
     "agentIdentifier" in value &&
     value.agentIdentifier !== null &&
-    (typeof value.agentIdentifier !== "string" || !HEX.test(value.agentIdentifier))
+    (typeof value.agentIdentifier !== "string" ||
+      value.agentIdentifier.length > MAX_AGENT_IDENTIFIER_HEX_CHARS ||
+      !HEX.test(value.agentIdentifier))
   ) {
     return { ok: false, detail: "terms.agentIdentifier must be null or lowercase hex" };
   }
@@ -290,8 +431,7 @@ function validateTerms(
   }
   const times = ["payByTime", "submitResultTime", "unlockTime", "externalDisputeUnlockTime"];
   for (const field of times) {
-    const time = value[field];
-    if (typeof time !== "string" || !POSITIVE_INT.test(time)) {
+    if (!isPosixMsString(value[field])) {
       return { ok: false, detail: `terms.${field} must be a positive POSIX-ms integer string` };
     }
   }
@@ -353,7 +493,16 @@ export function validateMasumiExtra(value: unknown, network: string): MasumiSche
   }
   for (const field of ["referenceKey", "referenceSignature", "blockchainIdentifier"] as const) {
     const hex = value[field];
-    if (typeof hex !== "string" || hex.length === 0 || !HEX.test(hex)) {
+    const maxBytes =
+      field === "blockchainIdentifier"
+        ? MAX_MASUMI_IDENTIFIER_COMPRESSED_BYTES
+        : MAX_MASUMI_COSE_BYTES;
+    if (
+      typeof hex !== "string" ||
+      hex.length === 0 ||
+      hex.length / 2 > maxBytes ||
+      !HEX.test(hex)
+    ) {
       return { ok: false, detail: `extra.${field} must be non-empty lowercase even-length hex` };
     }
   }

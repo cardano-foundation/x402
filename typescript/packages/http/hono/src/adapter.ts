@@ -100,9 +100,18 @@ export class HonoAdapter implements HTTPAdapter {
    */
   async getBody(): Promise<unknown> {
     try {
-      return await this.c.req.json();
+      return await this.c.req.raw.clone().json();
     } catch {
       return undefined;
     }
+  }
+
+  /**
+   * Gets exact request-body bytes without consuming Hono's request stream.
+   *
+   * @returns Promise resolving to exact request-body bytes
+   */
+  async getRawBody(): Promise<Uint8Array> {
+    return new Uint8Array(await this.c.req.raw.clone().arrayBuffer());
   }
 }

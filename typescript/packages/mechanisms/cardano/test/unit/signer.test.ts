@@ -1,6 +1,11 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { preprod, PrivateKey } from "@evolution-sdk/evolution";
-import { toClientCardanoSigner, toFacilitatorCardanoSigner } from "../../src/signer";
+import {
+  blockfrostQueries,
+  toClientCardanoSigner,
+  toFacilitatorCardanoSigner,
+  withCardanoProviderTimeout,
+} from "../../src/signer";
 import {
   CARDANO_MAINNET_CAIP2,
   CARDANO_PREPROD_CAIP2,
@@ -8,6 +13,9 @@ import {
   LOVELACE_ASSET,
 } from "../../src/constants";
 import { MASUMI_DEFAULT_DEPLOYMENT } from "../../src/exact/masumi/blueprint";
+import { MASUMI_MAX_DEADLINE_HORIZON_MS } from "../../src/exact/masumi/constants";
+import { verifyMasumiAuthorization } from "../../src/exact/masumi/verify";
+import type { CardanoExtraMasumi } from "../../src/types";
 import { issueMasumiRequirements } from "../helpers/masumi";
 
 const makeSigner = (): ReturnType<typeof toFacilitatorCardanoSigner> =>
@@ -19,6 +27,23 @@ const makeSigner = (): ReturnType<typeof toFacilitatorCardanoSigner> =>
   });
 
 describe("toFacilitatorCardanoSigner", () => {
+  it("exposes and network-guards an injected complete phase-1 validator", async () => {
+    const calls: Array<{ transaction: string; network: string }> = [];
+    const signer = toFacilitatorCardanoSigner({
+      network: CARDANO_PREPROD_CAIP2,
+      provider: { blockfrost: { baseUrl: "http://offline.invalid" } },
+      validatePhase1Transaction: async (transaction, network) => {
+        calls.push({ transaction, network });
+      },
+    });
+
+    await signer.validatePhase1Transaction!("AAAA", CARDANO_PREPROD_CIP34);
+    expect(calls).toEqual([{ transaction: "AAAA", network: CARDANO_PREPROD_CIP34 }]);
+    await expect(signer.validatePhase1Transaction!("AAAA", CARDANO_MAINNET_CAIP2)).rejects.toThrow(
+      /configured for cardano:preprod/,
+    );
+  });
+
   it("derives the current slot from the chain slot config (no network)", async () => {
     const signer = makeSigner();
     const slot = await signer.getCurrentSlot(CARDANO_PREPROD_CAIP2);
@@ -72,6 +97,75 @@ describe("toFacilitatorCardanoSigner", () => {
     });
     expect(providerOnly.getAddresses()).toEqual([]);
   });
+
+  it("attaches a bounded timeout to direct Blockfrost evidence requests", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(new Response(null, { status: 404 }));
+    vi.stubGlobal("fetch", fetchMock);
+    try {
+      const signer = toFacilitatorCardanoSigner({
+        network: CARDANO_PREPROD_CAIP2,
+        provider: {
+          blockfrost: { baseUrl: "https://cardano-preprod.blockfrost.io/api/v0" },
+          requestTimeoutMs: 25,
+        },
+      });
+      await expect(
+        signer.getTransactionEvidence!("a".repeat(64), CARDANO_PREPROD_CAIP2),
+      ).resolves.toEqual({ status: "unknown", confirmations: -2 });
+      expect(fetchMock.mock.calls[0][1].signal).toBeInstanceOf(AbortSignal);
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it("propagates provider failures while resolving a spent UTxO", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(new Response(null, { status: 503 }));
+    vi.stubGlobal("fetch", fetchMock);
+    try {
+      const queries = blockfrostQueries({
+        blockfrost: { baseUrl: "https://cardano-preprod.blockfrost.io/api/v0" },
+      });
+      await expect(queries.spentUtxoAddress("a".repeat(64), 0)).rejects.toThrow(
+        /Blockfrost \/txs\/.+\/utxos failed: 503/,
+      );
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it("rejects invalid provider timeout configuration", () => {
+    expect(() =>
+      toFacilitatorCardanoSigner({
+        network: CARDANO_PREPROD_CAIP2,
+        provider: {
+          blockfrost: { baseUrl: "http://offline.invalid" },
+          requestTimeoutMs: 0,
+        },
+      }),
+    ).toThrow(/requestTimeoutMs/);
+    expect(() =>
+      toFacilitatorCardanoSigner({
+        network: CARDANO_PREPROD_CAIP2,
+        provider: { koios: { baseUrl: "http://offline.invalid" }, requestTimeoutMs: 0 },
+      }),
+    ).toThrow(/requestTimeoutMs/);
+  });
+
+  it("bounds provider promises by the configured deadline", async () => {
+    vi.useFakeTimers();
+    try {
+      const pending = withCardanoProviderTimeout(
+        new Promise<never>(() => undefined),
+        25,
+        "testOperation",
+      );
+      const rejection = expect(pending).rejects.toThrow(/testOperation timed out after 25ms/);
+      await vi.advanceTimersByTimeAsync(25);
+      await rejection;
+    } finally {
+      vi.useRealTimers();
+    }
+  });
 });
 
 // The client is about to move real value, and in client-submission mode it
@@ -79,7 +173,7 @@ describe("toFacilitatorCardanoSigner", () => {
 // the seller authorization itself rather than trust the 402 — these all fail
 // before any provider call, so no network is involved.
 describe("client-side Masumi authorization", () => {
-  const PAY_BY_TIME = 1_785_756_000_000n;
+  const PAY_BY_TIME = BigInt(Date.now() + 5 * 60 * 1000);
 
   const clientSigner = (
     config: Partial<Parameters<typeof toClientCardanoSigner>[0]> = {},
@@ -150,7 +244,27 @@ describe("client-side Masumi authorization", () => {
     });
     await expect(
       clientSigner().buildAndSignPaymentTransaction(signInput(requirements)),
-    ).rejects.toThrow(/allowCustomMasumiDeployment/);
+    ).rejects.toThrow(/custom deployment requires explicit application approval/);
+    let inspectedDeployment: unknown;
+    await expect(
+      clientSigner({
+        validateCustomMasumiDeployment: claim => {
+          inspectedDeployment = claim;
+          return claim.deployment.cooldownPeriod === custom.cooldownPeriod;
+        },
+      }).buildAndSignPaymentTransaction(signInput(requirements)),
+    ).rejects.toThrow(/Blockfrost/);
+    expect(inspectedDeployment).toMatchObject({
+      network: CARDANO_PREPROD_CAIP2,
+      payTo: requirements.payTo,
+      deployment: custom,
+    });
+
+    await expect(
+      clientSigner({ validateCustomMasumiDeployment: () => false }).buildAndSignPaymentTransaction(
+        signInput(requirements),
+      ),
+    ).rejects.toThrow(/custom deployment was not approved/);
   });
 
   it("refuses a registry claim it cannot independently validate", async () => {
@@ -164,6 +278,104 @@ describe("client-side Masumi authorization", () => {
     await expect(
       clientSigner().buildAndSignPaymentTransaction(signInput(requirements)),
     ).rejects.toThrow(/masumi_agent_identifier/);
+  });
+
+  it("refuses invalid signed deadlines before wallet or provider access", async () => {
+    const { requirements } = await issueMasumiRequirements({
+      network: CARDANO_PREPROD_CAIP2,
+      asset: LOVELACE_ASSET,
+      amount: "50000000",
+      payByTimeMs: PAY_BY_TIME,
+      submitResultTimeMs: PAY_BY_TIME + 1n,
+    });
+    await expect(
+      clientSigner().buildAndSignPaymentTransaction(signInput(requirements)),
+    ).rejects.toThrow(/deadline intervals below the minimum/);
+  });
+
+  // The buyer cannot recover the payment or the collateral before
+  // `submit_result_time`, so a 402 naming a deadline a year out would freeze the
+  // wallet's funds for a year while satisfying every minimum-gap rule.
+  it("refuses deadlines beyond the accepted horizon before provider access", async () => {
+    const payByTime = BigInt(Date.now() + 5 * 60 * 1000);
+    const { requirements } = await issueMasumiRequirements({
+      network: CARDANO_PREPROD_CAIP2,
+      asset: LOVELACE_ASSET,
+      amount: "50000000",
+      payByTimeMs: payByTime,
+      externalDisputeUnlockTimeMs: payByTime + BigInt(400 * 24 * 60 * 60 * 1000),
+    });
+    await expect(
+      clientSigner().buildAndSignPaymentTransaction(signInput(requirements)),
+    ).rejects.toThrow(/deadlines extend beyond the accepted horizon/);
+
+    // An operator that genuinely accepts a long settlement window can raise it.
+    await expect(
+      clientSigner({
+        masumiMaxDeadlineHorizonMs: BigInt(500 * 24 * 60 * 60 * 1000),
+      }).buildAndSignPaymentTransaction(signInput(requirements)),
+    ).rejects.toThrow(/Blockfrost/);
+
+    // The horizon is buyer policy, so a verifier does not impose one. If it did,
+    // it could reject exactly the lock a client with a raised horizon already
+    // made — stranding the funds the check exists to protect.
+    const extra = requirements.extra as unknown as CardanoExtraMasumi;
+    await expect(verifyMasumiAuthorization(extra, requirements)).resolves.toMatchObject({
+      ok: true,
+    });
+    await expect(
+      verifyMasumiAuthorization(extra, requirements, {
+        maxDeadlineHorizonMs: MASUMI_MAX_DEADLINE_HORIZON_MS,
+      }),
+    ).resolves.toMatchObject({ ok: false, detail: "deadlines extend beyond the accepted horizon" });
+  });
+
+  it("refuses a payByTime outside the x402 timeout before provider access", async () => {
+    const { requirements } = await issueMasumiRequirements({
+      network: CARDANO_PREPROD_CAIP2,
+      asset: LOVELACE_ASSET,
+      amount: "50000000",
+      maxTimeoutSeconds: 60,
+      payByTimeMs: BigInt(Date.now() + 5 * 60 * 1000),
+    });
+    await expect(
+      clientSigner().buildAndSignPaymentTransaction(signInput(requirements)),
+    ).rejects.toThrow(/payByTime exceeds maxTimeoutSeconds/);
+  });
+
+  it("refuses a script-credential buyer return address before wallet access", async () => {
+    const { requirements } = await issueMasumiRequirements({
+      network: CARDANO_PREPROD_CAIP2,
+      asset: LOVELACE_ASSET,
+      amount: "50000000",
+      payByTimeMs: PAY_BY_TIME,
+    });
+    await expect(
+      clientSigner({
+        masumiBuyerInput: () => ({ buyerReturnAddress: requirements.payTo }),
+      }).buildAndSignPaymentTransaction(signInput(requirements)),
+    ).rejects.toThrow(/buyer return address must be a key-credential address/);
+  });
+
+  it("awaits registry validation with the protected resource", async () => {
+    const { requirements } = await issueMasumiRequirements({
+      network: CARDANO_PREPROD_CAIP2,
+      asset: LOVELACE_ASSET,
+      amount: "50000000",
+      payByTimeMs: PAY_BY_TIME,
+      agentIdentifier: `67ab0c92c4ac1610895a1c965ee50aba41a8f1513b15240723b3bd0b${"01".repeat(8)}`,
+    });
+    const resource = { url: "https://agent.example.com/weather" };
+    await expect(
+      clientSigner({
+        validateMasumiRegistryClaim: async () => true,
+      }).buildAndSignPaymentTransaction(signInput(requirements)),
+    ).rejects.toThrow(/protected resource/);
+    await expect(
+      clientSigner({
+        validateMasumiRegistryClaim: async claim => claim.resource.url === resource.url,
+      }).buildAndSignPaymentTransaction({ ...signInput(requirements), resource }),
+    ).rejects.toThrow(/Blockfrost/);
   });
 
   // The issuer MAY omit `content` for a part derived from the buyer's own

@@ -21,6 +21,7 @@ import {
   normalizeCardanoNetwork,
 } from "./constants";
 import { normalizeSubmissionMode } from "./policy";
+import { MAX_CARDANO_TRANSACTION_BYTES } from "./limits";
 import type {
   CardanoSettlementLayer,
   CardanoUtxoOutput,
@@ -148,6 +149,9 @@ export function decodeCardanoPayload(raw: Record<string, unknown>): ExactCardano
   if (typeof transaction !== "string" || transaction.length === 0) {
     throw new Error("Cardano payload is missing a transaction string");
   }
+  if (transaction.length > Math.ceil(MAX_CARDANO_TRANSACTION_BYTES / 3) * 4) {
+    throw new Error("Cardano payload transaction exceeds the decode limit");
+  }
   if (typeof nonce !== "string" || nonce.length === 0) {
     throw new Error("Cardano payload is missing a nonce string");
   }
@@ -189,7 +193,7 @@ export function decodeCardanoPayload(raw: Record<string, unknown>): ExactCardano
  * @returns The decoded transaction summary.
  */
 export function decodeCardanoTransaction(transactionBase64: string): DecodedCardanoTransaction {
-  const txBytes = Uint8Array.from(Buffer.from(transactionBase64, "base64"));
+  const txBytes = decodeCardanoTransactionBytes(transactionBase64);
   const tx = Transaction.fromCBORBytes(txBytes);
 
   // Hash the raw CBOR body bytes (blake2b-256). `extractBodyBytes` preserves
@@ -262,6 +266,23 @@ export function decodeCardanoTransaction(transactionBase64: string): DecodedCard
     ttlSlot: tx.body.ttl,
     validityStartSlot: tx.body.validityIntervalStart,
     inputs,
+    fee: tx.body.fee,
+    unsupportedPhase1Operations: [
+      ...(tx.body.auxiliaryDataHash ? ["auxiliaryData"] : []),
+      ...(tx.body.certificates ? ["certificates"] : []),
+      ...(tx.body.withdrawals ? ["withdrawals"] : []),
+      ...(tx.body.mint ? ["mint"] : []),
+      ...(tx.body.scriptDataHash ? ["scriptData"] : []),
+      ...(tx.body.collateralInputs ? ["collateralInputs"] : []),
+      ...(tx.body.requiredSigners ? ["requiredSigners"] : []),
+      ...(tx.body.collateralReturn ? ["collateralReturn"] : []),
+      ...(tx.body.totalCollateral !== undefined ? ["totalCollateral"] : []),
+      ...(tx.body.referenceInputs ? ["referenceInputs"] : []),
+      ...(tx.body.votingProcedures ? ["votingProcedures"] : []),
+      ...(tx.body.proposalProcedures ? ["proposalProcedures"] : []),
+      ...(tx.body.currentTreasuryValue !== undefined ? ["currentTreasuryValue"] : []),
+      ...(tx.body.donation !== undefined ? ["donation"] : []),
+    ],
     outputs,
     vkeyWitnessCount,
     vkeyHashes,
@@ -270,4 +291,29 @@ export function decodeCardanoTransaction(transactionBase64: string): DecodedCard
     signaturesValid,
     isValid: tx.isValid !== false,
   };
+}
+
+/**
+ * Strictly decodes canonical base64 transaction bytes under the local resource
+ * budget. Node's permissive base64 decoder alone would ignore malformed input.
+ *
+ * @param transactionBase64 - Canonical padded base64 transaction CBOR.
+ * @returns Decoded transaction bytes.
+ */
+export function decodeCardanoTransactionBytes(transactionBase64: string): Uint8Array {
+  if (
+    transactionBase64.length === 0 ||
+    transactionBase64.length > Math.ceil(MAX_CARDANO_TRANSACTION_BYTES / 3) * 4
+  ) {
+    throw new Error("Cardano transaction exceeds the decode limit");
+  }
+  const decoded = Buffer.from(transactionBase64, "base64");
+  if (
+    decoded.length === 0 ||
+    decoded.length > MAX_CARDANO_TRANSACTION_BYTES ||
+    decoded.toString("base64") !== transactionBase64
+  ) {
+    throw new Error("Cardano transaction must use canonical padded base64");
+  }
+  return Uint8Array.from(decoded);
 }

@@ -1,5 +1,15 @@
 import { describe, expect, it } from "vitest";
-import { Data } from "@evolution-sdk/evolution";
+import {
+  AddressEras,
+  BaseAddress,
+  Data,
+  Pointer,
+  PointerAddress,
+  ScriptHash,
+} from "@evolution-sdk/evolution";
+import { isKeyCredentialAddressOn } from "../../src/exact/masumi/schema";
+import { verifyMasumiDatumInvariants } from "../../src/exact/masumi/verify";
+import { freshKeyAddress } from "../helpers/masumi";
 import {
   addressCredentials,
   buildMasumiLockDatum,
@@ -10,6 +20,7 @@ import {
 import { masumiEscrowAddress } from "../../src/exact/masumi/blueprint";
 import { buildMasumiLock } from "../../src/exact/masumi/lock";
 import {
+  MASUMI_DEFAULT_MAX_COLLATERAL_LOVELACE,
   MASUMI_MIN_COLLATERAL_LOVELACE,
   masumiMinUtxoLovelace,
 } from "../../src/exact/masumi/constants";
@@ -123,6 +134,29 @@ describe("masumi lock datum codec", () => {
       addressCredentials(BUYER).payment.hash,
     );
     expect(parseMasumiLockDatum(buildMasumiLockDatum(input))?.buyerReturnAddress).toBeNull();
+  });
+
+  it("round-trips pointer stake references without converting them to None", () => {
+    const buyer = AddressEras.fromBech32(BUYER);
+    if (buyer._tag !== "BaseAddress") throw new Error("fixture must be a base address");
+    const pointerAddress = AddressEras.toBech32(
+      new PointerAddress.PointerAddress({
+        networkId: buyer.networkId,
+        paymentCredential: buyer.paymentCredential,
+        pointer: new Pointer.Pointer({ slot: 42, txIndex: 3, certIndex: 1 }),
+      }),
+    );
+    const datum = buildMasumiLockDatum({ ...input, buyerReturnAddress: pointerAddress });
+    expect(parseMasumiLockDatum(datum)?.buyerReturnAddress?.pointer).toEqual({
+      slot: 42n,
+      txIndex: 3n,
+      certIndex: 1n,
+    });
+    expect(addressCredentials(pointerAddress).pointer).toEqual({
+      slot: 42n,
+      txIndex: 3n,
+      certIndex: 1n,
+    });
   });
 
   it("extracts credentials: base has stake, enterprise script address has none", () => {
@@ -246,5 +280,92 @@ describe("client-computed collateral", () => {
     expect(parseMasumiLockDatum(lock.datum.data)!.buyerReturnAddress?.payment.hash).toBe(
       addressCredentials(BUYER).payment.hash,
     );
+  });
+
+  // The collateral is the buyer's own money and follows the datum size, which
+  // the seller controls through `reference_key` / `reference_signature`. This
+  // pins the gap between what a real lock needs and what padding can demand, and
+  // is why the client carries a ceiling.
+  it("shows padded COSE fields inflating the collateral past the client ceiling", async () => {
+    const { extra } = await issue(USDM_PREPROD_ASSET, "1000000");
+    const honest = buildMasumiLock(
+      extra,
+      BUYER,
+      USDM_PREPROD_ASSET,
+      1_000_000n,
+      COINS_PER_UTXO_BYTE,
+    );
+    expect(honest.collateralLovelace).toBeLessThan(MASUMI_DEFAULT_MAX_COLLATERAL_LOVELACE);
+
+    // Well inside MAX_MASUMI_COSE_BYTES, so the wire schema still accepts it.
+    const padded = buildMasumiLock(
+      { ...extra, referenceSignature: extra.referenceSignature + "ab".repeat(6000) },
+      BUYER,
+      USDM_PREPROD_ASSET,
+      1_000_000n,
+      COINS_PER_UTXO_BYTE,
+    );
+    expect(padded.collateralLovelace).toBeGreaterThan(MASUMI_DEFAULT_MAX_COLLATERAL_LOVELACE);
+  });
+});
+
+// The codec above stays faithful to whatever the chain carries; refusing an
+// address form is a policy decision, and it lives here. Masumi's own
+// `getPubKeyAddressDatum` accepts only an enterprise key address or a base
+// address whose payment AND stake credentials are key hashes. Every later
+// transition rebuilds the continuation datum through it while `vested_pay`
+// demands `new_datum.buyer == buyer` exactly, so locking anything else strands
+// the escrow for Masumi tooling with no recovery path.
+describe("accepted datum address forms", () => {
+  const NETWORK = CARDANO_PREPROD_CAIP2;
+  const base = AddressEras.fromBech32(BUYER);
+  if (base._tag !== "BaseAddress") throw new Error("fixture must be a base address");
+
+  const scriptStakeAddress = AddressEras.toBech32(
+    new BaseAddress.BaseAddress({
+      networkId: base.networkId,
+      paymentCredential: base.paymentCredential,
+      stakeCredential: ScriptHash.fromHex("00".repeat(28)),
+    }),
+  );
+  const pointerAddress = AddressEras.toBech32(
+    new PointerAddress.PointerAddress({
+      networkId: base.networkId,
+      paymentCredential: base.paymentCredential,
+      pointer: new Pointer.Pointer({ slot: 42, txIndex: 3, certIndex: 1 }),
+    }),
+  );
+
+  it("accepts base key/key and enterprise key addresses", () => {
+    expect(isKeyCredentialAddressOn(BUYER, NETWORK)).toBe(true);
+    expect(isKeyCredentialAddressOn(SELLER, NETWORK)).toBe(true);
+    expect(isKeyCredentialAddressOn(freshKeyAddress(NETWORK).address, NETWORK)).toBe(true);
+  });
+
+  it("refuses a script stake credential and a pointer stake reference", () => {
+    expect(isKeyCredentialAddressOn(scriptStakeAddress, NETWORK)).toBe(false);
+    expect(isKeyCredentialAddressOn(pointerAddress, NETWORK)).toBe(false);
+  });
+
+  it("refuses a script payment credential", () => {
+    expect(isKeyCredentialAddressOn(masumiEscrowAddress(NETWORK), NETWORK)).toBe(false);
+  });
+
+  it("rejects a lock datum carrying an unsupported address form", () => {
+    const escrow = masumiEscrowAddress(NETWORK);
+    for (const [field, address] of [
+      ["buyer", scriptStakeAddress],
+      ["seller", pointerAddress],
+    ] as const) {
+      const datum = buildMasumiLockDatum({
+        ...input,
+        ...(field === "buyer" ? { buyerAddress: address } : { sellerAddress: address }),
+      });
+      const view = parseMasumiLockDatum(datum)!;
+      expect(verifyMasumiDatumInvariants(view, escrow)).toMatchObject({
+        ok: false,
+        detail: expect.stringContaining(field),
+      });
+    }
   });
 });

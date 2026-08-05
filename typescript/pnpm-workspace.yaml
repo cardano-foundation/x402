@@ -9,6 +9,10 @@ packages:
   - site
 overrides:
   cssstyle: 5.3.6
+  "@effect/platform-node>ws": 8.21.0
+  "@effect/platform-node-shared>ws": 8.21.0
+  "@parcel/watcher>picomatch": 4.0.4
+  undici: 7.29.0
 packageExtensions:
   # @keetanetwork/anchor imports tslib at runtime but does not declare it.
   "@keetanetwork/anchor@*":

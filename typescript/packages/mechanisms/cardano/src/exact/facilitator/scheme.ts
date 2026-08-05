@@ -6,11 +6,13 @@ import type {
   SettleResponse,
   VerifyResponse,
 } from "@x402/core/types";
+import { randomBytes } from "node:crypto";
 import {
   ASSET_TRANSFER_METHOD_DEFAULT,
   ASSET_TRANSFER_METHOD_MASUMI,
   ASSET_TRANSFER_METHOD_SCRIPT,
   CARDANO_NETWORKS,
+  CANONICAL_CARDANO_ASSET_REGEX,
   ERR_AMOUNT_INSUFFICIENT,
   ERR_ASSET_MISMATCH,
   ERR_CHAIN_LOOKUP_FAILED,
@@ -29,11 +31,15 @@ import {
   ERR_PAYMENT_PENDING,
   ERR_POLICY_INVALID,
   ERR_RECIPIENT_MISMATCH,
+  ERR_REQUIREMENTS_INVALID,
   ERR_SCRIPT_ADDRESS_MISMATCH,
+  ERR_SETTLEMENT_LAYER_MISMATCH,
   ERR_SETTLEMENT_FAILED,
+  ERR_SETTLEMENT_DEFINITIVELY_REJECTED,
   ERR_SETTLEMENT_NOT_CONFIRMED,
   ERR_SUBMISSION_MODE_MISMATCH,
   ERR_TRANSACTION_DECODE_FAILED,
+  ERR_TRANSACTION_PHASE1_INVALID,
   ERR_TRANSACTION_PHASE2_INVALID,
   ERR_TRANSACTION_UNSIGNED,
   ERR_TTL_EXPIRED,
@@ -45,8 +51,10 @@ import {
   MAX_L1_CONFIRMATIONS,
   MIN_L1_CONFIRMATIONS,
   normalizeCardanoNetwork,
+  POSITIVE_CANONICAL_AMOUNT_REGEX,
   SCHEME_EXACT,
 } from "../../constants";
+import { MAX_CARDANO_INPUT_LOOKUP_CONCURRENCY, MAX_CARDANO_TRANSACTION_INPUTS } from "../../limits";
 import {
   confirmationsSatisfy,
   normalizeSubmissionMode,
@@ -73,9 +81,14 @@ import {
   parseUtxoRef,
   slotToPosixMs,
 } from "../../utils";
+import { InMemoryCardanoSettlementStore, type CardanoSettlementStore } from "../../idempotency";
 import { buildSignedTerms, computeTermsDigest } from "../masumi/digests";
 import { validateMasumiExtra } from "../masumi/schema";
-import { verifyMasumiLock, type MasumiRegistryValidator } from "../masumi/verify";
+import {
+  verifyMasumiLock,
+  type MasumiDeploymentValidator,
+  type MasumiRegistryValidator,
+} from "../masumi/verify";
 import { scriptAddressMatches } from "./scriptAddress";
 
 /**
@@ -83,18 +96,16 @@ import { scriptAddressMatches } from "./scriptAddress";
  */
 export interface ExactCardanoFacilitatorConfig {
   /**
-   * Fallback lifetime (in milliseconds) for a duplicate-settlement claim when
-   * the transaction declares no TTL. A claim for a transaction that does
-   * declare one is instead retained until its TTL plus
-   * {@link ExactCardanoFacilitatorConfig.duplicateCacheGraceMs}, because a
-   * shorter fixed timeout reopens the race while the transaction can still land.
+   * Atomic durable transaction and Masumi-terms claim store shared by every
+   * worker and deployment. Replay tombstones must survive process restarts.
    */
-  duplicateCacheTtlMs?: number;
+  settlementStore?: CardanoSettlementStore;
   /**
-   * Confirmation and rollback grace added to a transaction's TTL when retaining
-   * its duplicate-settlement claim. Defaults to ten minutes.
+   * Entry limit for an explicitly selected process-local settlement store.
+   * Supplying this opts into volatile replay state and is suitable only for
+   * tests and disposable development facilitators.
    */
-  duplicateCacheGraceMs?: number;
+  inMemorySettlementStoreMaxEntries?: number;
   /**
    * If `true` the facilitator may settle on authenticated mempool evidence when
    * the selected `confirmationPolicy` allows it (`l1Confirmations: -1`). Default
@@ -117,6 +128,8 @@ export interface ExactCardanoFacilitatorConfig {
    * taken on trust; unregistered sellers are unaffected.
    */
   validateRegistryClaim?: MasumiRegistryValidator;
+  /** Explicitly approves a non-canonical Masumi V2 deployment. */
+  validateCustomMasumiDeployment?: MasumiDeploymentValidator;
   /**
    * Allows a client-submitted payment to run Plutus scripts. Default `false`:
    * only a script-running transaction can land phase-2 invalid — creating none
@@ -126,27 +139,6 @@ export interface ExactCardanoFacilitatorConfig {
    * verifies `valid_contract`.
    */
   allowClientScriptExecution?: boolean;
-}
-
-/** A duplicate-settlement claim, retained until `expiresAt`. */
-interface SettlementClaim {
-  expiresAt: number;
-  /**
-   * A submission is in flight right now. A second caller arriving here is the
-   * race the spec's mitigation targets and is refused.
-   */
-  inFlight: boolean;
-  /**
-   * A submission attempt already completed for this transaction, so it MUST NOT
-   * be submitted again — but the spec's pending-confirmation retry still has to
-   * resume observing it, so this is not a rejection.
-   */
-  submitted: boolean;
-  /**
-   * The normalized submission mode this transaction was first settled under. A
-   * retry for the same transaction MUST use the same mode.
-   */
-  mode: CardanoSubmissionMode;
 }
 
 /**
@@ -192,8 +184,9 @@ interface VerifiedPayment {
  * The duplicate-settlement cache is keyed by the **canonical Cardano transaction
  * ID**, never by the serialized CBOR: witness sets and equally valid encodings
  * differ without changing the ledger transaction, so an encoding-level key is
- * trivially bypassed. It is in-process only; across instances the authoritative
- * replay guard is the on-chain nonce spend (rule 5).
+ * trivially bypassed. Production deployments must configure an atomic durable
+ * shared {@link CardanoSettlementStore}; process-local storage is explicit and
+ * intended only for tests or disposable development.
  *
  * **Idempotency boundary.** `settle()` is deliberately idempotent per
  * transaction id rather than one-shot: the spec requires a paid retry to repeat
@@ -212,15 +205,12 @@ export class ExactCardanoScheme implements SchemeNetworkFacilitator {
   readonly scheme = SCHEME_EXACT;
   readonly caipFamily = "cardano:*";
 
-  private readonly settlementCache = new Map<string, SettlementClaim>();
-  /** Masumi logical replay guard: `termsDigest` -> the first claimed tx id. */
-  private readonly termsCache = new Map<string, { txHash: string; expiresAt: number }>();
-  private readonly duplicateCacheTtlMs: number;
-  private readonly duplicateCacheGraceMs: number;
+  private readonly settlementStore: CardanoSettlementStore;
   private readonly acceptMempool: boolean;
   private readonly confirmationTimeoutMs: number;
   private readonly confirmationPollMs: number;
   private readonly validateRegistryClaim?: MasumiRegistryValidator;
+  private readonly validateCustomMasumiDeployment?: MasumiDeploymentValidator;
   private readonly allowClientScriptExecution: boolean;
 
   /**
@@ -233,12 +223,22 @@ export class ExactCardanoScheme implements SchemeNetworkFacilitator {
     private readonly signer: FacilitatorCardanoSigner,
     config: ExactCardanoFacilitatorConfig = {},
   ) {
-    this.duplicateCacheTtlMs = config.duplicateCacheTtlMs ?? 120_000;
-    this.duplicateCacheGraceMs = config.duplicateCacheGraceMs ?? 600_000;
+    if (config.settlementStore) {
+      this.settlementStore = config.settlementStore;
+    } else if (config.inMemorySettlementStoreMaxEntries !== undefined) {
+      this.settlementStore = new InMemoryCardanoSettlementStore(
+        config.inMemorySettlementStoreMaxEntries,
+      );
+    } else {
+      throw new Error(
+        "Cardano facilitators require a durable settlementStore; pass inMemorySettlementStoreMaxEntries explicitly only for tests or disposable development",
+      );
+    }
     this.acceptMempool = config.acceptMempool ?? false;
     this.confirmationTimeoutMs = config.confirmationTimeoutMs ?? 90_000;
     this.confirmationPollMs = config.confirmationPollMs ?? 5_000;
     this.validateRegistryClaim = config.validateRegistryClaim;
+    this.validateCustomMasumiDeployment = config.validateCustomMasumiDeployment;
     this.allowClientScriptExecution = config.allowClientScriptExecution ?? false;
   }
 
@@ -255,6 +255,8 @@ export class ExactCardanoScheme implements SchemeNetworkFacilitator {
    */
   getExtra(_network: string): Record<string, unknown> | undefined {
     void _network;
+    const supportsServerSubmission = typeof this.signer.validatePhase1Transaction === "function";
+    const supportsClientSubmission = this.canAuthenticateEvidence();
     return {
       assetTransferMethods: [
         ASSET_TRANSFER_METHOD_DEFAULT,
@@ -263,14 +265,28 @@ export class ExactCardanoScheme implements SchemeNetworkFacilitator {
       ],
       // Hydra needs head-authenticated evidence this facilitator cannot produce.
       settlementLayers: ["l1"],
-      submissionModes: this.canAuthenticateEvidence() ? ["server", "client"] : ["server"],
+      submissionModes: [
+        ...(supportsServerSubmission ? ["server"] : []),
+        ...(supportsClientSubmission ? ["client"] : []),
+      ],
       l1Confirmations: {
         // Mempool-only evidence is refused unless the operator opted in.
-        server: {
-          minimum: this.acceptMempool ? MIN_L1_CONFIRMATIONS : 0,
-          maximum: MAX_L1_CONFIRMATIONS,
-        },
-        client: { minimum: 0, maximum: MAX_L1_CONFIRMATIONS },
+        ...(supportsServerSubmission
+          ? {
+              server: {
+                minimum: this.acceptMempool ? MIN_L1_CONFIRMATIONS : 0,
+                maximum: supportsClientSubmission ? MAX_L1_CONFIRMATIONS : 0,
+              },
+            }
+          : {}),
+        ...(supportsClientSubmission
+          ? {
+              client: {
+                minimum: this.acceptMempool ? MIN_L1_CONFIRMATIONS : 0,
+                maximum: MAX_L1_CONFIRMATIONS,
+              },
+            }
+          : {}),
       },
     };
   }
@@ -347,31 +363,48 @@ export class ExactCardanoScheme implements SchemeNetworkFacilitator {
     const network = payload.accepted.network;
     const required = policies.confirmationPolicy.l1Confirmations;
 
-    // Masumi logical replay: several *different* transactions can carry a valid
-    // escrow datum for one 402, and a transaction-id cache catches none of them.
-    // `termsDigest` covers exactly one issued 402, so bind it to the first
-    // transaction claimed for it.
-    const termsGuard = this.claimTermsDigest(requirements, decoded);
-    if (!termsGuard.ok) {
+    // Claim the canonical transaction id, submission mode and optional Masumi
+    // terms digest in one atomic store operation. Splitting these writes can bind
+    // a quote without reserving its transaction when the store reaches capacity.
+    const ownerToken = randomBytes(16).toString("hex");
+    const claim = await this.claimSettlement(
+      decoded.txHash,
+      mode,
+      ownerToken,
+      this.masumiTermsDigest(requirements),
+    );
+    if (claim === "capacity-exceeded") {
       return {
         success: false,
-        errorReason: ERR_DUPLICATE_SETTLEMENT,
-        errorMessage: termsGuard.detail,
+        errorReason: ERR_SETTLEMENT_FAILED,
+        errorMessage: "the Cardano settlement store is at capacity",
         transaction: decoded.txHash,
         network,
       };
     }
-
-    // Claim the canonical transaction id before the first await on submission so
-    // concurrent settle() calls cannot both pass the duplicate check. Client mode
-    // claims too: it never submits, but the claim binds the transaction to one
-    // normalized mode, which a `submissionPolicy: either` retry must not flip.
-    const claim = this.claimSubmission(decoded.txHash, requirements.network, decoded, mode);
     if (claim === "mode-conflict") {
       return {
         success: false,
         errorReason: ERR_SUBMISSION_MODE_MISMATCH,
         errorMessage: "this transaction was already settled under the other submission mode",
+        transaction: decoded.txHash,
+        network,
+      };
+    }
+    if (claim === "terms-conflict") {
+      return {
+        success: false,
+        errorReason: ERR_DUPLICATE_SETTLEMENT,
+        errorMessage: "termsDigest is already bound to another transaction",
+        transaction: decoded.txHash,
+        network,
+      };
+    }
+    if (claim === "rejected") {
+      return {
+        success: false,
+        errorReason: ERR_SETTLEMENT_DEFINITIVELY_REJECTED,
+        errorMessage: "this transaction was definitively rejected before ledger acceptance",
         transaction: decoded.txHash,
         network,
       };
@@ -387,7 +420,7 @@ export class ExactCardanoScheme implements SchemeNetworkFacilitator {
 
     if (mode === "client") {
       // The client already broadcast; the facilitator MUST NOT submit it again.
-      this.markSubmitted(decoded.txHash);
+      await this.markSubmitted(decoded.txHash, ownerToken);
       const evidence = await this.awaitEvidence(decoded.txHash, network, required);
       return this.evidenceResponse(evidence, decoded.txHash, network, mode, required, verified);
     }
@@ -399,8 +432,13 @@ export class ExactCardanoScheme implements SchemeNetworkFacilitator {
           verified.payload.transaction,
           requirements.network,
         );
+        if (submission.txHash.toLowerCase() !== decoded.txHash.toLowerCase()) {
+          throw new Error(
+            `submitter returned transaction ${submission.txHash}, expected ${decoded.txHash}`,
+          );
+        }
         submissionStatus = submission.status;
-        this.markSubmitted(decoded.txHash);
+        await this.markSubmitted(decoded.txHash, ownerToken);
       } catch (cause) {
         // Submission threw. A throw does NOT prove the transaction never
         // reached the network: a signer that broadcasts and then waits for
@@ -409,9 +447,9 @@ export class ExactCardanoScheme implements SchemeNetworkFacilitator {
         // transaction that may already have landed, so the spec requires a
         // timeout, transport failure or unknown node result to RETAIN it.
         //
-        // Ask the ledger before deciding: only a transaction with no trace at
-        // all may free its claim, and then only when the signer can actually
-        // authenticate that absence.
+        // Ask the ledger before deciding. An `unknown` lookup is not proof that
+        // no submission occurred; only the signer's explicit definitive-
+        // rejection classifier may release the claim.
         let landed = false;
         if (this.canAuthenticateEvidence()) {
           try {
@@ -428,16 +466,29 @@ export class ExactCardanoScheme implements SchemeNetworkFacilitator {
         if (landed) {
           // It is on the ledger despite the throw: record it as submitted so the
           // retry resumes observing instead of submitting again.
-          this.markSubmitted(decoded.txHash);
+          await this.markSubmitted(decoded.txHash, ownerToken);
           const evidence = await this.awaitEvidence(decoded.txHash, requirements.network, required);
           return this.evidenceResponse(evidence, decoded.txHash, network, mode, required, verified);
         }
-        this.releaseClaim(decoded.txHash);
+        const definitive = this.signer.isDefinitiveSubmissionRejection?.(cause) === true;
+        if (definitive) {
+          // The protected handler has already run by this point. Keep both the
+          // transaction and Masumi terms tombstones: accepting different bytes
+          // for the same result would risk binding that result to another
+          // payment, while releasing this transaction would rebroadcast bytes
+          // the node has already rejected definitively.
+          await this.markRejected(decoded.txHash, ownerToken);
+        } else {
+          // Unknown does not prove absence. Keep the canonical transaction ID
+          // claimed so a paid retry cannot rebroadcast a transaction that may
+          // still be valid and in flight.
+          await this.markSubmitted(decoded.txHash, ownerToken);
+        }
         return {
           success: false,
-          errorReason: ERR_SETTLEMENT_FAILED,
+          errorReason: definitive ? ERR_SETTLEMENT_DEFINITIVELY_REJECTED : ERR_SETTLEMENT_FAILED,
           errorMessage: describeErrorChain(cause),
-          transaction: "",
+          transaction: decoded.txHash,
           network,
         };
       }
@@ -485,7 +536,9 @@ export class ExactCardanoScheme implements SchemeNetworkFacilitator {
    * @param context.payload - The decoded Cardano payload.
    * @param context.payer - The address that owns the nonce UTXO.
    * @param context.coinsPerUtxoByte - Live `coinsPerUtxoByte`, when available.
+   * @param context.resource - The protected x402 resource, when available.
    * @param context.validateRegistryClaim - Independent registry validator, if any.
+   * @param context.validateCustomDeployment - Explicit custom deployment validator, if any.
    * @returns Result describing success or a precise failure reason.
    */
   protected async runMethodSpecificChecks(
@@ -496,18 +549,26 @@ export class ExactCardanoScheme implements SchemeNetworkFacilitator {
       payer: string;
       coinsPerUtxoByte?: bigint;
       validateRegistryClaim?: MasumiRegistryValidator;
+      resource?: PaymentPayload["resource"];
+      validateCustomDeployment?: MasumiDeploymentValidator;
     },
   ): Promise<{ ok: true } | { ok: false; reason: string; detail?: string }> {
     const extra = requirements.extra;
     const method =
       (extra as CardanoExtra | undefined)?.assetTransferMethod ?? ASSET_TRANSFER_METHOD_DEFAULT;
     if (method === ASSET_TRANSFER_METHOD_DEFAULT) {
+      if (context.payload.settlementLayer !== undefined || context.payload.headId !== undefined) {
+        return { ok: false, reason: ERR_SETTLEMENT_LAYER_MISMATCH };
+      }
       return { ok: true };
     }
     if (method === ASSET_TRANSFER_METHOD_MASUMI) {
       return verifyMasumiLock(extra, requirements, decoded, context);
     }
     if (method === ASSET_TRANSFER_METHOD_SCRIPT) {
+      if (context.payload.settlementLayer !== undefined || context.payload.headId !== undefined) {
+        return { ok: false, reason: ERR_SETTLEMENT_LAYER_MISMATCH };
+      }
       const scriptExtra = extra as CardanoExtraScript;
       if (!scriptExtra.scriptHash && !scriptExtra.script) {
         return { ok: false, reason: ERR_SCRIPT_ADDRESS_MISMATCH };
@@ -603,6 +664,19 @@ export class ExactCardanoScheme implements SchemeNetworkFacilitator {
       if (!isCardanoNetwork(requirements.network)) {
         return { response: { isValid: false, invalidReason: ERR_NETWORK_MISMATCH, payer: "" } };
       }
+      if (
+        !POSITIVE_CANONICAL_AMOUNT_REGEX.test(requirements.amount) ||
+        !CANONICAL_CARDANO_ASSET_REGEX.test(requirements.asset)
+      ) {
+        return {
+          response: {
+            isValid: false,
+            invalidReason: ERR_REQUIREMENTS_INVALID,
+            invalidMessage: "amount and asset must use their positive canonical wire forms",
+            payer: "",
+          },
+        };
+      }
 
       let cardanoPayload: ExactCardanoPayload;
       try {
@@ -655,6 +729,17 @@ export class ExactCardanoScheme implements SchemeNetworkFacilitator {
         };
       }
 
+      if (decoded.inputs.length > MAX_CARDANO_TRANSACTION_INPUTS) {
+        return {
+          response: {
+            isValid: false,
+            invalidReason: ERR_TRANSACTION_PHASE1_INVALID,
+            invalidMessage: `transaction has ${decoded.inputs.length} inputs; verification permits at most ${MAX_CARDANO_TRANSACTION_INPUTS}`,
+            payer: "",
+          },
+        };
+      }
+
       // Rule 1: network validation. When the body declares a network_id it MUST
       // match the declared network. Absence of network_id is permitted: the
       // field is optional in the Cardano CBOR spec and many wallets omit it.
@@ -677,6 +762,16 @@ export class ExactCardanoScheme implements SchemeNetworkFacilitator {
 
       // Rule 5 (input check): nonce UTXO MUST appear as an input.
       const inputSet = new Set(decoded.inputs.map(i => i.toLowerCase()));
+      if (inputSet.size !== decoded.inputs.length) {
+        return {
+          response: {
+            isValid: false,
+            invalidReason: ERR_TRANSACTION_PHASE1_INVALID,
+            invalidMessage: "transaction contains duplicate inputs",
+            payer: "",
+          },
+        };
+      }
       const nonceLower = `${parsedNonce.txHash.toLowerCase()}#${parsedNonce.index}`;
       if (!inputSet.has(nonceLower)) {
         return { response: { isValid: false, invalidReason: ERR_NONCE_NOT_IN_INPUTS, payer: "" } };
@@ -800,9 +895,20 @@ export class ExactCardanoScheme implements SchemeNetworkFacilitator {
       // for a spent UTXO).
       let inputSnapshots: CardanoUtxoSnapshot[];
       try {
-        inputSnapshots = await Promise.all(
-          decoded.inputs.map(ref => this.signer.getUtxo(ref, requirements.network)),
-        );
+        inputSnapshots = [];
+        for (
+          let offset = 0;
+          offset < decoded.inputs.length;
+          offset += MAX_CARDANO_INPUT_LOOKUP_CONCURRENCY
+        ) {
+          inputSnapshots.push(
+            ...(await Promise.all(
+              decoded.inputs
+                .slice(offset, offset + MAX_CARDANO_INPUT_LOOKUP_CONCURRENCY)
+                .map(ref => this.signer.getUtxo(ref, requirements.network)),
+            )),
+          );
+        }
       } catch (cause) {
         return {
           response: {
@@ -839,6 +945,39 @@ export class ExactCardanoScheme implements SchemeNetworkFacilitator {
             payer: "",
           },
         };
+      }
+
+      // In server mode the protected handler can run before submitTransaction,
+      // so an approximation is unsafe: fee, size and other live protocol rules
+      // can still make an otherwise balanced transaction ledger-invalid. Require
+      // a complete phase-1 validator. Client mode already has authenticated
+      // ledger acceptance evidence for this exact transaction.
+      if (!acceptedByLedger) {
+        if (!this.signer.validatePhase1Transaction) {
+          return {
+            response: {
+              isValid: false,
+              invalidReason: ERR_TRANSACTION_PHASE1_INVALID,
+              invalidMessage: "server submission requires a complete Cardano phase-1 validator",
+              payer,
+            },
+          };
+        }
+        try {
+          await this.signer.validatePhase1Transaction(
+            cardanoPayload.transaction,
+            requirements.network,
+          );
+        } catch (cause) {
+          return {
+            response: {
+              isValid: false,
+              invalidReason: ERR_TRANSACTION_PHASE1_INVALID,
+              invalidMessage: cause instanceof Error ? cause.message : String(cause),
+              payer,
+            },
+          };
+        }
       }
 
       // Rules 2, 3, 4: at least one output MUST pay the requested amount of
@@ -909,6 +1048,8 @@ export class ExactCardanoScheme implements SchemeNetworkFacilitator {
           payer,
           coinsPerUtxoByte,
           validateRegistryClaim: this.validateRegistryClaim,
+          resource: payload.resource,
+          validateCustomDeployment: this.validateCustomMasumiDeployment,
         });
         if (!methodCheck.ok) {
           return {
@@ -940,6 +1081,17 @@ export class ExactCardanoScheme implements SchemeNetworkFacilitator {
               },
             };
           }
+        }
+        if (policies.confirmationPolicy.l1Confirmations > 0 && !this.canAuthenticateEvidence()) {
+          return {
+            response: {
+              isValid: false,
+              invalidReason: ERR_EVIDENCE_UNAVAILABLE,
+              invalidMessage:
+                "confirmation depth above canonical inclusion requires transaction evidence",
+              payer,
+            },
+          };
         }
         return {
           response: { isValid: true, payer },
@@ -1092,37 +1244,16 @@ export class ExactCardanoScheme implements SchemeNetworkFacilitator {
   }
 
   /**
-   * Binds a Masumi `termsDigest` to the first transaction claimed for it. A
-   * retry carrying the same transaction is idempotent; a different transaction
-   * for the same digest is a duplicate deposit and is refused.
+   * Returns the canonical Masumi terms digest, when this is a Masumi payment.
    *
-   * @param requirements - The canonical payment requirements.
-   * @param decoded - The decoded transaction.
-   * @returns Whether the claim was accepted.
+   * @param requirements - Accepted payment requirements.
+   * @returns Canonical terms digest, or undefined for another transfer method.
    */
-  private claimTermsDigest(
-    requirements: PaymentRequirements,
-    decoded: DecodedCardanoTransaction,
-  ): { ok: true } | { ok: false; detail: string } {
+  private masumiTermsDigest(requirements: PaymentRequirements): string | undefined {
     const extra = requirements.extra as CardanoExtra | undefined;
-    if (extra?.assetTransferMethod !== ASSET_TRANSFER_METHOD_MASUMI) return { ok: true };
+    if (extra?.assetTransferMethod !== ASSET_TRANSFER_METHOD_MASUMI) return undefined;
     const schema = validateMasumiExtra(extra, requirements.network);
-    if (!schema.ok) return { ok: true };
-
-    const digest = computeTermsDigest(buildSignedTerms(schema.extra, requirements));
-    const now = Date.now();
-    const existing = this.termsCache.get(digest);
-    if (existing && existing.expiresAt > now) {
-      return existing.txHash === decoded.txHash
-        ? { ok: true }
-        : { ok: false, detail: `termsDigest already bound to transaction ${existing.txHash}` };
-    }
-    this.termsCache.set(digest, {
-      txHash: decoded.txHash,
-      expiresAt: this.claimExpiry(requirements.network, decoded, now),
-    });
-    this.evict(this.termsCache, now);
-    return { ok: true };
+    return schema.ok ? computeTermsDigest(buildSignedTerms(schema.extra, requirements)) : undefined;
   }
 
   /**
@@ -1135,35 +1266,36 @@ export class ExactCardanoScheme implements SchemeNetworkFacilitator {
    * - `submitted` — this exact transaction was already broadcast. The caller
    *   MUST NOT submit it again, but the spec's pending-confirmation retry has to
    *   resume observing it, so this is not a rejection.
+   * - `rejected` — the node definitively rejected these bytes; never resubmit.
    * - `mode-conflict` — a retry for this transaction arrived under the other
    *   normalized submission mode, which the spec forbids.
    *
    * @param txHash - The canonical Cardano transaction id.
-   * @param network - The x402 network identifier.
-   * @param decoded - The decoded transaction, for its TTL.
    * @param mode - The normalized submission mode this settlement uses.
+   * @param ownerToken - Unpredictable token that owns a fresh claim.
+   * @param termsDigest - Optional Masumi terms binding.
    * @returns The claim outcome.
    */
-  private claimSubmission(
+  private async claimSettlement(
     txHash: string,
-    network: string,
-    decoded: DecodedCardanoTransaction,
     mode: CardanoSubmissionMode,
-  ): "fresh" | "in-flight" | "submitted" | "mode-conflict" {
-    const now = Date.now();
-    const claim = this.settlementCache.get(txHash);
-    if (claim !== undefined && claim.expiresAt > now) {
-      if (claim.mode !== mode) return "mode-conflict";
-      return claim.inFlight ? "in-flight" : "submitted";
-    }
-    this.settlementCache.set(txHash, {
-      expiresAt: this.claimExpiry(network, decoded, now),
-      inFlight: true,
-      submitted: false,
+    ownerToken: string,
+    termsDigest?: string,
+  ): Promise<
+    | "fresh"
+    | "in-flight"
+    | "submitted"
+    | "rejected"
+    | "mode-conflict"
+    | "terms-conflict"
+    | "capacity-exceeded"
+  > {
+    return this.settlementStore.claimSettlement({
+      txHash,
       mode,
+      ownerToken,
+      ...(termsDigest ? { termsDigest } : {}),
     });
-    this.evict(this.settlementCache, now);
-    return "fresh";
   }
 
   /**
@@ -1171,59 +1303,21 @@ export class ExactCardanoScheme implements SchemeNetworkFacilitator {
    * observing it instead of submitting it again.
    *
    * @param txHash - The canonical Cardano transaction id.
+   * @param ownerToken - Token that owns the claim.
    * @returns Nothing.
    */
-  private markSubmitted(txHash: string): void {
-    const claim = this.settlementCache.get(txHash);
-    if (claim) {
-      claim.inFlight = false;
-      claim.submitted = true;
-    }
+  private async markSubmitted(txHash: string, ownerToken: string): Promise<void> {
+    await this.settlementStore.markSubmitted(txHash, ownerToken);
   }
 
   /**
-   * When a claim may be released: the transaction's TTL plus the confirmation
-   * and rollback grace, so the claim outlives the window in which the
-   * transaction can still land. Falls back to a fixed window when the
-   * transaction declares no TTL.
+   * Permanently records a definitive pre-ledger rejection.
    *
-   * @param network - The x402 network identifier.
-   * @param decoded - The decoded transaction.
-   * @param now - The current epoch milliseconds.
-   * @returns The claim expiry in epoch milliseconds.
+   * @param txHash - Canonical transaction ID.
+   * @param ownerToken - Token that owns the claim.
    */
-  private claimExpiry(network: string, decoded: DecodedCardanoTransaction, now: number): number {
-    if (decoded.ttlSlot === undefined) return now + this.duplicateCacheTtlMs;
-    try {
-      return slotToPosixMs(network, decoded.ttlSlot) + this.duplicateCacheGraceMs;
-    } catch {
-      return now + this.duplicateCacheTtlMs;
-    }
-  }
-
-  /**
-   * Drops expired entries once a cache grows past a bound.
-   *
-   * @param cache - The cache to evict from.
-   * @param now - The current epoch milliseconds.
-   * @returns Nothing.
-   */
-  private evict(cache: Map<string, { expiresAt: number }>, now: number): void {
-    if (cache.size <= 1024) return;
-    for (const [key, entry] of cache) {
-      if (entry.expiresAt <= now) cache.delete(key);
-    }
-  }
-
-  /**
-   * Releases a previously-claimed transaction id so retries can attempt
-   * settlement again. Called when submission throws before anything landed.
-   *
-   * @param txHash - The canonical Cardano transaction id.
-   * @returns Nothing.
-   */
-  private releaseClaim(txHash: string): void {
-    this.settlementCache.delete(txHash);
+  private async markRejected(txHash: string, ownerToken: string): Promise<void> {
+    await this.settlementStore.markRejected(txHash, ownerToken);
   }
 }
 

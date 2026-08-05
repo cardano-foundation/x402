@@ -3,10 +3,14 @@ import type { PaymentRequirements } from "@x402/core/types";
 import { beforeAll, describe, expect, it } from "vitest";
 
 import { CARDANO_PREPROD_CAIP2, LOVELACE_ASSET, USDM_PREPROD_ASSET } from "../../src/constants";
-import { MASUMI_DEFAULT_DEPLOYMENT } from "../../src/exact/masumi/blueprint";
+import { MASUMI_DEFAULT_DEPLOYMENT, masumiEscrowAddress } from "../../src/exact/masumi/blueprint";
 import { buildMasumiLockDatum, inlineDatum } from "../../src/exact/masumi/datum";
 import { buildMasumiLock, type MasumiLock } from "../../src/exact/masumi/lock";
-import { verifyMasumiLock, type MasumiRegistryValidator } from "../../src/exact/masumi/verify";
+import {
+  verifyMasumiLock,
+  type MasumiDeploymentValidator,
+  type MasumiRegistryValidator,
+} from "../../src/exact/masumi/verify";
 import type { CardanoExtraMasumi, ExactCardanoPayload } from "../../src/types";
 import { decodeCardanoTransaction, slotToPosixMs } from "../../src/utils";
 import { buildSignedTx } from "../helpers/buildSignedTx";
@@ -93,15 +97,20 @@ function check(
     requirements?: PaymentRequirements;
     payload?: ExactCardanoPayload;
     validateRegistryClaim?: MasumiRegistryValidator;
+    validateCustomDeployment?: MasumiDeploymentValidator;
   } = {},
 ) {
   const requirements = overrides.requirements ?? fixture.requirements;
   return verifyMasumiLock(overrides.extra ?? requirements.extra, requirements, fixture.decoded, {
     payload: overrides.payload ?? fixture.payload,
     payer: fixture.buyer,
+    resource: { url: "https://agent.example.com/weather" },
     coinsPerUtxoByte: STUB_COINS_PER_UTXO_BYTE,
     ...(overrides.validateRegistryClaim
       ? { validateRegistryClaim: overrides.validateRegistryClaim }
+      : {}),
+    ...(overrides.validateCustomDeployment
+      ? { validateCustomDeployment: overrides.validateCustomDeployment }
       : {}),
   });
 }
@@ -155,20 +164,32 @@ describe("masumi lock verification", () => {
     fixture = await buildFixture();
   }, 60_000);
 
-  it("accepts a well-formed lovelace lock", () => {
-    expect(check(fixture)).toEqual({ ok: true });
+  it("accepts a well-formed lovelace lock", async () => {
+    expect(await check(fixture)).toEqual({ ok: true });
   });
 
   it("accepts a native-token lock whose lovelace is purely structural", async () => {
     const tokenFixture = await buildFixture({ asset: USDM_PREPROD_ASSET, amount: "1500000" });
-    expect(check(tokenFixture)).toEqual({ ok: true });
+    expect(await check(tokenFixture)).toEqual({ ok: true });
   });
 
   it("accepts a registered seller once an independent validator confirms the claim", async () => {
     const registered = await buildFixture({
       agentIdentifier: `67ab0c92c4ac1610895a1c965ee50aba41a8f1513b15240723b3bd0b${"01".repeat(8)}`,
     });
-    expect(check(registered, { validateRegistryClaim: () => true })).toEqual({ ok: true });
+    expect(await check(registered, { validateRegistryClaim: () => true })).toEqual({ ok: true });
+  });
+
+  it("awaits registry validation and supplies protected-resource context", async () => {
+    const registered = await buildFixture({
+      agentIdentifier: `67ab0c92c4ac1610895a1c965ee50aba41a8f1513b15240723b3bd0b${"01".repeat(8)}`,
+    });
+    expect(
+      await check(registered, {
+        validateRegistryClaim: async claim =>
+          claim.resource.url === "https://agent.example.com/weather",
+      }),
+    ).toEqual({ ok: true });
   });
 
   // The policy prefix proves nothing: anyone can copy a registered agent's
@@ -177,7 +198,7 @@ describe("masumi lock verification", () => {
     const registered = await buildFixture({
       agentIdentifier: `67ab0c92c4ac1610895a1c965ee50aba41a8f1513b15240723b3bd0b${"01".repeat(8)}`,
     });
-    expect(check(registered)).toMatchObject({
+    expect(await check(registered)).toMatchObject({
       ok: false,
       reason: "invalid_exact_cardano_requirements_masumi_agent_identifier",
     });
@@ -187,7 +208,7 @@ describe("masumi lock verification", () => {
     const registered = await buildFixture({
       agentIdentifier: `67ab0c92c4ac1610895a1c965ee50aba41a8f1513b15240723b3bd0b${"01".repeat(8)}`,
     });
-    expect(check(registered, { validateRegistryClaim: () => false })).toMatchObject({
+    expect(await check(registered, { validateRegistryClaim: () => false })).toMatchObject({
       ok: false,
       reason: "invalid_exact_cardano_requirements_masumi_agent_identifier",
     });
@@ -199,7 +220,7 @@ describe("masumi lock verification", () => {
       buyerNonce: "0102030405060708090a0b0c0d",
       sellerReturnAddress: seller.address,
     });
-    expect(check(withReturn)).toEqual({ ok: true });
+    expect(await check(withReturn)).toEqual({ ok: true });
   });
 
   describe("closed-object schema", () => {
@@ -209,51 +230,57 @@ describe("masumi lock verification", () => {
      * @param extra - The malformed extra.
      * @returns Nothing.
      */
-    const expectSchemaRejection = (extra: unknown): void => {
-      expect(check(fixture, { extra })).toMatchObject({
+    const expectSchemaRejection = async (extra: unknown): Promise<void> => {
+      expect(await check(fixture, { extra })).toMatchObject({
         ok: false,
         reason: "invalid_exact_cardano_requirements_masumi_schema",
       });
     };
 
-    it("rejects an unknown field in extra", () => {
-      expectSchemaRejection({ ...fixture.extra, contractAddress: fixture.requirements.payTo });
+    it("rejects an unknown field in extra", async () => {
+      await expectSchemaRejection({
+        ...fixture.extra,
+        contractAddress: fixture.requirements.payTo,
+      });
     });
 
-    it("rejects a terms field that duplicates a projected top-level field", () => {
-      expectSchemaRejection({
+    it("rejects a terms field that duplicates a projected top-level field", async () => {
+      await expectSchemaRejection({
         ...fixture.extra,
         terms: { ...fixture.extra.terms, amount: "50000000" },
       });
     });
 
-    it("rejects a paymentType other than Web3CardanoV2", () => {
-      expectSchemaRejection({
+    it("rejects a paymentType other than Web3CardanoV2", async () => {
+      await expectSchemaRejection({
         ...fixture.extra,
         terms: { ...fixture.extra.terms, paymentType: "Web3CardanoV1" },
       });
     });
 
-    it("rejects a JSON null sellerReturnAddress", () => {
-      expectSchemaRejection({
+    it("rejects a JSON null sellerReturnAddress", async () => {
+      await expectSchemaRejection({
         ...fixture.extra,
         terms: { ...fixture.extra.terms, sellerReturnAddress: null },
       });
     });
 
-    it("rejects a buyerNonce outside 14-26 hex characters", () => {
-      expectSchemaRejection({
+    it("rejects a buyerNonce outside 14-26 hex characters", async () => {
+      await expectSchemaRejection({
         ...fixture.extra,
         terms: { ...fixture.extra.terms, buyerNonce: "0102" },
       });
     });
 
-    it("rejects a confirmationPolicy outside -1..20", () => {
-      expectSchemaRejection({ ...fixture.extra, confirmationPolicy: { l1Confirmations: 21 } });
+    it("rejects a confirmationPolicy outside -1..20", async () => {
+      await expectSchemaRejection({
+        ...fixture.extra,
+        confirmationPolicy: { l1Confirmations: 21 },
+      });
     });
 
-    it("rejects an inputHash that is not the commitment digest", () => {
-      expectSchemaRejection({
+    it("rejects an inputHash that is not the commitment digest", async () => {
+      await expectSchemaRejection({
         ...fixture.extra,
         terms: { ...fixture.extra.terms, inputHash: "0".repeat(64) },
       });
@@ -261,13 +288,13 @@ describe("masumi lock verification", () => {
   });
 
   describe("commitment and seller authorization", () => {
-    it("rejects a tampered part digest", () => {
+    it("rejects a tampered part digest", async () => {
       const parts = fixture.extra.inputCommitment.parts.map(part => ({
         ...part,
         digest: "0".repeat(64),
       }));
       expect(
-        check(fixture, {
+        await check(fixture, {
           extra: {
             ...fixture.extra,
             inputCommitment: { ...fixture.extra.inputCommitment, parts },
@@ -279,13 +306,13 @@ describe("masumi lock verification", () => {
       });
     });
 
-    it("rejects content that does not hash to its declared digest", () => {
+    it("rejects content that does not hash to its declared digest", async () => {
       const parts = fixture.extra.inputCommitment.parts.map(part => ({
         ...part,
         content: { days: 4, units: "metric" },
       }));
       expect(
-        check(fixture, {
+        await check(fixture, {
           extra: {
             ...fixture.extra,
             inputCommitment: { ...fixture.extra.inputCommitment, parts },
@@ -297,9 +324,9 @@ describe("masumi lock verification", () => {
       });
     });
 
-    it("rejects terms whose digest the seller never signed", () => {
+    it("rejects terms whose digest the seller never signed", async () => {
       expect(
-        check(fixture, {
+        await check(fixture, {
           extra: { ...fixture.extra, terms: { ...fixture.extra.terms, settlementPolicy: "auto" } },
         }),
       ).toMatchObject({
@@ -308,9 +335,9 @@ describe("masumi lock verification", () => {
       });
     });
 
-    it("rejects a top-level amount the seller did not sign", () => {
+    it("rejects a top-level amount the seller did not sign", async () => {
       expect(
-        check(fixture, {
+        await check(fixture, {
           requirements: { ...fixture.requirements, amount: "49999999" },
           extra: fixture.extra,
         }),
@@ -322,15 +349,15 @@ describe("masumi lock verification", () => {
 
     it("rejects an agentIdentifier from another policy id", async () => {
       const other = await buildFixture({ agentIdentifier: `${"ff".repeat(28)}01` });
-      expect(check(other)).toMatchObject({
+      expect(await check(other)).toMatchObject({
         ok: false,
         reason: "invalid_exact_cardano_requirements_masumi_agent_identifier",
       });
     });
 
-    it("rejects a blockchainIdentifier that decodes to different values", () => {
+    it("rejects a blockchainIdentifier that decodes to different values", async () => {
       expect(
-        check(fixture, {
+        await check(fixture, {
           extra: {
             ...fixture.extra,
             blockchainIdentifier:
@@ -345,9 +372,9 @@ describe("masumi lock verification", () => {
   });
 
   describe("deployment and escrow address", () => {
-    it("rejects a payTo that is not the derived escrow address", () => {
+    it("rejects a payTo that is not the derived escrow address", async () => {
       expect(
-        check(fixture, {
+        await check(fixture, {
           requirements: { ...fixture.requirements, payTo: freshKeyAddress(NETWORK).address },
           extra: fixture.extra,
         }),
@@ -357,9 +384,9 @@ describe("masumi lock verification", () => {
       });
     });
 
-    it("rejects a custom deployment whose parameters change the address", () => {
+    it("rejects a custom deployment whose parameters change the address", async () => {
       expect(
-        check(fixture, {
+        await check(fixture, {
           extra: {
             ...fixture.extra,
             deployment: { ...MASUMI_DEFAULT_DEPLOYMENT, cooldownPeriod: "999999" },
@@ -370,21 +397,36 @@ describe("masumi lock verification", () => {
         reason: "invalid_exact_cardano_requirements_masumi_deployment",
       });
     });
+
+    it("requires facilitator approval for the exact custom deployment", async () => {
+      const custom = await buildFixture({
+        deployment: { ...MASUMI_DEFAULT_DEPLOYMENT, cooldownPeriod: "999999" },
+      });
+      expect(await check(custom)).toMatchObject({
+        ok: false,
+        reason: "invalid_exact_cardano_requirements_masumi_deployment",
+      });
+      expect(
+        await check(custom, {
+          validateCustomDeployment: claim => claim.payTo === custom.requirements.payTo,
+        }),
+      ).toEqual({ ok: true });
+    });
   });
 
   describe("settlement layer", () => {
-    it("requires a settlementLayer on the payload", () => {
+    it("requires a settlementLayer on the payload", async () => {
       expect(
-        check(fixture, { payload: { ...fixture.payload, settlementLayer: undefined } }),
+        await check(fixture, { payload: { ...fixture.payload, settlementLayer: undefined } }),
       ).toMatchObject({
         ok: false,
         reason: "invalid_exact_cardano_payload_settlement_layer_mismatch",
       });
     });
 
-    it("rejects a layer the signed settlementPolicy forbids", () => {
+    it("rejects a layer the signed settlementPolicy forbids", async () => {
       expect(
-        check(fixture, { payload: { ...fixture.payload, settlementLayer: "hydra" } }),
+        await check(fixture, { payload: { ...fixture.payload, settlementLayer: "hydra" } }),
       ).toMatchObject({
         ok: false,
         reason: "invalid_exact_cardano_payload_settlement_layer_mismatch",
@@ -397,7 +439,7 @@ describe("masumi lock verification", () => {
     it("rejects hydra outright, even when the terms allow it", async () => {
       const hydra = await buildFixture({ settlementPolicy: "hydra" });
       expect(
-        check(hydra, { payload: { ...hydra.payload, settlementLayer: "hydra" } }),
+        await check(hydra, { payload: { ...hydra.payload, settlementLayer: "hydra" } }),
       ).toMatchObject({
         ok: false,
         reason: "invalid_exact_cardano_payload_settlement_layer_unsupported",
@@ -406,12 +448,12 @@ describe("masumi lock verification", () => {
 
     it("rejects an auto policy resolved to hydra", async () => {
       const auto = await buildFixture({ settlementPolicy: "auto" });
-      expect(check(auto, { payload: { ...auto.payload, settlementLayer: "hydra" } })).toMatchObject(
-        {
-          ok: false,
-          reason: "invalid_exact_cardano_payload_settlement_layer_unsupported",
-        },
-      );
+      expect(
+        await check(auto, { payload: { ...auto.payload, settlementLayer: "hydra" } }),
+      ).toMatchObject({
+        ok: false,
+        reason: "invalid_exact_cardano_payload_settlement_layer_unsupported",
+      });
     });
   });
 
@@ -420,7 +462,7 @@ describe("masumi lock verification", () => {
       const mutated = await buildFixture({
         mutateLock: (extra, buyer) => lockWithDatum(extra, buyer, { sellerNonce: "cd".repeat(32) }),
       });
-      expect(check(mutated)).toMatchObject({
+      expect(await check(mutated)).toMatchObject({
         ok: false,
         reason: "invalid_exact_cardano_payload_masumi_datum_mismatch",
       });
@@ -431,7 +473,7 @@ describe("masumi lock verification", () => {
         mutateLock: (extra, buyer) =>
           lockWithDatum(extra, buyer, { buyerAddress: freshKeyAddress(NETWORK).address }),
       });
-      expect(check(mutated)).toMatchObject({
+      expect(await check(mutated)).toMatchObject({
         ok: false,
         reason: "invalid_exact_cardano_payload_masumi_datum_mismatch",
       });
@@ -447,7 +489,7 @@ describe("masumi lock verification", () => {
           return { ...base, datum: inlineDatum(Data.constr(0n, fields)) };
         },
       });
-      expect(check(mutated)).toMatchObject({
+      expect(await check(mutated)).toMatchObject({
         ok: false,
         reason: "invalid_exact_cardano_payload_masumi_datum_invalid",
         detail: "cooldown",
@@ -459,9 +501,23 @@ describe("masumi lock verification", () => {
         mutateLock: (extra, buyer) =>
           lockWithDatum(extra, buyer, { buyerReturnAddress: extra.terms.sellerAddress }),
       });
-      expect(check(mutated)).toMatchObject({
+      expect(await check(mutated)).toMatchObject({
         ok: false,
         reason: "invalid_exact_cardano_payload_masumi_datum_invalid",
+      });
+    });
+
+    it("rejects a script-credential buyer return address", async () => {
+      const mutated = await buildFixture({
+        mutateLock: (extra, buyer) =>
+          lockWithDatum(extra, buyer, {
+            buyerReturnAddress: masumiEscrowAddress(NETWORK, MASUMI_DEFAULT_DEPLOYMENT),
+          }),
+      });
+      expect(await check(mutated)).toMatchObject({
+        ok: false,
+        reason: "invalid_exact_cardano_payload_masumi_datum_invalid",
+        detail: "buyer_return_address is a script payment credential",
       });
     });
 
@@ -469,7 +525,7 @@ describe("masumi lock verification", () => {
       const mutated = await buildFixture({
         mutateLock: (extra, buyer) => lockWithDatum(extra, buyer, {}, 50_000_001n),
       });
-      expect(check(mutated)).toMatchObject({
+      expect(await check(mutated)).toMatchObject({
         ok: false,
         reason: "invalid_exact_cardano_payload_masumi_collateral",
       });
@@ -496,7 +552,7 @@ describe("masumi lock verification", () => {
           };
         },
       });
-      expect(check(mutated)).toMatchObject({
+      expect(await check(mutated)).toMatchObject({
         ok: false,
         reason: "invalid_exact_cardano_payload_masumi_collateral",
       });
@@ -510,7 +566,7 @@ describe("masumi lock verification", () => {
           lockedLovelace: 50_000_000n,
         }),
       });
-      expect(check(mutated)).toMatchObject({
+      expect(await check(mutated)).toMatchObject({
         ok: false,
         reason: "invalid_exact_cardano_payload_masumi_datum_invalid",
       });
@@ -521,7 +577,7 @@ describe("masumi lock verification", () => {
     const late = await buildFixture({
       payByTimeMs: BigInt(slotToPosixMs(NETWORK, TTL_SLOT)) - 1000n,
     });
-    expect(check(late)).toMatchObject({
+    expect(await check(late)).toMatchObject({
       ok: false,
       reason: "invalid_exact_cardano_payload_masumi_deadline",
     });
@@ -531,7 +587,7 @@ describe("masumi lock verification", () => {
     // The seller signs these short intervals, so the signature verifies — the
     // minimums are a lock invariant the facilitator enforces regardless.
     const short = await buildFixture({ submitResultTimeMs: PAY_BY_TIME + 1000n });
-    expect(check(short)).toMatchObject({
+    expect(await check(short)).toMatchObject({
       ok: false,
       reason: "invalid_exact_cardano_payload_masumi_deadline",
     });

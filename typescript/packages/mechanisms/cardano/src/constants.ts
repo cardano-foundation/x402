@@ -134,6 +134,10 @@ export const CARDANO_MIN_UTXO_OVERHEAD_BYTES = 160;
  * - assetName: 0..32 bytes -> 0..64 hex characters.
  */
 export const CARDANO_ASSET_REGEX = /^(lovelace|[0-9a-fA-F]{56}\.[0-9a-fA-F]{0,64})$/;
+/** Canonical Cardano asset unit: lowercase policy/asset hex, or `lovelace`. */
+export const CANONICAL_CARDANO_ASSET_REGEX = /^(lovelace|[0-9a-f]{56}\.[0-9a-f]{0,64})$/;
+/** Positive canonical decimal integer with no leading zero. */
+export const POSITIVE_CANONICAL_AMOUNT_REGEX = /^[1-9][0-9]*$/;
 
 /**
  * Cardano payment address regex (very permissive).
@@ -246,6 +250,8 @@ export function getDefaultUsdmAsset(network: string): string {
 export const ERR_UNSUPPORTED_SCHEME = "unsupported_scheme";
 /** Error: payload is missing required fields. */
 export const ERR_INVALID_PAYLOAD = "invalid_exact_cardano_payload";
+/** Error: canonical payment requirements are malformed. */
+export const ERR_REQUIREMENTS_INVALID = "invalid_exact_cardano_requirements";
 /** Error: declared and accepted networks differ. */
 export const ERR_NETWORK_MISMATCH = "network_mismatch";
 /** Error: signed transaction could not be CBOR decoded. */
@@ -275,6 +281,9 @@ export const ERR_VALIDITY_NOT_YET_VALID = "invalid_exact_cardano_payload_not_yet
 export const ERR_CHAIN_LOOKUP_FAILED = "exact_cardano_facilitator_chain_lookup_failed";
 /** Error: settlement failed when submitting the transaction. */
 export const ERR_SETTLEMENT_FAILED = "exact_cardano_settlement_failed";
+/** Error: the node definitively rejected the transaction before ledger acceptance. */
+export const ERR_SETTLEMENT_DEFINITIVELY_REJECTED =
+  "exact_cardano_settlement_definitively_rejected";
 /** Error: facilitator declined a `mempool`-only settlement and `acceptMempool` is disabled. */
 export const ERR_SETTLEMENT_NOT_CONFIRMED = "exact_cardano_settlement_not_confirmed";
 /** Error: duplicate settlement detected within the cache window. */
@@ -293,6 +302,8 @@ export const ERR_INVALID_SIGNATURE = "invalid_exact_cardano_payload_invalid_sign
  * creates none of its declared outputs, so it pays nothing.
  */
 export const ERR_TRANSACTION_PHASE2_INVALID = "invalid_exact_cardano_payload_phase2_invalid";
+/** Error: transaction fails complete Cardano ledger phase-1 validation. */
+export const ERR_TRANSACTION_PHASE1_INVALID = "invalid_exact_cardano_payload_phase1_invalid";
 /** Error: the recipient output's lovelace is below the protocol min-UTXO. */
 export const ERR_MIN_UTXO_INSUFFICIENT = "invalid_exact_cardano_payload_min_utxo_insufficient";
 /** Error: masumi payTo is not the known Masumi escrow address for the network. */

@@ -1,4 +1,4 @@
-import { Address, Data, InlineDatum, KeyHash, ScriptHash } from "@evolution-sdk/evolution";
+import { AddressEras, Data, InlineDatum, KeyHash, ScriptHash } from "@evolution-sdk/evolution";
 
 /**
  * Codec for the Masumi `vested_pay` escrow lock datum (payment-v2 /
@@ -18,6 +18,14 @@ export interface MasumiCredential {
 export interface MasumiAddressCredentials {
   payment: MasumiCredential;
   stake?: MasumiCredential;
+  pointer?: MasumiPointer;
+}
+
+/** Legacy pointer stake reference carried by a Cardano pointer address. */
+export interface MasumiPointer {
+  slot: bigint;
+  txIndex: bigint;
+  certIndex: bigint;
 }
 
 /** Typed inputs required to build a fresh lock datum. */
@@ -87,8 +95,16 @@ function credentialToData(cred: MasumiCredential): Data.Data {
 function addressToData(bech32: string): Data.Data {
   const creds = addressCredentials(bech32);
   const stakeOption = creds.stake
-    ? Data.constr(0n, [Data.constr(0n, [credentialToData(creds.stake)])]) // Some(Inline(cred))
-    : Data.constr(1n, []); // None
+    ? Data.constr(0n, [Data.constr(0n, [credentialToData(creds.stake)])])
+    : creds.pointer
+      ? Data.constr(0n, [
+          Data.constr(1n, [
+            Data.int(creds.pointer.slot),
+            Data.int(creds.pointer.txIndex),
+            Data.int(creds.pointer.certIndex),
+          ]),
+        ])
+      : Data.constr(1n, []);
   return Data.constr(0n, [credentialToData(creds.payment), stakeOption]);
 }
 
@@ -121,24 +137,38 @@ function credentialHex(cred: { _tag: string }): string {
  * @returns Its payment credential and, for base addresses, its stake credential.
  */
 export function addressCredentials(bech32: string): MasumiAddressCredentials {
-  const parsed = Address.fromBech32(bech32) as {
-    paymentCredential: { _tag: string };
-    stakingCredential?: { _tag: string };
-  };
+  const parsed = AddressEras.fromBech32(bech32);
+  if (
+    parsed._tag !== "BaseAddress" &&
+    parsed._tag !== "EnterpriseAddress" &&
+    parsed._tag !== "PointerAddress"
+  ) {
+    throw new Error("Masumi datum address must have a payment credential");
+  }
   const payment = {
     isScript: parsed.paymentCredential._tag === "ScriptHash",
     hash: credentialHex(parsed.paymentCredential),
   };
-  if (!parsed.stakingCredential) {
-    return { payment };
+  if (parsed._tag === "BaseAddress") {
+    return {
+      payment,
+      stake: {
+        isScript: parsed.stakeCredential._tag === "ScriptHash",
+        hash: credentialHex(parsed.stakeCredential),
+      },
+    };
   }
-  return {
-    payment,
-    stake: {
-      isScript: parsed.stakingCredential._tag === "ScriptHash",
-      hash: credentialHex(parsed.stakingCredential),
-    },
-  };
+  if (parsed._tag === "PointerAddress") {
+    return {
+      payment,
+      pointer: {
+        slot: BigInt(parsed.pointer.slot),
+        txIndex: BigInt(parsed.pointer.txIndex),
+        certIndex: BigInt(parsed.pointer.certIndex),
+      },
+    };
+  }
+  return { payment };
 }
 
 /**
@@ -252,11 +282,29 @@ function dataToAddress(d: Data.Data): MasumiAddressCredentials | null {
   if (!opt) return null;
   if (opt.index === 1n) return opt.fields.length === 0 ? { payment } : null; // None
   if (opt.index !== 0n || opt.fields.length !== 1) return null;
-  const inline = asConstr(opt.fields[0]); // Inline(cred)
-  if (!inline || inline.index !== 0n || inline.fields.length !== 1) return null;
-  const stake = dataToCredential(inline.fields[0]);
-  if (!stake) return null;
-  return { payment, stake };
+  const stakeRef = asConstr(opt.fields[0]);
+  if (!stakeRef) return null;
+  if (stakeRef.index === 0n && stakeRef.fields.length === 1) {
+    const stake = dataToCredential(stakeRef.fields[0]);
+    return stake ? { payment, stake } : null;
+  }
+  if (stakeRef.index === 1n && stakeRef.fields.length === 3) {
+    const slot = asInt(stakeRef.fields[0]);
+    const txIndex = asInt(stakeRef.fields[1]);
+    const certIndex = asInt(stakeRef.fields[2]);
+    if (
+      slot === null ||
+      txIndex === null ||
+      certIndex === null ||
+      slot < 0n ||
+      txIndex < 0n ||
+      certIndex < 0n
+    ) {
+      return null;
+    }
+    return { payment, pointer: { slot, txIndex, certIndex } };
+  }
+  return null;
 }
 
 /**

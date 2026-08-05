@@ -2,7 +2,12 @@ import { Address, COSE, PrivateKey } from "@evolution-sdk/evolution";
 import { addressFromSeed, keysFromSeed } from "@evolution-sdk/evolution/sdk/wallet/Derivation";
 import type { PaymentRequirements } from "@x402/core/types";
 
-import { ASSET_TRANSFER_METHOD_MASUMI, getCardanoNetworkId } from "../../constants";
+import {
+  ASSET_TRANSFER_METHOD_MASUMI,
+  CANONICAL_CARDANO_ASSET_REGEX,
+  getCardanoNetworkId,
+  POSITIVE_CANONICAL_AMOUNT_REGEX,
+} from "../../constants";
 import type {
   CardanoExtraMasumi,
   MasumiCommitmentPart,
@@ -11,7 +16,12 @@ import type {
   MasumiTerms,
 } from "../../types";
 import { masumiEscrowAddress, resolveMasumiDeployment } from "./blueprint";
-import { MASUMI_PAYMENT_SOURCE_TYPE } from "./constants";
+import {
+  MASUMI_MAX_DEADLINE_HORIZON_MS,
+  MASUMI_MIN_SUBMIT_RESULT_LEAD_MS,
+  MASUMI_PAYMENT_SOURCE_TYPE,
+  masumiDeadlineIntervalsHold,
+} from "./constants";
 import {
   buildSignedTerms,
   commitmentPartDigest,
@@ -19,7 +29,7 @@ import {
   computeTermsDigest,
 } from "./digests";
 import { encodeBlockchainIdentifier } from "./identifier";
-import { validateMasumiExtra } from "./schema";
+import { isPosixMsString, validateMasumiExtra } from "./schema";
 
 /**
  * The requirements-issuer side of the Masumi method: builds a
@@ -106,6 +116,128 @@ export interface IssueMasumiRequirementsInput {
   confirmationPolicy?: CardanoExtraMasumi["confirmationPolicy"];
   /** Non-canonical validator parameters. Required on Preview. */
   deployment?: MasumiDeployment;
+  /**
+   * Test-only escape hatch that skips {@link assertMasumiIssuePolicy}. It exists
+   * so negative fixtures can mint the hostile 402s a client and facilitator MUST
+   * refuse. Never set it in production: the deadlines it lets through are the
+   * exact ones the buyer rejects before it signs, and because they are covered
+   * by `termsDigest` the resulting 402 cannot be repaired — only re-issued.
+   */
+  unsafeSkipPolicyChecks?: boolean;
+  /**
+   * How far past now `externalDisputeUnlockTime` may sit, defaulting to
+   * {@link MASUMI_MAX_DEADLINE_HORIZON_MS}. This is the seller's own ceiling; a
+   * buyer applies its own independently, so raising it here does not oblige
+   * anyone to accept the result.
+   */
+  maxDeadlineHorizonMs?: bigint;
+}
+
+/** The four escrow deadlines, in the order the scheme requires them. */
+const DEADLINE_FIELDS = [
+  "payByTime",
+  "submitResultTime",
+  "unlockTime",
+  "externalDisputeUnlockTime",
+] as const;
+
+/**
+ * Rejects a Masumi 402 the buyer would refuse anyway, at the only moment the
+ * seller can still fix it.
+ *
+ * Every value checked here is covered by `termsDigest`, so a 402 that fails a
+ * buyer-side or facilitator-side rule cannot be patched afterwards — the whole
+ * requirements object has to be re-issued and re-signed. Failing at issue time
+ * turns a silent "no client will ever pay this" into an immediate error.
+ *
+ * @param input - The requirements about to be issued.
+ * @param nowMs - Current POSIX time in milliseconds.
+ * @throws When a deadline or the payment window would make the 402 unpayable.
+ */
+function assertMasumiIssuePolicy(input: IssueMasumiRequirementsInput, nowMs: bigint): void {
+  // Guard before converting: `BigInt("")` and `BigInt("12x")` throw a raw
+  // SyntaxError, which would surface as a crash instead of a named rejection.
+  // The wire schema enforces the same shape later; this is the earlier gate.
+  for (const field of DEADLINE_FIELDS) {
+    if (!isPosixMsString(input[field])) {
+      throw new Error(`Masumi ${field} must be a positive POSIX-ms integer string`);
+    }
+  }
+
+  // Ordering and minimum gaps: the same rule the client and facilitator apply.
+  if (
+    !masumiDeadlineIntervalsHold(
+      BigInt(input.payByTime),
+      BigInt(input.submitResultTime),
+      BigInt(input.unlockTime),
+      BigInt(input.externalDisputeUnlockTime),
+    )
+  ) {
+    throw new Error("Masumi deadline intervals are below the minimum");
+  }
+
+  assertMasumiIssueWindow(
+    {
+      payByTime: input.payByTime,
+      submitResultTime: input.submitResultTime,
+      externalDisputeUnlockTime: input.externalDisputeUnlockTime,
+    },
+    input.maxTimeoutSeconds,
+    nowMs,
+    input.maxDeadlineHorizonMs ?? MASUMI_MAX_DEADLINE_HORIZON_MS,
+  );
+}
+
+/**
+ * The clock-relative half of the issue policy, split out because it has to run
+ * twice.
+ *
+ * `signTerms` is asynchronous and may sit behind a hardware wallet, a remote
+ * signer or a human approval, so an unbounded amount of time can pass between
+ * the first check and the moment the requirements are actually served. Without a
+ * second pass the issuer can emit a 402 whose `payByTime` has already expired,
+ * and the buyer would be the first to notice.
+ *
+ * Only the floors can newly fail on that second pass. The `maxTimeoutSeconds`
+ * ceiling is `now + maxTimeoutSeconds`, which moves forward with the clock, so
+ * a `payByTime` once inside it stays inside it; it is re-checked here only
+ * because this function is the whole window, not because it can trip late.
+ *
+ * @param deadlines - Deadlines already validated for shape and ordering.
+ * @param deadlines.payByTime - Datum `pay_by_time`.
+ * @param deadlines.submitResultTime - Datum `submit_result_time`.
+ * @param deadlines.externalDisputeUnlockTime - Datum `external_dispute_unlock_time`.
+ * @param maxTimeoutSeconds - The x402 validity window.
+ * @param nowMs - Current POSIX time in milliseconds.
+ * @param maxDeadlineHorizonMs - How far past now the last deadline may sit.
+ * @throws When the window no longer admits a payable 402.
+ */
+function assertMasumiIssueWindow(
+  deadlines: { payByTime: string; submitResultTime: string; externalDisputeUnlockTime: string },
+  maxTimeoutSeconds: number,
+  nowMs: bigint,
+  maxDeadlineHorizonMs: bigint,
+): void {
+  const payByTime = BigInt(deadlines.payByTime);
+
+  // Absolute floors. Only the issuer holds a clock the buyer has not moved past.
+  if (payByTime <= nowMs) {
+    throw new Error("Masumi payByTime must be in the future");
+  }
+  if (BigInt(deadlines.submitResultTime) < nowMs + MASUMI_MIN_SUBMIT_RESULT_LEAD_MS) {
+    throw new Error("Masumi submitResultTime must be at least 15 minutes away");
+  }
+  // A buyer refuses a window it cannot escape: until `submit_result_time` the
+  // contract lets it recover neither the payment nor its collateral.
+  if (BigInt(deadlines.externalDisputeUnlockTime) > nowMs + maxDeadlineHorizonMs) {
+    throw new Error("Masumi deadlines extend beyond the accepted horizon");
+  }
+
+  // The buyer must be able to build, sign and land the lock inside the x402
+  // validity window, and its transaction TTL is bounded by `payByTime`.
+  if (payByTime > nowMs + BigInt(maxTimeoutSeconds) * 1000n) {
+    throw new Error("Masumi payByTime exceeds maxTimeoutSeconds");
+  }
 }
 
 /**
@@ -133,6 +265,23 @@ function randomHex(bytes: number): string {
 export async function issueMasumiRequirements(
   input: IssueMasumiRequirementsInput,
 ): Promise<PaymentRequirements> {
+  if (!POSITIVE_CANONICAL_AMOUNT_REGEX.test(input.amount)) {
+    throw new Error(`Masumi amount must be a positive canonical integer: ${input.amount}`);
+  }
+  if (!CANONICAL_CARDANO_ASSET_REGEX.test(input.asset)) {
+    throw new Error(`Masumi asset must use canonical lowercase form: ${input.asset}`);
+  }
+  // Input validity, not policy: `maxTimeoutSeconds` goes on the wire and into
+  // `termsDigest`, so it is never skippable.
+  if (!Number.isSafeInteger(input.maxTimeoutSeconds) || input.maxTimeoutSeconds <= 0) {
+    throw new Error("Masumi maxTimeoutSeconds must be a positive safe integer");
+  }
+  // Strictly `true`: a truthy non-boolean reaching a security escape hatch from
+  // untyped configuration must not silently disable it.
+  const skipPolicyChecks = input.unsafeSkipPolicyChecks === true;
+  if (!skipPolicyChecks) {
+    assertMasumiIssuePolicy(input, BigInt(Date.now()));
+  }
   const deployment = resolveMasumiDeployment(input.network, input.deployment);
   if (!deployment) {
     throw new Error(
@@ -171,6 +320,9 @@ export async function issueMasumiRequirements(
     submitResultTime: input.submitResultTime,
     unlockTime: input.unlockTime,
     externalDisputeUnlockTime: input.externalDisputeUnlockTime,
+    // This reference implementation currently has no Hydra client, so its
+    // issuer deliberately selects L1 instead of advertising `auto` and later
+    // being unable to honor a Hydra-capable buyer's choice.
     settlementPolicy: input.settlementPolicy ?? "l1",
   };
 
@@ -202,6 +354,19 @@ export async function issueMasumiRequirements(
   const authorization = await input.signTerms(input.sellerAddress, termsDigest);
   const referenceKey = authorization.key.toLowerCase();
   const referenceSignature = authorization.signature.toLowerCase();
+
+  // Signing is asynchronous and unbounded — a hardware wallet, a remote signer
+  // or a human approval can take minutes. Re-check the clock-relative rules
+  // against `terms` and `requirements`, which are this function's own copies, so
+  // a caller mutating `input` mid-flight cannot steer the second pass.
+  if (!skipPolicyChecks) {
+    assertMasumiIssueWindow(
+      terms,
+      requirements.maxTimeoutSeconds,
+      BigInt(Date.now()),
+      input.maxDeadlineHorizonMs ?? MASUMI_MAX_DEADLINE_HORIZON_MS,
+    );
+  }
 
   const extra: CardanoExtraMasumi = {
     assetTransferMethod: ASSET_TRANSFER_METHOD_MASUMI,

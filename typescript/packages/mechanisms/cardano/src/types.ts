@@ -369,6 +369,14 @@ export interface DecodedCardanoTransaction {
    * Transaction inputs as ordered UTXO references (`txHashHex#index`).
    */
   inputs: string[];
+  /** Transaction fee in lovelace. */
+  fee: bigint;
+  /**
+   * Balance-changing operations outside a plain payment. The reference
+   * facilitator rejects these before server submission because it cannot
+   * prove value conservation from payment inputs and outputs alone.
+   */
+  unsupportedPhase1Operations: string[];
   /**
    * Decoded outputs in declaration order.
    */

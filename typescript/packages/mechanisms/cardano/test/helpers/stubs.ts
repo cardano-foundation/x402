@@ -28,7 +28,7 @@ import { buildScriptDatumInline } from "../../src/exact/script/datum";
 import type { ClientCardanoSigner, FacilitatorCardanoSigner } from "../../src/signer";
 import type { CardanoExtraScript } from "../../src/types";
 import { decodeCardanoTransaction } from "../../src/utils";
-import { buildSignedTx } from "./buildSignedTx";
+import { buildSignedTx, getFixtureInputSnapshot } from "./buildSignedTx";
 
 /** `coinsPerUtxoByte` used by the offline fixtures (current mainnet value). */
 export const STUB_COINS_PER_UTXO_BYTE = 4310n;
@@ -103,7 +103,10 @@ export function stubFacilitatorSigner(
   const submitted = new Set<string>();
   return {
     getAddresses: () => [PAYER_ADDRESS],
-    getUtxo: async () => ({ exists: true, address: PAYER_ADDRESS }),
+    getUtxo: async ref => getFixtureInputSnapshot(ref) ?? { exists: true, address: PAYER_ADDRESS },
+    // Fixtures are built by the real transaction builder. Model the complete
+    // ledger preflight that production server-submission signers must provide.
+    validatePhase1Transaction: async () => undefined,
     getCurrentSlot: async () => STUB_CURRENT_SLOT,
     submitTransaction: async transaction => {
       const { txHash } = decodeCardanoTransaction(transaction);

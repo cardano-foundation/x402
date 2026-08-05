@@ -1,6 +1,7 @@
 import { Data, InlineDatum } from "@evolution-sdk/evolution";
 
 import type { CardanoExtraScript } from "../../types";
+import { MAX_CARDANO_DATUM_BYTES } from "../../limits";
 
 /**
  * Builds the inline datum a script payment attaches to its `payTo` output from
@@ -24,7 +25,12 @@ export function buildScriptDatumInline(
   if (extra.datum === undefined) {
     return undefined;
   }
-  if (typeof extra.datum !== "string" || extra.datum.length === 0) {
+  if (
+    typeof extra.datum !== "string" ||
+    extra.datum.length === 0 ||
+    extra.datum.length % 2 !== 0 ||
+    extra.datum.length / 2 > MAX_CARDANO_DATUM_BYTES
+  ) {
     throw new Error('Cardano script payment "datum" must be non-empty CBOR hex');
   }
   let data: Data.Data;

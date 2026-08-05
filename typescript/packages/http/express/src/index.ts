@@ -198,7 +198,7 @@ export function paymentMiddlewareFromHTTPServer(
         Object.entries(response.headers).forEach(([key, value]) => {
           res.setHeader(key, value);
         });
-        if (response.isHtml) {
+        if (response.isHtml || response.isRaw) {
           res.send(response.body);
         } else {
           res.json(response.body || {});
@@ -328,7 +328,7 @@ export function paymentMiddlewareFromHTTPServer(
             paymentPayload,
             paymentRequirements,
             declaredExtensions,
-            { request: context, responseBody, responseHeaders },
+            { request: context, responseBody, responseHeaders, responseStatus: res.statusCode },
           );
 
           // If settlement fails, return an error and do not send the buffered response

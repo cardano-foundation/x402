@@ -1,4 +1,5 @@
 import { Address, COSE } from "@evolution-sdk/evolution";
+import LZString from "lz-string";
 import { describe, expect, it } from "vitest";
 
 import {
@@ -16,6 +17,7 @@ import {
 } from "../../src/exact/masumi/identifier";
 import { jcs } from "../../src/exact/masumi/jcs";
 import { CARDANO_MAINNET_CAIP2, CARDANO_PREPROD_CAIP2 } from "../../src/constants";
+import { MAX_MASUMI_IDENTIFIER_COMPRESSED_BYTES } from "../../src/limits";
 import { freshKeyAddress } from "../helpers/masumi";
 
 /** The escrow address both spec identifier vectors are built against. */
@@ -116,6 +118,20 @@ describe("blockchainIdentifier codec (spec vectors)", () => {
   });
 });
 
+describe("blockchainIdentifier resource limits", () => {
+  it("rejects compressed identifiers above the implementation budget", () => {
+    expect(
+      decodeBlockchainIdentifier("00".repeat(MAX_MASUMI_IDENTIFIER_COMPRESSED_BYTES + 1)),
+    ).toBeNull();
+  });
+
+  it("aborts a compressed identifier whose expanded text exceeds the limit", () => {
+    const compressed = LZString.compressToUint8Array("a".repeat(100_000));
+    expect(compressed.length).toBeLessThan(MAX_MASUMI_IDENTIFIER_COMPRESSED_BYTES);
+    expect(decodeBlockchainIdentifier(Buffer.from(compressed).toString("hex"))).toBeNull();
+  });
+});
+
 describe("canonical vested_pay deployment", () => {
   it("pins the blueprint digest the spec names", () => {
     expect(MASUMI_BLUEPRINT_DIGEST).toBe(
@@ -205,6 +221,15 @@ describe("input commitment", () => {
   it("refuses base64url content that is not base64url", () => {
     expect(() => commitmentPartDigest({ canonicalization: "raw", content: "a+b/c=" })).toThrow(
       /base64url/,
+    );
+  });
+
+  it("refuses non-canonical base64url encodings", () => {
+    expect(() => commitmentPartDigest({ canonicalization: "raw", content: "a" })).toThrow(
+      /canonical/,
+    );
+    expect(() => commitmentPartDigest({ canonicalization: "raw", content: "Zh" })).toThrow(
+      /canonical/,
     );
   });
 });
