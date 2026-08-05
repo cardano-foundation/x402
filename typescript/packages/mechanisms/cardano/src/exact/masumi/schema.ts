@@ -37,6 +37,7 @@ const EXTRA_KEYS = new Set([
   "assetTransferMethod",
   "submissionPolicy",
   "confirmationPolicy",
+  "areFeesSponsored",
   "inputCommitment",
   "terms",
   "referenceKey",
@@ -491,6 +492,11 @@ export function validateMasumiExtra(value: unknown, network: string): MasumiSche
   if (normalizeConfirmationPolicy(value.confirmationPolicy) === null) {
     return { ok: false, detail: "extra.confirmationPolicy must be { l1Confirmations: -1..20 }" };
   }
+  // Cardano never sponsors fees: the client balances the fee against its own
+  // inputs. A 402 claiming otherwise misdescribes who pays.
+  if (value.areFeesSponsored !== undefined && value.areFeesSponsored !== false) {
+    return { ok: false, detail: "extra.areFeesSponsored must be false" };
+  }
   for (const field of ["referenceKey", "referenceSignature", "blockchainIdentifier"] as const) {
     const hex = value[field];
     const maxBytes =
@@ -523,6 +529,9 @@ export function validateMasumiExtra(value: unknown, network: string): MasumiSche
     ok: true,
     extra: {
       assetTransferMethod: "masumi",
+      ...(value.areFeesSponsored !== undefined
+        ? { areFeesSponsored: value.areFeesSponsored as boolean }
+        : {}),
       ...(value.submissionPolicy !== undefined
         ? { submissionPolicy: value.submissionPolicy as CardanoExtraMasumi["submissionPolicy"] }
         : {}),

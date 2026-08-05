@@ -112,8 +112,9 @@ const CARDANO_SELLER = CARDANO_PAYEE_ADDRESS
  * commitment and a seller signature over termsDigest, so it must be issued
  * rather than hand-written, and each issuance draws a fresh sellerNonce.
  *
- * The lock deadlines clear the spec's minimum intervals: pay_by + 5min <=
- * submit_result, submit_result + 15min <= unlock, unlock + 15min <= dispute.
+ * The lock deadlines clear the spec's minimum intervals with margin: pay_by +
+ * 5min <= submit_result, submit_result + 15min <= unlock, unlock + 15min <=
+ * dispute, and submit_result at least 15min past the issuer's clock.
  *
  * @returns The issued requirements: payTo (the escrow address), the price, and
  *   the `extra` block carrying the commitment, terms and authorization.
@@ -135,10 +136,14 @@ const issueCardanoMasumiOffer = async () => {
         content: { endpoint: "/exact/cardano/masumi" },
       },
     ],
+    // Each deadline clears its minimum by 5 minutes rather than landing exactly
+    // on it: `submitResultTime` also has to be 15 minutes past the issuer's own
+    // clock, and a fixture sitting on that boundary fails on the milliseconds
+    // spent issuing.
     payByTime: payByMs.toString(),
-    submitResultTime: (payByMs + 5 * 60_000).toString(),
-    unlockTime: (payByMs + 20 * 60_000).toString(),
-    externalDisputeUnlockTime: (payByMs + 35 * 60_000).toString(),
+    submitResultTime: (payByMs + 10 * 60_000).toString(),
+    unlockTime: (payByMs + 30 * 60_000).toString(),
+    externalDisputeUnlockTime: (payByMs + 50 * 60_000).toString(),
     settlementPolicy: "l1",
     confirmationPolicy: CARDANO_CONFIRMATION_POLICY,
   });
@@ -251,7 +256,7 @@ if (STELLAR_PAYEE_ADDRESS) {
   server.register("stellar:*", new ExactStellarScheme());
 }
 if (CARDANO_PAYEE_ADDRESS) {
-  server.register("cardano:*", new ExactCardanoScheme());
+  server.register("cardano:*", new ExactCardanoScheme({ inMemoryStore: {} }));
 }
 if (TVM_PAYEE_ADDRESS) {
   server.register("tvm:*", new ExactTvmScheme());

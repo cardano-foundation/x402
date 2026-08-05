@@ -188,7 +188,7 @@ if (STELLAR_PAYEE_ADDRESS) {
   x402Server.register("stellar:*", new ExactStellarScheme());
 }
 if (CARDANO_PAYEE_ADDRESS) {
-  x402Server.register("cardano:*", new ExactCardanoScheme());
+  x402Server.register("cardano:*", new ExactCardanoScheme({ inMemoryStore: {} }));
 }
 if (TVM_PAYEE_ADDRESS) {
   x402Server.register("tvm:*", new ExactTvmScheme());

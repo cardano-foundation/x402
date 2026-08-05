@@ -334,6 +334,8 @@ describe("ExactCardanoScheme facilitator", () => {
       assetTransferMethods: ["default", "masumi", "script"],
       // No Hydra client is configured, so only L1 is offered.
       settlementLayers: ["l1"],
+      // The client builds and signs the whole transaction, so it pays the fee.
+      areFeesSponsored: false,
       // This stub signer has no evidence hook, so client submission is not offered.
       submissionModes: ["server"],
       l1Confirmations: {
@@ -1427,5 +1429,19 @@ describe("ExactCardanoScheme server", () => {
       [],
     );
     expect(validateMasumiExtra(enhanced.extra, CARDANO_PREPROD_CAIP2).ok).toBe(true);
+    // The fee model is the one capability restated in the 402.
+    expect(enhanced.extra?.areFeesSponsored).toBe(false);
+  });
+
+  it("rejects a Masumi extra that claims sponsored fees", async () => {
+    const { requirements } = await issueMasumiRequirements({
+      network: CARDANO_PREPROD_CAIP2,
+      asset: LOVELACE_ASSET,
+      amount: "5000000",
+      payByTimeMs: 1_785_756_000_000n,
+      confirmationPolicy: { l1Confirmations: 0 },
+    });
+    const claimed = { ...requirements.extra, areFeesSponsored: true };
+    expect(validateMasumiExtra(claimed, CARDANO_PREPROD_CAIP2).ok).toBe(false);
   });
 });

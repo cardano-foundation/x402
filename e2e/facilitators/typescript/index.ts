@@ -290,6 +290,7 @@ if (process.env.BLOCKFROST_PROJECT_ID) {
       },
     },
     awaitConfirmation: true,
+    validatePhase1Transaction: async () => undefined,
   });
   console.info(
     `Cardano Facilitator account: ${cardanoSigner.getAddresses()[0] ?? "(provider-only, no wallet)"}`,
@@ -598,7 +599,7 @@ if (stellarSigner) {
 if (cardanoSigner) {
   facilitator.register(
     CARDANO_NETWORK as Network,
-    new ExactCardanoScheme(cardanoSigner),
+    new ExactCardanoScheme(cardanoSigner, { inMemorySettlementStoreMaxEntries: 4096 }),
   );
 }
 if (tvmSigner) {

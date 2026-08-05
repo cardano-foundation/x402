@@ -265,6 +265,9 @@ export class ExactCardanoScheme implements SchemeNetworkFacilitator {
       ],
       // Hydra needs head-authenticated evidence this facilitator cannot produce.
       settlementLayers: ["l1"],
+      // The client builds and signs the whole transaction, so it balances the
+      // fee against its own inputs. This facilitator only broadcasts.
+      areFeesSponsored: false,
       submissionModes: [
         ...(supportsServerSubmission ? ["server"] : []),
         ...(supportsClientSubmission ? ["client"] : []),

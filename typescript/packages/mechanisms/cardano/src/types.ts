@@ -72,6 +72,12 @@ export interface CardanoExtraPolicies {
    * Minimum L1 evidence. Defaults to `{ l1Confirmations: 1 }` when absent.
    */
   confirmationPolicy?: CardanoConfirmationPolicy;
+  /**
+   * Whether the facilitator pays the network fee. Always `false` on Cardano:
+   * the client builds and signs the whole transaction, so the fee is balanced
+   * against its own inputs. Copied from the facilitator's `/supported` entry.
+   */
+  areFeesSponsored?: boolean;
 }
 
 /**

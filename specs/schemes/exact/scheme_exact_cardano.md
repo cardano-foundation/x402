@@ -272,6 +272,7 @@ Wire constraints for the `extra` fields:
 | `blockchainIdentifier` | lowercase even-length hex of the complete LZString-compressed compatibility identifier |
 | `submissionPolicy` | optional `server`, `client`, or `either`; defaults to `server` |
 | `confirmationPolicy.l1Confirmations` | optional JSON integer from `-1` through `20`; defaults to `1` |
+| `areFeesSponsored` | optional boolean; MUST be `false` when present — this scheme has no fee sponsorship yet |
 | `deployment.requiredAdmins` | positive canonical base-10 integer string, no greater than the length of `adminVkeys` |
 | `deployment.adminVkeys` | ordered non-empty array of 28-byte lowercase hex verification-key hashes; duplicates are preserved and carry voting weight (see [Deployment and escrow address](#deployment-and-escrow-address)) |
 | `deployment.cooldownPeriod` | non-negative canonical base-10 POSIX-millisecond integer string |
@@ -632,6 +633,7 @@ An internal or external facilitator MAY advertise Masumi capabilities in the mat
       "extra": {
         "assetTransferMethods": ["masumi"],
         "settlementLayers": ["l1", "hydra"],
+        "areFeesSponsored": false,
         "submissionModes": ["server", "client"],
         "l1Confirmations": {
           "server": { "minimum": -1, "maximum": 20 },
@@ -943,6 +945,8 @@ If the protected handler runs before final settlement, the resource server MUST 
 The **client** constructs and signs the complete transaction (Protocol Flow step 3). The Cardano network fee is a field of the transaction body, balanced against the client's own inputs — so the **client pays the fee**, alongside the asset being transferred.
 
 The selected client, resource server, or facilitator broadcasts the already-signed transaction. Broadcasting consumes none of the submitter's funds. A facilitator does **not** require a funded wallet, only a provider connection for UTXO/slot queries and transaction submission. A facilitator MAY expose an address in `/supported` for observability, but it is not used to pay or sign.
+
+The facilitator advertises this as `areFeesSponsored: false` in its `/supported` entry and the resource server restates it in `PaymentRequirements.extra`. It is structural rather than negotiated, so it is `false` for every Cardano `assetTransferMethod`.
 
 **Fee sponsorship** (the facilitator paying the fee on the client's behalf) is **not supported** by this scheme version. It is achievable on Cardano through collaborative, multi-party transaction building — the facilitator contributing an input to cover the fee and co-signing the transaction — but that requires a different, interactive construction flow than the client-builds-and-signs model specified here, and is left to a future extension.
 

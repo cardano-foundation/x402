@@ -183,7 +183,7 @@ if (STELLAR_PAYEE_ADDRESS) {
   server.register("stellar:*", new ExactStellarScheme());
 }
 if (CARDANO_PAYEE_ADDRESS) {
-  server.register("cardano:*", new ExactCardanoScheme());
+  server.register("cardano:*", new ExactCardanoScheme({ inMemoryStore: {} }));
 }
 if (TVM_PAYEE_ADDRESS) {
   server.register("tvm:*", new ExactTvmScheme());

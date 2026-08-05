@@ -408,7 +408,18 @@ export class ExactCardanoScheme implements SchemeNetworkServer {
       throw new Error(`Unsupported Cardano network: ${supportedKind.network}`);
     }
     this.assertFacilitatorSupportsRequirements(paymentRequirements, supportedKind);
-    return paymentRequirements;
+    // The one capability restated in the 402: who pays the network fee. Copied
+    // from the facilitator's advertisement, as on the other schemes. Every
+    // other capability key stays out of `extra`, which the Masumi schema
+    // validates as a closed object.
+    const areFeesSponsored = supportedKind.extra?.areFeesSponsored;
+    return {
+      ...paymentRequirements,
+      extra: {
+        ...paymentRequirements.extra,
+        ...(typeof areFeesSponsored === "boolean" && { areFeesSponsored }),
+      },
+    };
   }
 
   /**
