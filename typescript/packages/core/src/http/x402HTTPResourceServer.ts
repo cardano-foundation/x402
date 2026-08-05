@@ -19,6 +19,7 @@ import {
   Network,
   PaymentRequirements,
 } from "../types";
+import { deepEqual } from "../utils";
 import { x402Version } from "..";
 
 export const SETTLEMENT_OVERRIDES_HEADER = "Settlement-Overrides";
@@ -76,9 +77,16 @@ export interface HTTPAdapter {
    * Get the parsed request body
    * Framework adapters should parse JSON/form data appropriately
    *
-   * @returns The parsed request body
+   * @returns The parsed request body, synchronously or asynchronously
    */
-  getBody?(): unknown;
+  getBody?(): unknown | Promise<unknown>;
+
+  /**
+   * Get the exact request-body bytes without consuming the request stream.
+   *
+   * @returns Exact request-body bytes, or undefined when unavailable
+   */
+  getRawBody?(): Uint8Array | undefined | Promise<Uint8Array | undefined>;
 }
 
 /**
@@ -280,6 +288,8 @@ export interface HTTPTransportContext {
   responseBody?: Buffer;
   /** Response headers set by the route handler (used for settlement overrides) */
   responseHeaders?: Record<string, string>;
+  /** Status selected by the protected handler. */
+  responseStatus?: number;
 }
 
 /**
@@ -290,6 +300,7 @@ export interface HTTPResponseInstructions {
   headers: Record<string, string>;
   body?: unknown; // e.g. Paywall for web browser requests, but could be any other type
   isHtml?: boolean; // e.g. if body is a paywall, then isHtml is true
+  isRaw?: boolean; // body is already encoded bytes/text and must not be JSON encoded
 }
 
 /**
@@ -573,6 +584,7 @@ export class x402HTTPResourceServer {
       !paymentPayload ? "Payment required" : undefined,
       extensions,
       transportContext,
+      paymentPayload ?? undefined,
     );
 
     // If no payment provided
@@ -615,6 +627,28 @@ export class x402HTTPResourceServer {
         };
       }
 
+      // `PaymentPayload.resource` is client-carried. When present, bind it to
+      // the canonical resource computed for this request before any scheme or
+      // registry validator uses it. Older clients may omit the optional field.
+      if (
+        this.ResourceServer.requiresMatchingPayloadResource(matchingRequirements) &&
+        paymentPayload.resource !== undefined &&
+        !deepEqual(paymentPayload.resource, resourceInfo)
+      ) {
+        const errorResponse = await this.ResourceServer.createPaymentRequiredResponse(
+          requirements,
+          resourceInfo,
+          "Payment resource does not match the protected resource",
+          extensions,
+          transportContext,
+          paymentPayload,
+        );
+        return {
+          type: "payment-error",
+          response: this.createHTTPResponse(errorResponse, false, paywallConfig),
+        };
+      }
+
       const extensionResult = this.ResourceServer.validateExtensions(
         paymentRequired,
         paymentPayload,
@@ -650,9 +684,11 @@ export class x402HTTPResourceServer {
           transportContext,
           paymentPayload,
         );
+        const response = this.createHTTPResponse(errorResponse, false, paywallConfig);
+        if (verifyResult.httpStatus !== undefined) response.status = verifyResult.httpStatus;
         return {
           type: "payment-error",
-          response: this.createHTTPResponse(errorResponse, false, paywallConfig),
+          response,
         };
       }
 
@@ -862,14 +898,16 @@ export class x402HTTPResourceServer {
     return {
       type: "payment-error",
       response: {
-        status: 200,
+        status: skipHandlerResponse?.status ?? 200,
         headers: {
+          ...skipHandlerResponse?.headers,
           "Content-Type": contentType,
           ...settleResult.headers,
           "Cache-Control": withPrivateCacheControl(null),
         },
         body,
         isHtml: contentType.includes("text/html"),
+        isRaw: skipHandlerResponse?.isRaw,
       },
     };
   }

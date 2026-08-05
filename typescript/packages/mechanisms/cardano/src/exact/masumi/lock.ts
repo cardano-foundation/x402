@@ -1,58 +1,126 @@
-import { InlineDatum } from "@evolution-sdk/evolution";
+import { Data, InlineDatum } from "@evolution-sdk/evolution";
 
+import { LOVELACE_ASSET } from "../../constants";
 import type { CardanoExtraMasumi } from "../../types";
-import { MASUMI_DEFAULT_COLLATERAL_LOVELACE } from "./constants";
+import { masumiCollateralLovelace } from "./constants";
 import { buildMasumiLockDatum, inlineDatum } from "./datum";
 
 /**
- * Reads a required masumi `extra` field, throwing when it is missing or empty.
- * These values are purchase-bound (supplied from the Masumi purchase); the
- * client must not invent them, so an absent value is a caller error.
- *
- * @param extra - The masumi `extra` block.
- * @param key - The required field name.
- * @returns The field value.
+ * Buyer-side inputs to the lock. Everything else in the datum comes from the
+ * seller-signed `terms` — including `buyer_nonce` and `input_hash`, which the
+ * seller signs, so the client must not invent them.
  */
-function requireMasumiField(extra: CardanoExtraMasumi, key: keyof CardanoExtraMasumi): string {
-  const value = extra[key];
-  if (typeof value !== "string" || value.length === 0) {
-    throw new Error(`Masumi payment requires "${String(key)}" in requirements.extra`);
-  }
-  return value;
+export interface MasumiBuyerInput {
+  /**
+   * datum `buyer_return_address`. Buyer-chosen and never declared by the
+   * server, so the facilitator does not match it against `extra`. Defaults to
+   * absent (`None`). It MUST differ from the effective seller payout target.
+   */
+  buyerReturnAddress?: string;
 }
 
 /**
- * Builds the Masumi `vested_pay` lock inline datum from the payment `extra`.
- * Only `input_hash` (empty) and `collateral_return_lovelace` (0) fall back to
- * the contract defaults; all other fields are required.
+ * A built Masumi escrow lock: the inline datum plus the value the escrow output
+ * must carry.
+ */
+export interface MasumiLock {
+  /** The inline datum to attach to the `payTo` output. */
+  datum: InlineDatum.InlineDatum;
+  /** datum `collateral_return_lovelace`. */
+  collateralLovelace: bigint;
+  /** Lovelace on the escrow output: `requestedLovelace + collateralLovelace`. */
+  lockedLovelace: bigint;
+}
+
+/**
+ * The collateral is a datum field, so growing it grows the datum, which raises
+ * the post-`SubmitResult` min-UTXO it has to clear. Re-deriving it a few times
+ * reaches the fixed point; four rounds is far more than the one or two byte-length
+ * changes a realistic integer encoding produces.
+ */
+const COLLATERAL_FIXED_POINT_ROUNDS = 4;
+
+/**
+ * Builds the Masumi `vested_pay` lock: the 19-field inline datum and the
+ * lovelace the escrow output must carry.
+ *
+ * The seller never supplies or signs `collateral_return_lovelace` — the client
+ * computes it from the requested asset and live protocol parameters so that
+ * `lockedLovelace = requestedLovelace + collateral` still clears the min-UTXO
+ * of the datum **after** `SubmitResult`. Otherwise the seller could never spend
+ * the escrow.
  *
  * @param extra - The masumi `extra` block from the payment requirements.
  * @param buyerAddress - The payer wallet bech32 address (datum `buyer`).
- * @returns The inline datum for the escrow output.
+ * @param asset - The requested asset unit.
+ * @param amount - The requested amount in the asset's smallest unit.
+ * @param coinsPerUtxoByte - Live `coinsPerUtxoByte` protocol parameter.
+ * @param buyerInput - Buyer-side datum inputs.
+ * @returns The inline datum and the escrow output's value.
  */
-export function buildMasumiLockInline(
+export function buildMasumiLock(
   extra: CardanoExtraMasumi,
   buyerAddress: string,
-): InlineDatum.InlineDatum {
-  const datum = buildMasumiLockDatum({
-    buyerAddress,
-    sellerAddress: requireMasumiField(extra, "sellerAddress"),
-    buyerReturnAddress: extra.buyerReturnAddress,
-    sellerReturnAddress: extra.sellerReturnAddress,
-    referenceKey: requireMasumiField(extra, "referenceKey"),
-    referenceSignature: requireMasumiField(extra, "referenceSignature"),
-    sellerNonce: requireMasumiField(extra, "sellerNonce"),
-    buyerNonce: requireMasumiField(extra, "identifierFromPurchaser"),
-    agentIdentifier: requireMasumiField(extra, "agentIdentifier"),
-    collateralReturnLovelace:
-      extra.collateralReturnLovelace !== undefined
-        ? BigInt(extra.collateralReturnLovelace)
-        : MASUMI_DEFAULT_COLLATERAL_LOVELACE,
-    inputHash: extra.inputHash ?? "",
-    payByTime: BigInt(requireMasumiField(extra, "payByTime")),
-    submitResultTime: BigInt(requireMasumiField(extra, "submitResultTime")),
-    unlockTime: BigInt(requireMasumiField(extra, "unlockTime")),
-    externalDisputeUnlockTime: BigInt(requireMasumiField(extra, "externalDisputeUnlockTime")),
-  });
-  return inlineDatum(datum);
+  asset: string,
+  amount: bigint,
+  coinsPerUtxoByte: bigint,
+  buyerInput: MasumiBuyerInput = {},
+): MasumiLock {
+  const { terms } = extra;
+  const isLovelace = asset.toLowerCase() === LOVELACE_ASSET;
+  const requestedLovelace = isLovelace ? amount : 0n;
+  const nativeTokenCount = isLovelace ? 0 : 1;
+
+  /**
+   * Builds the datum for a candidate collateral.
+   *
+   * @param collateral - The candidate `collateral_return_lovelace`.
+   * @returns The Plutus datum.
+   */
+  const build = (collateral: bigint): Data.Data =>
+    buildMasumiLockDatum({
+      buyerAddress,
+      sellerAddress: terms.sellerAddress,
+      buyerReturnAddress: buyerInput.buyerReturnAddress,
+      sellerReturnAddress: terms.sellerReturnAddress,
+      referenceKey: extra.referenceKey,
+      referenceSignature: extra.referenceSignature,
+      sellerNonce: terms.sellerNonce,
+      buyerNonce: terms.buyerNonce,
+      agentIdentifier: typeof terms.agentIdentifier === "string" ? terms.agentIdentifier : "",
+      collateralReturnLovelace: collateral,
+      inputHash: terms.inputHash,
+      payByTime: BigInt(terms.payByTime),
+      submitResultTime: BigInt(terms.submitResultTime),
+      unlockTime: BigInt(terms.unlockTime),
+      externalDisputeUnlockTime: BigInt(terms.externalDisputeUnlockTime),
+    });
+
+  let collateral = 0n;
+  let datum = build(collateral);
+  let converged = false;
+  for (let round = 0; round < COLLATERAL_FIXED_POINT_ROUNDS; round++) {
+    const needed = masumiCollateralLovelace(
+      requestedLovelace,
+      Data.toCBORHex(datum).length / 2,
+      nativeTokenCount,
+      coinsPerUtxoByte,
+    );
+    // The current datum already clears its own min-UTXO at this collateral.
+    if (needed <= collateral) {
+      converged = true;
+      break;
+    }
+    collateral = needed;
+    datum = build(collateral);
+  }
+  if (!converged) {
+    throw new Error("Masumi collateral did not converge; refusing to build an unspendable lock");
+  }
+
+  return {
+    datum: inlineDatum(datum),
+    collateralLovelace: collateral,
+    lockedLovelace: requestedLovelace + collateral,
+  };
 }

@@ -1,4 +1,4 @@
-import { Address, Data, InlineDatum, KeyHash, ScriptHash } from "@evolution-sdk/evolution";
+import { AddressEras, Data, InlineDatum, KeyHash, ScriptHash } from "@evolution-sdk/evolution";
 
 /**
  * Codec for the Masumi `vested_pay` escrow lock datum (payment-v2 /
@@ -18,6 +18,14 @@ export interface MasumiCredential {
 export interface MasumiAddressCredentials {
   payment: MasumiCredential;
   stake?: MasumiCredential;
+  pointer?: MasumiPointer;
+}
+
+/** Legacy pointer stake reference carried by a Cardano pointer address. */
+export interface MasumiPointer {
+  slot: bigint;
+  txIndex: bigint;
+  certIndex: bigint;
 }
 
 /** Typed inputs required to build a fresh lock datum. */
@@ -87,8 +95,16 @@ function credentialToData(cred: MasumiCredential): Data.Data {
 function addressToData(bech32: string): Data.Data {
   const creds = addressCredentials(bech32);
   const stakeOption = creds.stake
-    ? Data.constr(0n, [Data.constr(0n, [credentialToData(creds.stake)])]) // Some(Inline(cred))
-    : Data.constr(1n, []); // None
+    ? Data.constr(0n, [Data.constr(0n, [credentialToData(creds.stake)])])
+    : creds.pointer
+      ? Data.constr(0n, [
+          Data.constr(1n, [
+            Data.int(creds.pointer.slot),
+            Data.int(creds.pointer.txIndex),
+            Data.int(creds.pointer.certIndex),
+          ]),
+        ])
+      : Data.constr(1n, []);
   return Data.constr(0n, [credentialToData(creds.payment), stakeOption]);
 }
 
@@ -121,24 +137,38 @@ function credentialHex(cred: { _tag: string }): string {
  * @returns Its payment credential and, for base addresses, its stake credential.
  */
 export function addressCredentials(bech32: string): MasumiAddressCredentials {
-  const parsed = Address.fromBech32(bech32) as {
-    paymentCredential: { _tag: string };
-    stakingCredential?: { _tag: string };
-  };
+  const parsed = AddressEras.fromBech32(bech32);
+  if (
+    parsed._tag !== "BaseAddress" &&
+    parsed._tag !== "EnterpriseAddress" &&
+    parsed._tag !== "PointerAddress"
+  ) {
+    throw new Error("Masumi datum address must have a payment credential");
+  }
   const payment = {
     isScript: parsed.paymentCredential._tag === "ScriptHash",
     hash: credentialHex(parsed.paymentCredential),
   };
-  if (!parsed.stakingCredential) {
-    return { payment };
+  if (parsed._tag === "BaseAddress") {
+    return {
+      payment,
+      stake: {
+        isScript: parsed.stakeCredential._tag === "ScriptHash",
+        hash: credentialHex(parsed.stakeCredential),
+      },
+    };
   }
-  return {
-    payment,
-    stake: {
-      isScript: parsed.stakingCredential._tag === "ScriptHash",
-      hash: credentialHex(parsed.stakingCredential),
-    },
-  };
+  if (parsed._tag === "PointerAddress") {
+    return {
+      payment,
+      pointer: {
+        slot: BigInt(parsed.pointer.slot),
+        txIndex: BigInt(parsed.pointer.txIndex),
+        certIndex: BigInt(parsed.pointer.certIndex),
+      },
+    };
+  }
+  return { payment };
 }
 
 /**
@@ -215,8 +245,16 @@ function asHex(d: Data.Data): string | null {
     : null;
 }
 
+/** Cardano payment/stake credential hashes are Blake2b-224: 28 bytes. */
+const CREDENTIAL_HASH_HEX_LENGTH = 56;
+
 /**
  * Decodes a Plutus credential (`Constr 0|1 [hash]`) into a typed credential.
+ *
+ * The hash length is enforced: `vested_pay` decodes the datum with a typed
+ * `expect`, so a credential of any other size makes every later spend path fail
+ * and permanently strands the escrow — after this facilitator has already
+ * accepted the lock.
  *
  * @param d - The credential Plutus data.
  * @returns The credential, or `null` on a structural mismatch.
@@ -225,7 +263,7 @@ function dataToCredential(d: Data.Data): MasumiCredential | null {
   const c = asConstr(d);
   if (!c || (c.index !== 0n && c.index !== 1n) || c.fields.length !== 1) return null;
   const hash = asHex(c.fields[0]);
-  if (hash === null) return null;
+  if (hash === null || hash.length !== CREDENTIAL_HASH_HEX_LENGTH) return null;
   return { isScript: c.index === 1n, hash };
 }
 
@@ -242,13 +280,31 @@ function dataToAddress(d: Data.Data): MasumiAddressCredentials | null {
   if (!payment) return null;
   const opt = asConstr(c.fields[1]);
   if (!opt) return null;
-  if (opt.index === 1n) return { payment }; // None
+  if (opt.index === 1n) return opt.fields.length === 0 ? { payment } : null; // None
   if (opt.index !== 0n || opt.fields.length !== 1) return null;
-  const inline = asConstr(opt.fields[0]); // Inline(cred)
-  if (!inline || inline.index !== 0n || inline.fields.length !== 1) return null;
-  const stake = dataToCredential(inline.fields[0]);
-  if (!stake) return null;
-  return { payment, stake };
+  const stakeRef = asConstr(opt.fields[0]);
+  if (!stakeRef) return null;
+  if (stakeRef.index === 0n && stakeRef.fields.length === 1) {
+    const stake = dataToCredential(stakeRef.fields[0]);
+    return stake ? { payment, stake } : null;
+  }
+  if (stakeRef.index === 1n && stakeRef.fields.length === 3) {
+    const slot = asInt(stakeRef.fields[0]);
+    const txIndex = asInt(stakeRef.fields[1]);
+    const certIndex = asInt(stakeRef.fields[2]);
+    if (
+      slot === null ||
+      txIndex === null ||
+      certIndex === null ||
+      slot < 0n ||
+      txIndex < 0n ||
+      certIndex < 0n
+    ) {
+      return null;
+    }
+    return { payment, pointer: { slot, txIndex, certIndex } };
+  }
+  return null;
 }
 
 /**
@@ -303,7 +359,11 @@ export function parseMasumiLockDatum(datum: Data.Data | string): MasumiDatumView
   const externalDisputeUnlockTime = asInt(f[15]);
   const sellerCooldownTime = asInt(f[16]);
   const buyerCooldownTime = asInt(f[17]);
+  // The state constructor carries no fields; `FundsLocked` is `Constr 0 []`.
+  // Accepting `Constr 0 [junk]` would let through a datum the validator's typed
+  // decode rejects on every later spend, stranding the escrow.
   const stateConstr = asConstr(f[18]);
+  if (stateConstr !== null && stateConstr.fields.length !== 0) return null;
 
   if (
     !buyer ||

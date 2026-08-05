@@ -803,6 +803,7 @@ describe("x402ResourceServer", () => {
             abort: true,
             reason: "reservation_lost",
             message: "channel busy",
+            status: 409,
           }))
           .onAfterVerify(laterHook)
           .onVerifiedPaymentCanceled(cancellationHook);
@@ -815,6 +816,7 @@ describe("x402ResourceServer", () => {
         expect(result.isValid).toBe(false);
         expect(result.invalidReason).toBe("reservation_lost");
         expect(result.invalidMessage).toBe("channel busy");
+        expect(result.httpStatus).toBe(409);
         expect(result.skipHandler).toBeUndefined();
         expect(laterHook).not.toHaveBeenCalled();
         expect(cancellationHook).toHaveBeenCalledTimes(1);
@@ -2400,6 +2402,7 @@ describe("x402ResourceServer", () => {
       const paymentPayload = buildPaymentPayload();
       const enrich = vi.fn(async ctx => {
         expect(ctx.paymentPayload).toBe(paymentPayload);
+        expect(ctx.requirement).toBe(ctx.requirements[0]);
         ctx.requirements[0].extra.ChannelState = { channelId: "0x123" };
       });
       scheme.enrichPaymentRequiredResponse = enrich;

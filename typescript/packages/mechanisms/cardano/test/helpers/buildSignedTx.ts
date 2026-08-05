@@ -16,6 +16,7 @@ import {
   Address,
   Assets,
   Client,
+  Credential,
   mainnet,
   InlineDatum,
   preprod,
@@ -34,6 +35,40 @@ import {
   LOVELACE_ASSET,
 } from "../../src/constants";
 import { parseAssetUnit } from "../../src/utils";
+import type { CardanoUtxoSnapshot } from "../../src/signer";
+
+/** Input snapshots registered by offline fixtures for the in-memory chain. */
+const fixtureInputSnapshots = new Map<string, CardanoUtxoSnapshot>();
+
+/**
+ * Returns the latest authenticated input snapshot registered by a fixture.
+ *
+ * @param ref - UTXO reference.
+ * @returns Snapshot, if a fixture registered it.
+ */
+export function getFixtureInputSnapshot(ref: string): CardanoUtxoSnapshot | undefined {
+  return fixtureInputSnapshots.get(ref.toLowerCase());
+}
+
+/**
+ * Converts Evolution assets into the facilitator snapshot shape.
+ *
+ * @param value - Evolution SDK value.
+ * @returns Canonical native-asset map.
+ */
+function snapshotAssets(value: Assets.Assets): Record<string, bigint> {
+  const result: Record<string, bigint> = {};
+  if (value.multiAsset) {
+    for (const [policyId, innerMap] of value.multiAsset.map) {
+      const policyHex = Buffer.from(policyId.hash).toString("hex").toLowerCase();
+      for (const [assetName, quantity] of innerMap) {
+        const assetNameHex = Buffer.from(assetName.bytes).toString("hex").toLowerCase();
+        result[`${policyHex}.${assetNameHex}`] = quantity;
+      }
+    }
+  }
+  return result;
+}
 
 /**
  * Minimal protocol parameters sufficient for an offline fee calculation. These
@@ -85,6 +120,18 @@ export interface BuildSignedTxParams {
   secondInput?: { ref: string; lovelace: bigint };
   /** Optional inline datum to attach to the payment output (e.g. a Masumi lock). */
   datum?: InlineDatum.InlineDatum;
+  /**
+   * Optional wallet mnemonic. Supply one when the caller needs the payer address
+   * *before* building the transaction — a Masumi lock datum names the buyer, and
+   * the buyer must control the nonce input.
+   */
+  mnemonic?: string;
+  /**
+   * Exact lovelace to place on the payment output, disabling the automatic
+   * min-UTXO bump. A Masumi lock must carry exactly
+   * `requestedLovelace + collateral`, which the bump would break.
+   */
+  outputLovelace?: bigint;
 }
 
 /**
@@ -97,6 +144,8 @@ export interface BuildSignedTxResult {
   nonce: string;
   /** The payer bech32 address that controls the nonce UTXO. */
   payer: string;
+  /** Authenticated snapshot registered for the nonce input. */
+  nonceSnapshot: CardanoUtxoSnapshot;
 }
 
 /**
@@ -128,7 +177,7 @@ export async function buildSignedTx(params: BuildSignedTxParams): Promise<BuildS
   const chain = resolveChain(network);
 
   // Deterministic-enough offline wallet; a fresh key per call is fine for tests.
-  const mnemonic = PrivateKey.generateMnemonic();
+  const mnemonic = params.mnemonic ?? PrivateKey.generateMnemonic();
   const client = Client.make(chain)
     .withBlockfrost({ baseUrl: "http://offline.invalid" })
     .withSeed({ mnemonic });
@@ -162,6 +211,19 @@ export async function buildSignedTx(params: BuildSignedTxParams): Promise<BuildS
     datumOption: undefined,
     scriptRef: undefined,
   });
+  const paymentCredential = Address.getPaymentCredential(Address.toHex(address));
+  if (paymentCredential?._tag !== "KeyHash") {
+    throw new Error("offline fixture wallet must use a payment-key address");
+  }
+  const paymentKeyHash = Credential.toHex(paymentCredential).toLowerCase();
+  const nonceSnapshot: CardanoUtxoSnapshot = {
+    exists: true,
+    address: payer,
+    coin: fundingAssets.lovelace,
+    assets: snapshotAssets(fundingAssets),
+    paymentKeyHash,
+  };
+  fixtureInputSnapshots.set(params.nonceUtxoRef.toLowerCase(), nonceSnapshot);
 
   // Optional second wallet UTXO so coin selection can produce a multi-input tx.
   const availableUtxos = [nonceUtxo];
@@ -177,13 +239,27 @@ export async function buildSignedTx(params: BuildSignedTxParams): Promise<BuildS
         scriptRef: undefined,
       }),
     );
+    fixtureInputSnapshots.set(params.secondInput.ref.toLowerCase(), {
+      exists: true,
+      address: payer,
+      coin: params.secondInput.lovelace,
+      assets: {},
+      paymentKeyHash,
+    });
   }
 
   const outputAssets = isLovelace
-    ? Assets.fromLovelace(params.amount)
+    ? Assets.fromLovelace(params.outputLovelace ?? params.amount)
     : (() => {
         const { policyId, assetNameHex } = parseAssetUnit(params.asset);
-        return Assets.addByHex(Assets.zero, policyId, assetNameHex, params.amount);
+        return Assets.addByHex(
+          params.outputLovelace !== undefined
+            ? Assets.fromLovelace(params.outputLovelace)
+            : Assets.zero,
+          policyId,
+          assetNameHex,
+          params.amount,
+        );
       })();
 
   const signBuilder = await client
@@ -199,7 +275,7 @@ export async function buildSignedTx(params: BuildSignedTxParams): Promise<BuildS
       availableUtxos,
       changeAddress: address,
       fullProtocolParameters: OFFLINE_PROTOCOL_PARAMETERS,
-      autoMinUtxo: !isLovelace,
+      autoMinUtxo: params.outputLovelace === undefined && !isLovelace,
     });
 
   const submitBuilder = await signBuilder.sign();
@@ -215,6 +291,7 @@ export async function buildSignedTx(params: BuildSignedTxParams): Promise<BuildS
     transaction: Buffer.from(Transaction.toCBORBytes(signed)).toString("base64"),
     nonce: params.nonceUtxoRef,
     payer,
+    nonceSnapshot: { ...nonceSnapshot, assets: { ...nonceSnapshot.assets } },
   };
 }
 

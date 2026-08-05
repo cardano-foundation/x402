@@ -46,6 +46,9 @@ const AVM_NETWORK = (process.env.AVM_NETWORK ||
 const KEETA_NETWORK = (process.env.KEETA_NETWORK || KEETA_TESTNET_CAIP2) as `${string}:${string}`;
 const STELLAR_NETWORK = (process.env.STELLAR_NETWORK || "stellar:testnet") as `${string}:${string}`;
 const CARDANO_NETWORK = (process.env.CARDANO_NETWORK || "cardano:preprod") as `${string}:${string}`;
+// Canonical block inclusion is the bar for the e2e: the spec default of 1 would
+// make every Cardano scenario wait an extra ~20s block for no added signal.
+const CARDANO_CONFIRMATION_POLICY = { l1Confirmations: 0 };
 const TVM_NETWORK = (process.env.TVM_NETWORK || "tvm:-3") as `${string}:${string}`;
 const NEAR_NETWORK = (process.env.NEAR_NETWORK || "near:testnet") as `${string}:${string}`;
 const XRPL_NETWORK = (process.env.XRPL_NETWORK || "xrpl:1") as `${string}:${string}`;
@@ -60,6 +63,11 @@ const KEETA_PAYEE_ADDRESS = process.env.KEETA_PAYEE_ADDRESS as string | undefine
 const AVM_PAYEE_ADDRESS = process.env.AVM_PAYEE_ADDRESS as string;
 const STELLAR_PAYEE_ADDRESS = process.env.STELLAR_PAYEE_ADDRESS as string | undefined;
 const CARDANO_PAYEE_ADDRESS = process.env.CARDANO_PAYEE_ADDRESS as string | undefined;
+// Asset the Cardano endpoint charges in; defaults to lovelace (tADA) so the e2e
+// is faucet-fundable. Set CARDANO_ASSET to a `policyId.assetNameHex` unit to run
+// the same endpoint against a native token.
+const CARDANO_ASSET = process.env.CARDANO_ASSET || "lovelace";
+const CARDANO_AMOUNT = process.env.CARDANO_AMOUNT || "5000000";
 const TVM_PAYEE_ADDRESS = process.env.TVM_PAYEE_ADDRESS as string | undefined;
 const NEAR_PAYEE_ADDRESS = process.env.NEAR_PAYEE_ADDRESS as string | undefined;
 const NEAR_ASSET = process.env.NEAR_ASSET as string | undefined;
@@ -125,10 +133,18 @@ if (!facilitatorUrl) {
 const app = new Hono();
 
 // Create facilitator clients (mock facilitator as fallback for startup validation)
-const facilitatorClients = [new HTTPFacilitatorClient({ url: facilitatorUrl })];
+// Cardano settles on ~20-second blocks, so its `settle()` cannot finish inside
+// the 30s facilitator-client default. Raising the ceiling costs nothing on the
+// fast chains — they still return as soon as they are done.
+const FACILITATOR_TIMEOUT_MS = 180_000;
+const facilitatorClients = [
+  new HTTPFacilitatorClient({ url: facilitatorUrl, timeoutMs: FACILITATOR_TIMEOUT_MS }),
+];
 const mockFacilitatorUrl = process.env.MOCK_FACILITATOR_URL;
 if (mockFacilitatorUrl) {
-  facilitatorClients.push(new HTTPFacilitatorClient({ url: mockFacilitatorUrl }));
+  facilitatorClients.push(
+    new HTTPFacilitatorClient({ url: mockFacilitatorUrl, timeoutMs: FACILITATOR_TIMEOUT_MS }),
+  );
 }
 
 // Create x402 resource server with builder pattern (cleaner!)
@@ -827,8 +843,9 @@ app.use(
               accepts: {
                 payTo: CARDANO_PAYEE_ADDRESS!,
                 scheme: "exact",
-                price: "$0.001",
+                price: { amount: CARDANO_AMOUNT, asset: CARDANO_ASSET },
                 network: CARDANO_NETWORK,
+                extra: { confirmationPolicy: CARDANO_CONFIRMATION_POLICY },
               },
               extensions: {
                 ...declareDiscoveryExtension({

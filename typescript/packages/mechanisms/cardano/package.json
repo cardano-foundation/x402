@@ -44,7 +44,9 @@
   },
   "dependencies": {
     "@evolution-sdk/evolution": "^0.5.9",
-    "@x402/core": "workspace:~"
+    "@noble/hashes": "^2.2.0",
+    "@x402/core": "workspace:~",
+    "lz-string": "^1.5.0"
   },
   "exports": {
     ".": {

@@ -47,12 +47,21 @@ const provider = { blockfrost: { baseUrl: process.env.BLOCKFROST_PREPROD_URL!, p
 const clientSigner = toClientCardanoSigner({ mnemonic, network: "cardano:preprod", provider });
 client.register("cardano:*", new ExactCardanoClient(clientSigner));
 
-// Facilitator (verify + settle). `awaitConfirmation` reports `confirmed` instead of `mempool`.
-const facilitatorSigner = toFacilitatorCardanoSigner({ mnemonic, network: "cardano:preprod", provider, awaitConfirmation: true });
-facilitator.register("cardano:preprod", new ExactCardanoFacilitator(facilitatorSigner));
+// Facilitator (verify + settle). Supply a complete ledger phase-1 validator
+// for the default server-submission mode and durable shared settlement state.
+const facilitatorSigner = toFacilitatorCardanoSigner({
+  network: "cardano:preprod",
+  provider,
+  awaitConfirmation: true,
+  validatePhase1Transaction: ledgerValidator.validatePhase1Transaction,
+});
+facilitator.register(
+  "cardano:preprod",
+  new ExactCardanoFacilitator(facilitatorSigner, { settlementStore }),
+);
 ```
 
-The facilitator only broadcasts the client's signed transaction, so its `mnemonic` is **optional** — omit it to run provider-only (no funds, no signer); when supplied it is used only to expose an address in the `/supported` response. The facilitator signer also implements the optional `evaluateTransaction` dry-run described below. A Koios provider (`{ koios: { baseUrl, token? } }`) may be used instead of Blockfrost.
+The facilitator only broadcasts the client's signed transaction, so its `mnemonic` is **optional** — omit it to run provider-only (no funds, no signer); when supplied it is used only to expose an address in the `/supported` response. `settlementStore` must be an atomic durable `CardanoSettlementStore` shared by every facilitator worker. The reference signer also implements the optional `evaluateTransaction` script dry-run. A Koios provider (`{ koios: { baseUrl, token? } }`) may be used instead of Blockfrost. `provider.requestTimeoutMs` bounds every reference-signer provider query, build, submission, evaluation and confirmation wait; it defaults to 10 seconds.
 
 ## Testnet funds
 
@@ -68,17 +77,53 @@ from the faucet; preprod **USDM** must be sourced separately, so use lovelace fo
 Per spec, three methods can be selected via `requirements.extra.assetTransferMethod`:
 
 - `default` — address-to-address payments. No extra verification beyond the core rules.
-- `masumi` — locks funds into Masumi's `vested_pay` escrow for **concrete agent-to-agent payments**. The base facilitator builds and verifies the fixed 19-field lock datum (`buildMasumiLockInline` / `verifyMasumiLock`); no subclassing is required.
+- `masumi` — locks funds into Masumi's `vested_pay` escrow for **concrete agent-to-agent payments**. Issue the 402 with `issueMasumiRequirements` (it derives `payTo` from the deployment parameters, builds the request commitment and gets the seller's CIP-8 signature over `termsDigest`); the client and facilitator both re-verify that authorization, and the facilitator additionally checks the 19-field lock datum (`verifyMasumiLock`). No subclassing is required.
 - `script` — locks funds into **any contract defined by the server**, with an optional arbitrary datum. The base facilitator reconstructs the script address from `extra.script`/`parameters` (or `scriptHash`) and verifies it equals `requirements.payTo`. Supply `extra.datum` (CBOR hex) to attach an inline datum for contracts that require one — the client attaches it verbatim; because the datum is arbitrary and contract-specific, the facilitator does **not** verify its contents, so a correct datum is the server's responsibility (a wrong or missing one strands the funds). Use this to lock into your own contract; use `masumi` for agent payments.
 
 Overriding `runMethodSpecificChecks` is **not** required for any built-in method; if you subclass to add a custom method, call `super.runMethodSpecificChecks(...)` so the Masumi and script checks still run.
 
+## Submission and confirmation policy
+
+`requirements.extra.submissionPolicy` selects who broadcasts: `server` (the default when absent), `client`, or `either`. The paid payload echoes the normalized `submissionMode`, which must be allowed by the policy and must stay the same across retries for one transaction. Server mode requires a complete ledger phase-1 validator through `validatePhase1Transaction`; script evaluation alone is not enough. Client mode requires `getTransactionEvidence`, because the client broadcasts before the paid retry and the facilitator must authenticate that exact transaction. `/supported` advertises only modes for which these hooks exist.
+
+`requirements.extra.confirmationPolicy.l1Confirmations` sets the evidence required before `settle()` reports success: `-1` authenticated mempool acceptance, `0` canonical block inclusion, `1..20` that many newer blocks. It defaults to `1`. Below the threshold, `settle()` returns `errorReason: "payment_pending"` with the strongest evidence in `extra`; the paid retry resumes observing the same transaction without resubmitting it.
+
+Hydra settlement is **not implemented**: a `settlementLayer: "hydra"` payload is rejected and `/supported` advertises L1 only. Authenticating a Hydra payment needs verified Init state, head parameters, a seller-participant binding and `SnapshotConfirmed` evidence.
+
+## Idempotency boundary
+
+`settle()` is idempotent per canonical transaction ID, not one-shot. The spec requires a paid retry to repeat the exact original `PAYMENT-SIGNATURE` and the verifier to resume observing the same transaction, so a terminal "already settled" state would strand any payment that needs more confirmations than a single call can wait for. What this package guarantees is that a given transaction is **broadcast at most once** and always reports the same ledger truth.
+
+A definitive pre-ledger rejection is terminal for that issued payment. The facilitator retains both the transaction and Masumi `termsDigest` tombstones, and the resource server marks the protected operation for manual reconciliation. It does not accept corrected transaction bytes after the handler has run: doing so could bind one handler result to a different payment. Ambiguous transport or node failures remain non-releasable for the same reason.
+
+Binding a settled payment to a **single protected operation** is the resource server's responsibility, which the spec assigns explicitly: key the record by canonical transaction ID for `default` and `script`. For `masumi` the binding is stronger and already enforced here — `termsDigest` covers exactly one issued 402, so a payment cannot be reused against a second one (each carries a fresh `sellerNonce`).
+
+Replay state must survive restarts. Resource servers must supply an atomic durable `CardanoOperationStore`; facilitators must supply an atomic durable `CardanoSettlementStore`. The process-local stores are available only through explicit configuration for tests and disposable development. They stop at their configured entry limit and must not be used in production.
+
+Each Cardano 402 includes an opaque `cardanoReplayProtection` challenge bound to the request fingerprint and the selected requirements. The normal x402 v2 paid retry echoes this top-level extension. The first canonical transaction that uses the challenge consumes it; the same challenge can then retry only that transaction. Anonymous server-submission retries therefore remain bound to their original 402.
+
+Client submission also requires a validated `requestBinding`. Its transaction is public before the paid request reaches the resource server, so an opaque HTTP challenge alone cannot stop a mempool observer from racing the request with another valid challenge. Run authentication before the x402 middleware and return the validated principal or tenant from `requestBinding`. Authorization, cookie and API-key headers remain part of the request fingerprint, but arbitrary non-empty header values do not prove authentication. Cached responses omit authentication and cookie headers. Production `CardanoOperationStore` implementations must persist challenge issuance and consumption atomically with operation claims.
+
+## Relationship to `masumi-payment-service`
+
+The `masumi` method locks into the **real** deployed `vested_pay` V2 escrow: the compiled validator is taken verbatim from `masumi-payment-service`, and `payTo` is re-derived from the deployment parameters, so the canonical addresses match Masumi's own `PAYMENT_SMART_CONTRACT_ADDRESS_V2_*` exactly. The 19-field datum, the `collateral_return_lovelace` floor, the post-`SubmitResult` min-UTxO headroom, the deadline minimums and the `blockchainIdentifier` encoding all follow Masumi's rules, so a lock issued here is locatable and structurally valid on chain.
+
+The **seller authorization does not**. `reference_signature` here is a CIP-8 signature over this scheme's `termsDigest` (`SHA-256("masumi:x402:terms:v1\n" || JCS(signedTerms))`). `masumi-payment-service` verifies the same datum field against a signature over `SHA-256(stableStringify(signedBlockchainIdentifierPayload))` — a different payload entirely. The divergence is deliberate: `termsDigest` covers the exact issued 402 and is what binds a payment to one protected operation, which is the whole basis of this package's replay and idempotency guarantees. Signing Masumi's payload instead would break that binding.
+
+The consequence is concrete and worth stating plainly: **a lock created by this package cannot be driven through a `masumi-payment-service` node.** Masumi tooling can decode the `blockchainIdentifier` and find the UTxO, but its purchase-init check will reject the signature, so result submission, refunds and dispute resolution must be driven by x402-aware tooling holding the seller key. Use the `masumi` method when you want the escrow's guarantees inside an x402 flow — not as a transport into an existing Masumi deployment.
+
+Two smaller asymmetries follow from the same split. This package requires `lockedLovelace == requestedLovelace + collateral_return_lovelace` **exactly**, where Masumi tolerates lovelace overpayment; a Masumi-built transaction that rounds up to min-UTxO therefore will not satisfy an x402 402. And datum addresses are restricted to enterprise key addresses and base addresses whose payment *and* stake credentials are both key hashes — Masumi's `getPubKeyAddressDatum` accepts nothing else, and a script stake credential or pointer address would leave the escrow unspendable by its tooling.
+
+## Masumi registry claims
+
+A non-empty `terms.agentIdentifier` claims a Masumi V2 registry identity. The policy prefix alone proves nothing — anyone can copy a registered agent's identifier into their own terms — so such a claim is **rejected** unless you supply a `validateRegistryClaim` validator (on the facilitator config and, for the client, `validateMasumiRegistryClaim`) that independently checks the asset, seller authorization, metadata, endpoint, network and price on the selected network. Unregistered sellers (an absent, `null` or empty identifier) need no validator.
+
 ## Settlement status
 
-Cardano uses Ouroboros Praos (probabilistic finality). The default `settle()` returns whatever status the underlying signer reports. Granting access on `mempool` is **strongly discouraged** by the spec.
+Cardano uses Ouroboros Praos (probabilistic finality). `settle()` reports the strongest verified evidence in `extra` (`status`, `confirmations`, `submissionMode`). Granting access on `mempool` is **strongly discouraged** by the spec, so the facilitator refuses a mempool-only result unless the operator sets `acceptMempool` *and* the policy allows `-1`.
 
-## Optional cryptographic authorization check
+## Script evaluation
 
-The facilitator's structural checks (network, recipient, amount, asset, nonce, TTL, witness presence) are inexpensive but do not prove the supplied witnesses actually authorize the consumed inputs. To close that gap, implement the optional `evaluateTransaction(signedTransactionBase64, network)` method on your `FacilitatorCardanoSigner`; the facilitator will call it after the structural checks pass and treat any thrown error as a verification failure. Typical implementations route this to a Cardano node `evaluate-tx` endpoint or to Blockfrost's `/utils/txs/evaluate`.
+Server submission requires `validatePhase1Transaction`, which must apply the complete Cardano phase-1 ledger rules to the exact signed transaction. The optional `evaluateTransaction(signedTransactionBase64, network)` hook is narrower: it dry-runs Plutus execution and does not prove value conservation or input authorization. Typical implementations route it to a Cardano node `evaluate-tx` endpoint or Blockfrost's `/utils/txs/evaluate`.
 
 See `specs/schemes/exact/scheme_exact_cardano.md` for the full protocol description.

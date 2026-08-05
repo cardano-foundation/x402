@@ -697,6 +697,8 @@ async function waitForCardanoWalletSettled(opts: {
     await new Promise(resolve => setTimeout(resolve, intervalMs));
   }
   verboseLog(`  ⚠️ Timed out waiting for Blockfrost to reflect ${txHash.slice(0, 12)}…; proceeding`);
+}
+
 function waitForChildProcess(child: ChildProcess, timeoutMs: number): Promise<boolean> {
   if (child.exitCode !== null || child.signalCode !== null) {
     return Promise.resolve(true);
@@ -1702,6 +1704,8 @@ async function runTest() {
       stellarPayTo: facilitatorSupportsStellar ? (serverStellarAddress || '') : '',
       tvmPayTo: facilitatorSupportsTvm ? (serverTvmAddress || '') : '',
       cardanoPayTo: facilitatorSupportsCardano ? (serverCardanoAddress || '') : '',
+      cardanoAsset: process.env.SERVER_CARDANO_ASSET,
+      cardanoAmount: process.env.SERVER_CARDANO_AMOUNT,
       nearPayTo: facilitatorSupportsNear ? (serverNearAddress || '') : '',
       nearAsset: process.env.SERVER_NEAR_ASSET,
       nearAmount: process.env.SERVER_NEAR_AMOUNT,

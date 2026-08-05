@@ -140,6 +140,9 @@ export class GenericServerProxy extends BaseProxy implements ServerProxy {
         // Cardano network config
         CARDANO_NETWORK: config.networks.cardano.caip2,
         CARDANO_PAYEE_ADDRESS: config.cardanoPayTo,
+        // Only forwarded when set, so the servers keep their lovelace defaults.
+        ...(config.cardanoAsset !== undefined ? { CARDANO_ASSET: config.cardanoAsset } : {}),
+        ...(config.cardanoAmount !== undefined ? { CARDANO_AMOUNT: config.cardanoAmount } : {}),
         BLOCKFROST_PROJECT_ID: process.env.BLOCKFROST_PROJECT_ID || '',
         BLOCKFROST_PREPROD_URL: config.networks.cardano.rpcUrl,
         // NEAR network config

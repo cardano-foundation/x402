@@ -2,7 +2,7 @@
   "name": "axios",
   "type": "client",
   "language": "typescript",
-  "protocolFamilies": ["evm", "svm", "avm", "aptos", "hedera", "keeta", "near", "stellar", "tvm", "ccd", "cardano", "xrpl"],
+  "protocolFamilies": ["evm", "svm", "avm", "aptos", "hedera", "keeta", "near", "stellar", "tvm", "ccd", "xrpl", "cardano"],
   "x402Versions": [1, 2],
   "schemes": ["exact", "upto", "batch-settlement"],
   "evm": {

@@ -141,6 +141,17 @@ async function main(): Promise<void> {
     console.log(`Initialized AVM account: ${avmSigner.address}`);
   }
 
+  // Register Aptos scheme if private key is provided
+  if (aptosPrivateKey) {
+    const formattedKey = AptosPrivateKey.formatPrivateKey(
+      aptosPrivateKey,
+      PrivateKeyVariants.Ed25519,
+    );
+    const account = Account.fromPrivateKey({ privateKey: new Ed25519PrivateKey(formattedKey) });
+    client.register("aptos:*", new ExactAptosScheme(account));
+    console.log(`Initialized Aptos account: ${account.accountAddress.toStringLong()}`);
+  }
+
   // Register Cardano scheme if a mnemonic and Blockfrost connection are provided
   if (cardanoMnemonic) {
     if (!blockfrostBaseUrl || !blockfrostProjectId) {
@@ -156,15 +167,6 @@ async function main(): Promise<void> {
     });
     client.register("cardano:*", new ExactCardanoScheme(cardanoSigner));
     console.log(`Initialized Cardano signer on ${cardanoNetwork}`);
-  // Register Aptos scheme if private key is provided
-  if (aptosPrivateKey) {
-    const formattedKey = AptosPrivateKey.formatPrivateKey(
-      aptosPrivateKey,
-      PrivateKeyVariants.Ed25519,
-    );
-    const account = Account.fromPrivateKey({ privateKey: new Ed25519PrivateKey(formattedKey) });
-    client.register("aptos:*", new ExactAptosScheme(account));
-    console.log(`Initialized Aptos account: ${account.accountAddress.toStringLong()}`);
   }
 
   // Register Concordium scheme if private key and address are provided

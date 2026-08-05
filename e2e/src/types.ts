@@ -1,6 +1,6 @@
 import type { NetworkSet } from './networks/networks';
 
-export type ProtocolFamily = 'evm' | 'svm' | 'avm' | 'aptos' | 'hedera' | 'keeta' | 'near' | 'stellar' | 'ccd' | 'tvm' | 'cardano' | 'xrpl';
+export type ProtocolFamily = 'evm' | 'svm' | 'avm' | 'aptos' | 'hedera' | 'keeta' | 'near' | 'stellar' | 'ccd' | 'tvm' | 'xrpl' | 'cardano';
 export type Transport = 'http' | 'mcp';
 export type PaymentScheme = 'exact' | 'upto' | 'batch-settlement';
 export type AssetTransferMethod = 'eip3009' | 'permit2' | 'sequence' | 'ticketSequence';
@@ -128,6 +128,8 @@ export interface ServerConfig {
   stellarPayTo: string;
   tvmPayTo: string;
   cardanoPayTo: string;
+  cardanoAsset?: string;
+  cardanoAmount?: string;
   nearPayTo: string;
   nearAsset?: string;
   nearAmount?: string;

@@ -573,6 +573,10 @@ describe("x402Client", () => {
 
         expect(mockClient.createPaymentPayloadCalls.length).toBe(1);
         expect(mockClient.createPaymentPayloadCalls[0].x402Version).toBe(2);
+        expect(mockClient.createPaymentPayloadCalls[0].context).toEqual({
+          extensions: paymentRequired.extensions,
+          resource: paymentRequired.resource,
+        });
       });
     });
 

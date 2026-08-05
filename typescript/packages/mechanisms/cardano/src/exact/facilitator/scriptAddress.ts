@@ -13,6 +13,15 @@ import type {
   CardanoScriptDescriptor,
   CardanoScriptParameter,
 } from "../../types";
+import { unwrapCborByteString } from "../../utils";
+import {
+  MAX_CARDANO_SCRIPT_BYTES,
+  MAX_CARDANO_SCRIPT_PARAMETERS,
+  MAX_CARDANO_SCRIPT_PARAMETER_BYTES,
+} from "../../limits";
+
+const SCRIPT_HASH_REGEX = /^[0-9a-f]{56}$/;
+const EVEN_HEX_REGEX = /^(?:[0-9a-f]{2})+$/;
 
 /**
  * Reconstructs the script payment-credential (script hash) implied by a script
@@ -74,18 +83,89 @@ function scriptPaymentCredentialHex(payTo: string): string | null {
  * @returns The derived script hash hex.
  * @throws When neither `script` nor `scriptHash` is usable.
  */
-function deriveScriptHashHex(extra: CardanoExtraScript): string {
+export function deriveScriptHashHex(extra: CardanoExtraScript): string {
   if (extra.script?.code) {
-    const params = extra.parameters ? Object.values(extra.parameters).map(toPlutusData) : [];
+    if (
+      !EVEN_HEX_REGEX.test(extra.script.code) ||
+      extra.script.code.length / 2 > MAX_CARDANO_SCRIPT_BYTES
+    ) {
+      throw new Error("Cardano script code is invalid or exceeds the byte limit");
+    }
+    const entries = extra.parameters ? Object.entries(extra.parameters) : [];
+    if (entries.length > MAX_CARDANO_SCRIPT_PARAMETERS) {
+      throw new Error("Cardano script has too many parameters");
+    }
+    let parameterBytes = 0;
+    const params = entries.map(([name, parameter]) => {
+      parameterBytes += Buffer.byteLength(name, "utf8") + parameterInputBytes(parameter);
+      if (parameterBytes > MAX_CARDANO_SCRIPT_PARAMETER_BYTES) {
+        throw new Error("Cardano script parameters exceed the byte limit");
+      }
+      return toPlutusData(parameter);
+    });
     const applied = UPLC.applyParamsToScript(extra.script.code, params);
     const raw = unwrapCborByteString(applied);
     const script = makePlutusScript(extra.script.type, raw);
     return ScriptHash.toHex(ScriptHash.fromScript(script)).toLowerCase();
   }
   if (extra.scriptHash) {
+    if (!SCRIPT_HASH_REGEX.test(extra.scriptHash)) {
+      throw new Error("Cardano scriptHash must be 28-byte lowercase hex");
+    }
     return extra.scriptHash.toLowerCase();
   }
   throw new Error("Cardano script payment requires either `script` or `scriptHash`");
+}
+
+/**
+ * Measures one scalar parameter before conversion allocates Plutus data.
+ *
+ * @param param - Declared script parameter.
+ * @returns Approximate source bytes consumed by the value.
+ */
+function parameterInputBytes(param: CardanoScriptParameter): number {
+  if (!param || typeof param !== "object") {
+    throw new Error("Cardano script parameter must be an object");
+  }
+  switch (param.type) {
+    case "bytes": {
+      if (typeof param.value !== "string" || !/^(?:[0-9a-f]{2})*$/.test(param.value)) {
+        throw new Error("Cardano bytes parameter must be lowercase even-length hex");
+      }
+      return param.value.length / 2;
+    }
+    case "string":
+      if (typeof param.value !== "string") {
+        throw new Error("Cardano string parameter must carry a string");
+      }
+      return Buffer.byteLength(param.value, "utf8");
+    case "bigint":
+    case "integer": {
+      const value = param.value;
+      if (typeof value === "number" && !Number.isSafeInteger(value)) {
+        throw new Error("Cardano integer parameter must be a safe integer");
+      }
+      if (
+        typeof value !== "bigint" &&
+        typeof value !== "number" &&
+        (typeof value !== "string" || !/^(?:0|[1-9]\d*|-[1-9]\d*)$/.test(value))
+      ) {
+        throw new Error("Cardano integer parameter must use canonical decimal syntax");
+      }
+      const digits = String(value).replace(/^-/, "");
+      if (digits.length > 128) {
+        throw new Error("Cardano integer parameter exceeds the digit limit");
+      }
+      return digits.length;
+    }
+    case "boolean":
+      if (typeof param.value !== "boolean") {
+        throw new Error("Cardano boolean parameter must carry a boolean");
+      }
+      return 1;
+    default:
+      throw new Error(`Unsupported Cardano script parameter type: ${param.type}`);
+  }
 }
 
 /**
@@ -132,38 +212,4 @@ function makePlutusScript(
     case "plutusV3":
       return new PlutusV3.PlutusV3({ bytes });
   }
-}
-
-/**
- * Strips a single definite-length CBOR byte-string wrapper, returning the
- * payload bytes. `applyParamsToScript` returns the script wrapped in one such
- * layer; the script hash is computed over the unwrapped bytes.
- *
- * @param hex - Hex of a definite-length CBOR byte string.
- * @returns The unwrapped payload bytes.
- */
-function unwrapCborByteString(hex: string): Uint8Array {
-  const bytes = Buffer.from(hex, "hex");
-  if (bytes.length === 0 || bytes[0] >> 5 !== 2) {
-    throw new Error("Expected a CBOR byte string from applyParamsToScript");
-  }
-  const additional = bytes[0] & 0x1f;
-  let length: number;
-  let offset: number;
-  if (additional < 24) {
-    length = additional;
-    offset = 1;
-  } else if (additional === 24) {
-    length = bytes[1];
-    offset = 2;
-  } else if (additional === 25) {
-    length = bytes.readUInt16BE(1);
-    offset = 3;
-  } else if (additional === 26) {
-    length = bytes.readUInt32BE(1);
-    offset = 5;
-  } else {
-    throw new Error("Unsupported CBOR byte-string length encoding");
-  }
-  return Uint8Array.from(bytes.subarray(offset, offset + length));
 }

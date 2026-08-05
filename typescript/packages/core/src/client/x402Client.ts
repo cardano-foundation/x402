@@ -425,7 +425,7 @@ export class x402Client {
       const partialPayload = await schemeNetworkClient.createPaymentPayload(
         paymentRequired.x402Version,
         requirements,
-        { extensions: paymentRequired.extensions },
+        { extensions: paymentRequired.extensions, resource: paymentRequired.resource },
       );
 
       let paymentPayload: PaymentPayload;

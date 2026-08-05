@@ -236,13 +236,25 @@ You need **three separate Stellar accounts** for e2e tests (client, server, faci
 
 #### Cardano Preprod
 
-The Cardano e2e endpoint is paid in **lovelace** (native tADA), so you only need test ADA — no stablecoin trustline or sourcing.
+The Cardano e2e endpoints are paid in **lovelace** (native tADA) by default, so you only need test ADA — no stablecoin trustline or sourcing.
 
 1. Create a preprod wallet to obtain a **24-word mnemonic** and an `addr_test1...` address — either with a CIP-30 wallet (Eternl / Lace in **preprod** mode) or programmatically via `PrivateKey.generateMnemonic()` from `@evolution-sdk/evolution`. You only need a **client** mnemonic (`CLIENT_CARDANO_MNEMONIC`); the server just needs an address (`SERVER_CARDANO_ADDRESS`) — the client's `addr_test1...` works. `FACILITATOR_CARDANO_MNEMONIC` is **optional**: the facilitator only broadcasts the client's signed transaction, so it runs provider-only when no mnemonic is set.
 2. Fund the **client** wallet with test ADA from the [Cardano testnets faucet](https://docs.cardano.org/cardano-testnets/tools/faucet/) (select **Preprod**); ~10 tADA is plenty. Only the client needs funds — it builds, signs, and pays the fee; the facilitator only broadcasts the transaction.
 3. Get a free **Blockfrost** preprod project id at [blockfrost.io](https://blockfrost.io/) and set `BLOCKFROST_PROJECT_ID` (and `BLOCKFROST_PREPROD_URL`).
 
 > **Note:** Run Cardano standalone via the chain-agnostic apps and the `cardano` family filter: `pnpm test --clients=fetch --servers=express --facilitators=typescript --families=cardano`. Without `--families=cardano` the harness expands to every protocol family those apps support and requires all of their credentials (EVM, SVM, etc.).
+
+###### Native-token (tUSDM) run
+
+The asset is a config axis, not a separate endpoint: the same `default` / `masumi` / `script` methods run against a native token when `SERVER_CARDANO_ASSET` is set to a `policyId.assetNameHex` unit. This is the only place the token paths are exercised end to end (structural lovelace on the escrow output, exact token matching), so run it whenever the Masumi or signer funding logic changes:
+
+```bash
+SERVER_CARDANO_ASSET=e675b46e4d2242c991a8932a99db3044e80515ae14b4c4ccf6b3f4c9.0014df10745553444d \
+SERVER_CARDANO_AMOUNT=1000000 \
+pnpm test --clients=fetch --servers=express --facilitators=typescript --families=cardano
+```
+
+The client wallet must hold **tUSDM** on preprod in addition to a few tADA — a native-token lock still carries structural lovelace (post-result min-UTXO plus collateral), which the client signer funds itself.
 
 ##### TON testnet funding for TVM e2e and examples
 
