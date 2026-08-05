@@ -867,7 +867,7 @@ A facilitator MUST enforce all of the following rules before accepting a payment
 
 5. **Nonce / Replay Prevention**: The `payload.nonce` MUST be a valid UTXO reference (`txHash#index`) included as an input in the transaction. The selected settlement ledger is Cardano L1 unless a Masumi payload selects Hydra. In server mode, before submission, the facilitator MUST verify that the nonce is unspent in the selected ledger: the current L1 UTXO set for L1, or the authenticated current UTXO state of the verified `headId` for Hydra. In client mode, authenticated settlement evidence MUST prove that the exact submitted transaction consumed the nonce in that same ledger. Hydra evidence requires a verified `SnapshotConfirmed` transition for the exact transaction and head; an unauthenticated `GetUTxO`, `HeadIsOpen` event, or snapshot from another head is not sufficient. This ensures uniqueness without requiring a Hydra UTXO to exist on L1.
 
-6. **Submission Check**: An absent `payload.submissionMode` normalizes to `server`. The normalized mode MUST match `submissionPolicy`. In server mode, the facilitator submits only after verification. In client mode, it MUST verify authenticated evidence for the exact transaction and MUST NOT submit it again.
+6. **Submission Check**: An absent `payload.submissionMode` normalizes to `server`. The normalized mode MUST match `submissionPolicy`. In server mode, the facilitator submits only after verification, and MUST first run complete ledger **phase-1 validation** of the signed transaction — Plutus script evaluation alone is not sufficient, because it admits unbalanced and unauthenticated transactions. In client mode, it MUST verify authenticated evidence for the exact transaction and MUST NOT submit it again. `/supported` MUST advertise only the submission modes the facilitator can actually perform; a facilitator without a phase-1 validator does not offer `server`.
 
 7. **TTL / Expiry Check**: Before first submission, the transaction's TTL (time-to-live slot) MUST not have passed. The TTL MUST NOT be later than the slot corresponding to the current network time plus `PaymentRequirements.maxTimeoutSeconds`. Both client and facilitator MUST convert wall-clock time to a slot using the current system-start and era summary; they MUST NOT compare seconds against slots as raw values, and MUST NOT assume one slot per second (this holds only from Shelley onward, and is a protocol parameter rather than a constant). After authenticated evidence proves that the selected ledger accepted the transaction within its validity interval, later confirmation checks MAY continue after the TTL.
 
@@ -985,6 +985,26 @@ Merchants and/or Facilitators SHOULD maintain a short-term, in-memory cache of t
 The claim SHOULD be released only after it is established that no submission occurred, or after a definitive ledger rejection, so a legitimate retry can re-attempt. A timeout, transport failure, unknown node result or mempool-only result MUST retain the claim; the service then reconciles by transaction ID.
 
 This approach requires no external storage — only an in-process map with time-based eviction. It preserves the facilitator's otherwise stateless design while closing the duplicate settlement attack vector. Note that the cache is per-process: across multiple facilitator instances it does not deduplicate, but the on-chain nonce spend (Rule 5) remains the authoritative cross-instance replay guard.
+
+### Replay challenge
+
+A resource server MUST put an opaque challenge in every Cardano 402, bound to the request and to the requirements it quotes:
+
+```js
+"extensions": {
+  "cardanoReplayProtection": {
+    "challenges": { "<requirementsFingerprint>": "<32-byte lowercase hex>" }
+  }
+}
+```
+
+`requirementsFingerprint` is lowercase hex `SHA-256(UTF-8(RFC8785-JCS(entry)))` over the `accepts` entry it keys. The paid retry echoes the same object in `paymentPayload.extensions`. A challenge stays valid for at least `maxTimeoutSeconds`; the first canonical transaction that uses it consumes it and it then retries only that transaction.
+
+The server MUST require the echoed challenge when `payload.submissionMode` is `client`, or whenever it cannot bind the request to an authenticated requester. It MAY waive it for an authenticated requester in server mode. Request headers alone do not authenticate a requester.
+
+### Implementation limits
+
+An implementation MAY bound what it will process — transaction size and input count, inline script and datum size, script parameter count, commitment part count and content size, admin-key count — and MUST reject beyond its budget rather than process it. These budgets are implementation policy, not ledger rules.
 
 ### Masumi logical replay
 
