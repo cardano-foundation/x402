@@ -116,7 +116,12 @@ describe("Cardano Integration Tests (deterministic, offline)", () => {
     let server: x402ResourceServer;
 
     beforeEach(async () => {
-      client = new x402Client().register(NETWORK, new ExactCardanoClient(stubClientSigner()));
+      // The offline flows pay lovelace (not USD-pegged) and USDM above the $1
+      // default cap, so they opt out of spend controls like the e2e harness.
+      client = x402Client.fromConfig({
+        schemes: [{ network: NETWORK, client: new ExactCardanoClient(stubClientSigner()) }],
+        spendControls: false,
+      });
 
       const facilitator = new x402Facilitator().register(
         NETWORK,
@@ -170,20 +175,41 @@ describe("Cardano Integration Tests (deterministic, offline)", () => {
     });
 
     it("verifies and settles a native USDM payment end to end", async () => {
-      const accepts = [buildRequirements(recipient, "1500000", USDM_PREPROD_ASSET)];
+      // 0.5 USDM: a default-spend-controls client must recognise USDM as the
+      // network's default asset and accept it under the $1 cap.
+      const guardedClient = x402Client.fromConfig({
+        schemes: [{ network: NETWORK, client: new ExactCardanoClient(stubClientSigner()) }],
+      });
+      const accepts = [buildRequirements(recipient, "500000", USDM_PREPROD_ASSET)];
       const paymentRequired = await server.createPaymentRequiredResponse(accepts, {
         url: "https://company.co",
         description: "Company Co. resource",
         mimeType: "application/json",
       });
 
-      const paymentPayload = await client.createPaymentPayload(paymentRequired);
+      const paymentPayload = await guardedClient.createPaymentPayload(paymentRequired);
       const accepted = server.findMatchingRequirements(accepts, paymentPayload);
       const verifyResponse = await server.verifyPayment(paymentPayload, accepted!);
       expect(verifyResponse.isValid).toBe(true);
 
       const settleResponse = await server.settlePayment(paymentPayload, accepted!);
       expect(settleResponse.success).toBe(true);
+    });
+
+    it("refuses lovelace under default spend controls (not a USD-pegged default asset)", async () => {
+      const guardedClient = x402Client.fromConfig({
+        schemes: [{ network: NETWORK, client: new ExactCardanoClient(stubClientSigner()) }],
+      });
+      const accepts = [buildRequirements(recipient, "2000000", LOVELACE_ASSET)];
+      const paymentRequired = await server.createPaymentRequiredResponse(accepts, {
+        url: "https://company.co",
+        description: "Company Co. resource",
+        mimeType: "application/json",
+      });
+
+      await expect(guardedClient.createPaymentPayload(paymentRequired)).rejects.toThrow(
+        /spendControls/,
+      );
     });
 
     it("verifies and settles a script payment (no datum) end to end", async () => {
@@ -780,7 +806,10 @@ describe.skipIf(!LIVE_READY)("Cardano Integration Tests (live preprod)", () => {
       awaitConfirmation: true,
     });
 
-    const client = new x402Client().register(NETWORK, new ExactCardanoClient(clientSigner));
+    const client = x402Client.fromConfig({
+      schemes: [{ network: NETWORK, client: new ExactCardanoClient(clientSigner) }],
+      spendControls: false,
+    });
     const facilitator = new x402Facilitator().register(
       NETWORK,
       new ExactCardanoFacilitator(facilitatorSigner),
