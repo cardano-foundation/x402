@@ -200,6 +200,16 @@ const CARDANO_MASUMI_CONFIRMATION_POLICY = { l1Confirmations: 0 };
 // well-known test phrase only keeps the e2e self-contained. It needs no funds.
 const CARDANO_TEST_SELLER_MNEMONIC = "test test test test test test test test test test test junk";
 
+type CardanoMasumiOfferState = {
+  seller: ReturnType<typeof toMasumiSellerSigner>;
+  offer?: Promise<PaymentRequirements>;
+  rotatedFor: WeakSet<object>;
+};
+
+// Keyed by network + path: the Next e2e server rebuilds route configs per
+// request, so the one-shot offer must outlive a single `buildResolvedRouteConfig`.
+const cardanoMasumiOffers = new Map<string, CardanoMasumiOfferState>();
+
 /**
  * Route `accepts` for a Cardano Masumi escrow route (catalog `schemeOptions.masumi`).
  *
@@ -214,10 +224,19 @@ function cardanoMasumiAccepts(route: ResolvedRoute): Record<string, unknown> {
     throw new Error(`Route ${route.path}: Masumi requires an amount/asset price`);
   }
   const { amount, asset } = route.price;
-  const seller = toMasumiSellerSigner({
-    mnemonic: process.env.SERVER_CARDANO_SELLER_MNEMONIC || CARDANO_TEST_SELLER_MNEMONIC,
-    network: route.network,
-  });
+  const key = `${route.network}|${route.path}`;
+  let state = cardanoMasumiOffers.get(key);
+  if (!state) {
+    state = {
+      seller: toMasumiSellerSigner({
+        mnemonic: process.env.SERVER_CARDANO_SELLER_MNEMONIC || CARDANO_TEST_SELLER_MNEMONIC,
+        network: route.network,
+      }),
+      rotatedFor: new WeakSet<object>(),
+    };
+    cardanoMasumiOffers.set(key, state);
+  }
+  const { seller } = state;
   const issue = (): Promise<PaymentRequirements> => {
     const payByMs = Date.now() + CARDANO_MASUMI_MAX_TIMEOUT_SECONDS * 1000;
     return issueMasumiRequirements({
@@ -246,16 +265,14 @@ function cardanoMasumiAccepts(route: ResolvedRoute): Record<string, unknown> {
     });
   };
 
-  let offer: Promise<PaymentRequirements> | undefined;
-  const rotatedFor = new WeakSet<object>();
   // payTo and price both resolve from the same request context; rotate once per
   // unpaid request regardless of which resolves first.
   const current = (context: HTTPRequestContext): Promise<PaymentRequirements> => {
-    if (!offer || (!context.paymentHeader && !rotatedFor.has(context))) {
-      rotatedFor.add(context);
-      offer = issue();
+    if (!state.offer || (!context.paymentHeader && !state.rotatedFor.has(context))) {
+      state.rotatedFor.add(context);
+      state.offer = issue();
     }
-    return offer;
+    return state.offer;
   };
 
   return {
