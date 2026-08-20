@@ -24,7 +24,7 @@ import { buildSignedTerms, computeTermsDigest } from "../../src/exact/masumi/dig
 import type { CardanoExtraMasumi } from "../../src/types";
 import { validateMasumiExtra } from "../../src/exact/masumi/schema";
 import { issueMasumiRequirements } from "../helpers/masumi";
-import type { PaymentPayload, PaymentRequired, PaymentRequirements } from "@x402/core/types";
+import type { PaymentRequirements } from "@x402/core/types";
 import { buildSignedTx } from "../helpers/buildSignedTx";
 import {
   freshPreprodAddress,
@@ -872,13 +872,17 @@ describe("ExactCardanoScheme server", () => {
     const { server, masumiStorage, requirements, payload } = await masumiFixture();
     await server.enrichPaymentRequiredResponse(enrichContext([requirements]) as never);
 
-    expect(await server.schemeHooks.onAfterVerify!(verifyContext(payload) as never)).toBeUndefined();
+    expect(
+      await server.schemeHooks.onAfterVerify!(verifyContext(payload) as never),
+    ).toBeUndefined();
     expect((await masumiStorage.get(termsDigestOf(requirements)))?.claimedTxHash).toBe(
       decodeCardanoTransaction(payload.payload.transaction as string).txHash,
     );
 
     // The same transaction may retry while settlement is still pending.
-    expect(await server.schemeHooks.onAfterVerify!(verifyContext(payload) as never)).toBeUndefined();
+    expect(
+      await server.schemeHooks.onAfterVerify!(verifyContext(payload) as never),
+    ).toBeUndefined();
   });
 
   it("rejects a paid retry quoting terms this server never issued", async () => {
@@ -924,7 +928,9 @@ describe("ExactCardanoScheme server", () => {
     });
     await server.enrichPaymentRequiredResponse(enrichContext([requirements]) as never);
 
-    expect(await server.schemeHooks.onAfterVerify!(verifyContext(payload) as never)).toBeUndefined();
+    expect(
+      await server.schemeHooks.onAfterVerify!(verifyContext(payload) as never),
+    ).toBeUndefined();
 
     const second = {
       ...payload,
@@ -962,10 +968,14 @@ describe("ExactCardanoScheme server", () => {
       payload: { transaction: built.transaction, nonce: built.nonce },
     };
 
-    expect(await server.schemeHooks.onAfterVerify!(verifyContext(payload) as never)).toBeUndefined();
+    expect(
+      await server.schemeHooks.onAfterVerify!(verifyContext(payload) as never),
+    ).toBeUndefined();
     // A second, different transaction for the same requirements is a facilitator
     // concern for these methods, not a resource-server one.
-    expect(await server.schemeHooks.onAfterVerify!(verifyContext(payload) as never)).toBeUndefined();
+    expect(
+      await server.schemeHooks.onAfterVerify!(verifyContext(payload) as never),
+    ).toBeUndefined();
   });
 
   it("needs no storage configuration to construct", () => {

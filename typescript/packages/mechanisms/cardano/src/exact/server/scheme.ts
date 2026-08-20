@@ -32,10 +32,7 @@ import type { CardanoExtraMasumi } from "../../types";
 import { decodeCardanoTransaction } from "../../utils";
 import { buildSignedTerms, computeTermsDigest } from "../masumi/digests";
 import { validateMasumiExtra } from "../masumi/schema";
-import {
-  InMemoryMasumiTermsStorage,
-  type MasumiTermsStorage,
-} from "../masumi/storage";
+import { InMemoryMasumiTermsStorage, type MasumiTermsStorage } from "../masumi/storage";
 
 /** Cardano resource-server configuration. */
 export interface ExactCardanoServerConfig {
@@ -61,7 +58,8 @@ function isMasumiExtra(extra: unknown): boolean {
   return (
     typeof extra === "object" &&
     extra !== null &&
-    (extra as { assetTransferMethod?: unknown }).assetTransferMethod === ASSET_TRANSFER_METHOD_MASUMI
+    (extra as { assetTransferMethod?: unknown }).assetTransferMethod ===
+      ASSET_TRANSFER_METHOD_MASUMI
   );
 }
 
@@ -141,76 +139,6 @@ export class ExactCardanoScheme implements SchemeNetworkServer {
         termsDigest,
         current => current ?? { termsDigest, requirements: issued },
       );
-    }
-  }
-
-  /**
-   * Binds a verified Masumi payment to the quote it was issued against.
-   *
-   * `default` and `script` payments return immediately: they carry no
-   * server-issued terms, so there is nothing to hand back to.
-   *
-   * @param context - Core after-verify hook context.
-   * @returns An abort directive when the quote is unknown, altered, or already
-   *   claimed by another transaction.
-   */
-  private async bindMasumiTerms(
-    context: Parameters<NonNullable<SchemeServerHooks["onAfterVerify"]>>[0],
-  ): Promise<void | { abort: true; reason: string; message: string }> {
-    if (!context.result.isValid) return;
-    const accepted = context.paymentPayload.accepted as PaymentRequirements | undefined;
-    if (!accepted || !isMasumiExtra(accepted.extra)) return;
-
-    let termsDigest: string;
-    let txHash: string;
-    try {
-      termsDigest = masumiTermsDigest(accepted);
-      const transaction = (context.paymentPayload.payload as { transaction?: unknown }).transaction;
-      if (typeof transaction !== "string") {
-        throw new Error("Cardano transaction is missing");
-      }
-      txHash = decodeCardanoTransaction(transaction).txHash;
-    } catch (cause) {
-      return {
-        abort: true,
-        reason: ERR_INVALID_PAYLOAD,
-        message: cause instanceof Error ? cause.message : String(cause),
-      };
-    }
-
-    // The claim decision happens inside the atomic callback; the returned record
-    // is then the authority for what this payment is allowed to do.
-    const { terms: stored } = await this.masumiStorage.updateTerms(termsDigest, current => {
-      if (!current) return current;
-      if (!deepEqual(accepted, current.requirements)) return current;
-      if (current.claimedTxHash === undefined) {
-        return { ...current, claimedTxHash: txHash };
-      }
-      return current;
-    });
-
-    if (!stored) {
-      return {
-        abort: true,
-        reason: ERR_MASUMI_TERMS_UNKNOWN,
-        message: "Masumi payment quotes terms this server did not issue",
-      };
-    }
-    if (!deepEqual(accepted, stored.requirements)) {
-      return {
-        abort: true,
-        reason: ERR_MASUMI_TERMS_MISMATCH,
-        message: "Masumi payment altered the issued payment requirements",
-      };
-    }
-    // An identical paid retry of the same transaction is the resume case the
-    // spec's pending-confirmation flow depends on, so it stays permitted.
-    if (stored.claimedTxHash !== txHash) {
-      return {
-        abort: true,
-        reason: ERR_DUPLICATE_SETTLEMENT,
-        message: "Masumi terms are already bound to a different Cardano transaction",
-      };
     }
   }
 
@@ -302,6 +230,76 @@ export class ExactCardanoScheme implements SchemeNetworkServer {
         ...(typeof areFeesSponsored === "boolean" && { areFeesSponsored }),
       },
     };
+  }
+
+  /**
+   * Binds a verified Masumi payment to the quote it was issued against.
+   *
+   * `default` and `script` payments return immediately: they carry no
+   * server-issued terms, so there is nothing to hand back to.
+   *
+   * @param context - Core after-verify hook context.
+   * @returns An abort directive when the quote is unknown, altered, or already
+   *   claimed by another transaction.
+   */
+  private async bindMasumiTerms(
+    context: Parameters<NonNullable<SchemeServerHooks["onAfterVerify"]>>[0],
+  ): Promise<void | { abort: true; reason: string; message: string }> {
+    if (!context.result.isValid) return;
+    const accepted = context.paymentPayload.accepted as PaymentRequirements | undefined;
+    if (!accepted || !isMasumiExtra(accepted.extra)) return;
+
+    let termsDigest: string;
+    let txHash: string;
+    try {
+      termsDigest = masumiTermsDigest(accepted);
+      const transaction = (context.paymentPayload.payload as { transaction?: unknown }).transaction;
+      if (typeof transaction !== "string") {
+        throw new Error("Cardano transaction is missing");
+      }
+      txHash = decodeCardanoTransaction(transaction).txHash;
+    } catch (cause) {
+      return {
+        abort: true,
+        reason: ERR_INVALID_PAYLOAD,
+        message: cause instanceof Error ? cause.message : String(cause),
+      };
+    }
+
+    // The claim decision happens inside the atomic callback; the returned record
+    // is then the authority for what this payment is allowed to do.
+    const { terms: stored } = await this.masumiStorage.updateTerms(termsDigest, current => {
+      if (!current) return current;
+      if (!deepEqual(accepted, current.requirements)) return current;
+      if (current.claimedTxHash === undefined) {
+        return { ...current, claimedTxHash: txHash };
+      }
+      return current;
+    });
+
+    if (!stored) {
+      return {
+        abort: true,
+        reason: ERR_MASUMI_TERMS_UNKNOWN,
+        message: "Masumi payment quotes terms this server did not issue",
+      };
+    }
+    if (!deepEqual(accepted, stored.requirements)) {
+      return {
+        abort: true,
+        reason: ERR_MASUMI_TERMS_MISMATCH,
+        message: "Masumi payment altered the issued payment requirements",
+      };
+    }
+    // An identical paid retry of the same transaction is the resume case the
+    // spec's pending-confirmation flow depends on, so it stays permitted.
+    if (stored.claimedTxHash !== txHash) {
+      return {
+        abort: true,
+        reason: ERR_DUPLICATE_SETTLEMENT,
+        message: "Masumi terms are already bound to a different Cardano transaction",
+      };
+    }
   }
 
   /**

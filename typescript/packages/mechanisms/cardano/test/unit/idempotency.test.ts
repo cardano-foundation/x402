@@ -1,10 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import { InMemoryCardanoSettlementStore } from "../../src/idempotency";
-import {
-  InMemoryMasumiTermsStorage,
-  type MasumiTerms,
-} from "../../src/exact/masumi/storage";
+import { InMemoryMasumiTermsStorage, type MasumiTerms } from "../../src/exact/masumi/storage";
 import type { PaymentRequirements } from "@x402/core/types";
 
 const requirements = (overrides: Partial<PaymentRequirements> = {}): PaymentRequirements =>

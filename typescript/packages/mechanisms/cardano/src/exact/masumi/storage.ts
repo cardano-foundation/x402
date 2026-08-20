@@ -109,7 +109,10 @@ export class InMemoryMasumiTermsStorage implements MasumiTermsStorage {
       }
       if (!next) {
         this.terms.delete(termsDigest);
-        return { terms: undefined, status: current ? ("deleted" as const) : ("unchanged" as const) };
+        return {
+          terms: undefined,
+          status: current ? ("deleted" as const) : ("unchanged" as const),
+        };
       }
 
       this.terms.set(termsDigest, next);

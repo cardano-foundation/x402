@@ -130,7 +130,6 @@ export class InMemoryCardanoSettlementStore implements CardanoSettlementStore {
   }
 }
 
-
 /**
  * Validates a positive safe integer setting.
  *
@@ -141,19 +140,5 @@ export class InMemoryCardanoSettlementStore implements CardanoSettlementStore {
 function positiveInteger(value: number, name: string): number {
   if (!Number.isSafeInteger(value) || value <= 0)
     throw new Error(`${name} must be a positive integer`);
-  return value;
-}
-
-/**
- * Validates a non-negative safe integer setting.
- *
- * @param value - Candidate value.
- * @param name - Setting name used in errors.
- * @returns Validated value.
- */
-function nonNegativeInteger(value: number, name: string): number {
-  if (!Number.isSafeInteger(value) || value < 0) {
-    throw new Error(`${name} must be a non-negative integer`);
-  }
   return value;
 }

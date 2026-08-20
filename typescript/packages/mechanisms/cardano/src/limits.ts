@@ -30,6 +30,5 @@ export const MAX_MASUMI_COSE_BYTES = 16 * 1024;
 /** Maximum entries in the pure deployment script-hash memoization cache. */
 export const MAX_MASUMI_SCRIPT_HASH_CACHE_ENTRIES = 256;
 
-
 /** Default deadline for reference-signer provider operations. */
 export const DEFAULT_CARDANO_PROVIDER_TIMEOUT_MS = 10_000;
