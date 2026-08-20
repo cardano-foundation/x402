@@ -13,6 +13,7 @@ import {
   POSITIVE_CANONICAL_AMOUNT_REGEX,
   SUBMISSION_POLICY_EITHER,
 } from "../../constants";
+import { findDefaultAsset } from "../../defaultAssets";
 import { resolveCardanoPolicies } from "../../policy";
 import type { ClientCardanoSigner } from "../../signer";
 import type { CardanoSubmissionMode, ExactCardanoPayload } from "../../types";
@@ -26,6 +27,7 @@ import type { CardanoSubmissionMode, ExactCardanoPayload } from "../../types";
  */
 export class ExactCardanoScheme implements SchemeNetworkClient {
   readonly scheme = SCHEME_EXACT;
+  readonly findDefaultAsset = findDefaultAsset;
 
   /**
    * Creates a new Cardano client scheme.

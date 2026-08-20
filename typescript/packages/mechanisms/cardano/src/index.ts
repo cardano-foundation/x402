@@ -31,6 +31,9 @@ export * from "./idempotency";
 // Constants
 export * from "./constants";
 
+// Default USD-pegged assets (money parsing, client spend controls)
+export * from "./defaultAssets";
+
 // Submission / confirmation policy helpers
 export * from "./policy";
 

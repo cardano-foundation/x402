@@ -223,27 +223,6 @@ export function isCardanoNetwork(network: string): boolean {
 }
 
 /**
- * Returns the default USDM asset unit for the requested network.
- *
- * Preview is intentionally not covered by an officially deployed USDM token at
- * the time of writing; callers must supply a custom asset for Preview
- * deployments.
- *
- * @param network - The Cardano network identifier.
- * @returns The default USDM asset unit string.
- */
-export function getDefaultUsdmAsset(network: string): string {
-  switch (normalizeCardanoNetwork(network)) {
-    case CARDANO_MAINNET_CAIP2:
-      return USDM_MAINNET_ASSET;
-    case CARDANO_PREPROD_CAIP2:
-      return USDM_PREPROD_ASSET;
-    default:
-      throw new Error(`No default USDM asset configured for network: ${network}`);
-  }
-}
-
-/**
  * Error codes produced by the Cardano facilitator. Mirrors SVM/Aptos style for
  * easy log filtering.
  */

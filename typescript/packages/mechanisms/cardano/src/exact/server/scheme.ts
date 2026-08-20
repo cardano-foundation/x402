@@ -3,6 +3,7 @@ import type {
   Money,
   MoneyParser,
   Network,
+  PaymentFlowConfig,
   PaymentRequirements,
   Price,
   SchemePaymentRequiredContext,
@@ -11,20 +12,20 @@ import type {
   SupportedKind,
 } from "@x402/core/types";
 import { sha256 } from "@noble/hashes/sha2.js";
-import { convertToTokenAmount, numberToDecimalString, parseMoneyString } from "@x402/core/utils";
+import { convertToTokenAmount, parseMoney } from "@x402/core/utils";
 import { randomBytes } from "node:crypto";
 import {
   ASSET_TRANSFER_METHOD_DEFAULT,
   ASSET_TRANSFER_METHOD_MASUMI,
+  ASSET_TRANSFER_METHOD_SCRIPT,
   CANONICAL_CARDANO_ASSET_REGEX,
   ERR_SETTLEMENT_DEFINITIVELY_REJECTED,
-  getDefaultUsdmAsset,
   isCardanoNetwork,
   POSITIVE_CANONICAL_AMOUNT_REGEX,
   SCHEME_EXACT,
   SUBMISSION_POLICY_EITHER,
-  USDM_DEFAULT_DECIMALS,
 } from "../../constants";
+import { findDefaultAsset, getDefaultAsset } from "../../defaultAssets";
 import {
   InMemoryCardanoOperationStore,
   type CardanoOperationStore,
@@ -219,6 +220,19 @@ function assertPlainJson(root: unknown, maxBytes: number): void {
  */
 export class ExactCardanoScheme implements SchemeNetworkServer {
   readonly scheme = SCHEME_EXACT;
+  readonly defaultAssetTransferMethod = ASSET_TRANSFER_METHOD_DEFAULT;
+  /**
+   * Every Cardano asset transfer method is a signed-but-unbroadcast (or
+   * client-broadcast, evidence-checked) transaction: verify is read-only and
+   * settle runs after the handler, i.e. the `authorization` flow. Who
+   * broadcasts (submission policy) and how much L1 evidence is required
+   * (confirmation policy) are orthogonal to flow ordering.
+   */
+  readonly paymentFlows = {
+    [ASSET_TRANSFER_METHOD_DEFAULT]: { supported: ["authorization"], default: "authorization" },
+    [ASSET_TRANSFER_METHOD_MASUMI]: { supported: ["authorization"], default: "authorization" },
+    [ASSET_TRANSFER_METHOD_SCRIPT]: { supported: ["authorization"], default: "authorization" },
+  } as const satisfies Record<string, PaymentFlowConfig>;
   readonly requireMatchingPayloadResource = true;
   readonly schemeHooks: SchemeServerHooks;
   private readonly moneyParsers: MoneyParser[] = [];
@@ -362,31 +376,30 @@ export class ExactCardanoScheme implements SchemeNetworkServer {
       );
     }
 
-    const decimal = this.parseMoneyToDecimal(price as Money);
+    const { amount, symbol } = parseMoney(price as Money);
     for (const parser of this.moneyParsers) {
-      const result = await parser(decimal, network);
+      const result = await parser(amount, network);
       if (result !== null) {
         return this.validateAssetAmount(result, "Custom money parser result");
       }
     }
     return this.validateAssetAmount(
-      this.defaultMoneyConversion(decimal, network),
+      this.defaultMoneyConversion(amount, network, symbol),
       "Default money conversion",
     );
   }
 
   /**
-   * Returns the decimal precision for the supplied asset. The default is six;
-   * integrators can subclass this scheme for another token precision.
+   * Returns the decimal precision for a known default asset (USDM). Other
+   * units, including `lovelace`, are unknown here so `$…` settlement
+   * overrides against them are rejected by core instead of mis-scaled.
    *
-   * @param _asset - The asset unit string.
-   * @param _network - The Cardano network identifier.
-   * @returns Decimal precision.
+   * @param asset - The asset unit string.
+   * @param network - The Cardano network identifier.
+   * @returns Decimal precision, or undefined when the asset is not a default.
    */
-  getAssetDecimals(_asset: string, _network: Network): number {
-    void _asset;
-    void _network;
-    return USDM_DEFAULT_DECIMALS;
+  getAssetDecimals(asset: string, network: Network): number | undefined {
+    return findDefaultAsset(asset, network)?.decimals;
   }
 
   /**
@@ -958,32 +971,17 @@ export class ExactCardanoScheme implements SchemeNetworkServer {
   }
 
   /**
-   * Parses a Money value (number, or a decimal string with optional `$`) into a
-   * decimal number via the shared core parser.
+   * Falls back to converting a Money decimal to atomic units of the network's
+   * default asset (or the ticker-selected one, e.g. `"1 USDM"`).
    *
-   * @param money - The Money value to parse.
-   * @returns The decimal value as a number.
-   */
-  private parseMoneyToDecimal(money: Money): number {
-    if (typeof money === "number") {
-      return money;
-    }
-    return parseMoneyString(money);
-  }
-
-  /**
-   * Falls back to converting a Money decimal to atomic units on the given
-   * network. Honors `getAssetDecimals()` so subclasses that override the
-   * hook for non-USDM tokens get correctly scaled atomic amounts.
-   *
-   * @param amount - The decimal amount.
+   * @param amount - The decimal amount string.
    * @param network - The Cardano network identifier.
+   * @param symbol - Optional ticker parsed from the Money string.
    * @returns The resulting AssetAmount.
    */
-  private defaultMoneyConversion(amount: number, network: Network): AssetAmount {
-    const asset = getDefaultUsdmAsset(network);
-    const decimals = this.getAssetDecimals(asset, network);
-    const tokenAmount = convertToTokenAmount(numberToDecimalString(amount), decimals);
-    return { amount: tokenAmount, asset, extra: {} };
+  private defaultMoneyConversion(amount: string, network: Network, symbol?: string): AssetAmount {
+    const assetInfo = getDefaultAsset(network, symbol);
+    const tokenAmount = convertToTokenAmount(amount, assetInfo.decimals);
+    return { amount: tokenAmount, asset: assetInfo.asset, extra: {} };
   }
 }

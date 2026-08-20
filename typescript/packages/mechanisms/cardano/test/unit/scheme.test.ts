@@ -1228,7 +1228,7 @@ describe("ExactCardanoScheme server", () => {
   it("rejects a Money value that rounds to zero atomic units", async () => {
     const server = new ExactCardanoServer();
     await expect(server.parsePrice("$0.0000001", CARDANO_MAINNET_CAIP2)).rejects.toThrow(
-      /too small to represent/,
+      /must be a positive canonical integer: 0/,
     );
   });
 
