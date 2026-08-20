@@ -1,0 +1,65 @@
+{
+  "env": {
+    "SERVER_CARDANO_ADDRESS": { "required": true, "roles": ["server"] },
+    "SERVER_CARDANO_SELLER_MNEMONIC": { "required": false, "roles": ["server"] },
+    "SERVER_CARDANO_ASSET": { "required": false, "roles": ["server"] },
+    "SERVER_CARDANO_AMOUNT": { "required": false, "roles": ["server"] },
+    "CLIENT_CARDANO_MNEMONIC": { "required": true, "roles": ["client"] },
+    "FACILITATOR_CARDANO_MNEMONIC": { "required": false, "roles": ["facilitator"] },
+    "BLOCKFROST_PROJECT_ID": { "required": true, "roles": ["client", "facilitator"] }
+  },
+  "testnet": {
+    "name": "Cardano Preprod",
+    "caip2": "cardano:preprod",
+    "rpcUrlDefault": "https://cardano-preprod.blockfrost.io/api/v0"
+  },
+  "mainnet": {
+    "name": "Cardano Mainnet",
+    "caip2": "cardano:mainnet",
+    "rpcUrlDefault": "https://cardano-mainnet.blockfrost.io/api/v0"
+  },
+  "routes": {
+    "/exact/cardano/default": {
+      "scheme": "exact",
+      "sdks": ["typescript"],
+      "price": {
+        "amount": "5000000",
+        "amountEnv": "SERVER_CARDANO_AMOUNT",
+        "asset": "lovelace",
+        "assetEnv": "SERVER_CARDANO_ASSET",
+        "extra": { "confirmationPolicy": { "l1Confirmations": 0 } }
+      },
+      "extensions": ["bazaar"]
+    },
+    "/exact/cardano/masumi": {
+      "scheme": "exact",
+      "sdks": ["typescript"],
+      "schemeOptions": { "masumi": true },
+      "price": {
+        "amount": "5000000",
+        "amountEnv": "SERVER_CARDANO_AMOUNT",
+        "asset": "lovelace",
+        "assetEnv": "SERVER_CARDANO_ASSET"
+      },
+      "extensions": ["bazaar"]
+    },
+    "/exact/cardano/script": {
+      "scheme": "exact",
+      "sdks": ["typescript"],
+      "payTo": "addr_test1wp8l7eylksmjas7ypzm0q35dwnjdxxvsfn0z0lflqzgs55stpd682",
+      "price": {
+        "amount": "5000000",
+        "amountEnv": "SERVER_CARDANO_AMOUNT",
+        "asset": "lovelace",
+        "assetEnv": "SERVER_CARDANO_ASSET",
+        "extra": {
+          "assetTransferMethod": "script",
+          "confirmationPolicy": { "l1Confirmations": 0 },
+          "script": { "type": "plutusV3", "code": "4d01000033222220051200120011" },
+          "datum": "d8799f182aff"
+        }
+      },
+      "extensions": ["bazaar"]
+    }
+  }
+}

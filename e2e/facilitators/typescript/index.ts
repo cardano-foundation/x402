@@ -98,7 +98,9 @@ import {
 } from "viem";
 import { privateKeyToAccount } from "viem/accounts";
 import { baseSepolia, base } from "viem/chains";
-import { resolveNetworkCaip2 } from "./catalog-network.js";
+import { catalogRpcUrlDefault, resolveNetworkCaip2 } from "./catalog-network.js";
+import { toFacilitatorCardanoSigner } from "@x402/cardano";
+import { ExactCardanoScheme as ExactCardanoFacilitatorScheme } from "@x402/cardano/exact/facilitator";
 import { BazaarCatalog } from "./bazaar.js";
 
 dotenv.config();
@@ -118,6 +120,9 @@ const NEAR_RPC_URL = process.env.NEAR_RPC_URL;
 const XRPL_NETWORK = resolveNetworkCaip2("xrpl");
 const XRPL_RPC_URL = process.env.XRPL_RPC_URL;
 const CCD_NETWORK = resolveNetworkCaip2("ccd");
+const CARDANO_NETWORK = resolveNetworkCaip2("cardano");
+const CARDANO_RPC_URL =
+  process.env.CARDANO_RPC_URL ?? catalogRpcUrlDefault("cardano", CARDANO_NETWORK);
 const CCD_RPC_URL =
   process.env.CCD_RPC_URL || getConcordiumGrpcUrl(CCD_NETWORK as Network);
 const EVM_RPC_URL = process.env.EVM_RPC_URL;
@@ -148,6 +153,7 @@ console.log(`🌐 Keeta Network: ${KEETA_NETWORK}`);
 console.log(`🌐 Stellar Network: ${STELLAR_NETWORK}`);
 console.log(`🌐 TVM Network: ${TVM_NETWORK}`);
 console.log(`🌐 CCD Network: ${CCD_NETWORK}`);
+console.log(`🌐 Cardano Network: ${CARDANO_NETWORK}`);
 console.log(`🌐 CCD gRPC URL: ${CCD_RPC_URL}`);
 if (EVM_RPC_URL) console.log(`🌐 EVM RPC URL: ${EVM_RPC_URL}`);
 if (SVM_RPC_URL) console.log(`🌐 SVM RPC URL: ${SVM_RPC_URL}`);
@@ -169,6 +175,7 @@ const hasFacilitatorCredential = [
   process.env.FACILITATOR_NEAR_ACCOUNT_ID && process.env.FACILITATOR_NEAR_PRIVATE_KEY,
   process.env.FACILITATOR_CCD_PRIVATE_KEY && process.env.FACILITATOR_CCD_ADDRESS,
   process.env.XRPL_NETWORK, // keyless XRPL facilitator
+  process.env.BLOCKFROST_PROJECT_ID, // Cardano runs provider-only without a mnemonic
 ].some(Boolean);
 
 if (!hasFacilitatorCredential) {
@@ -307,6 +314,26 @@ if (process.env.FACILITATOR_NEAR_ACCOUNT_ID && process.env.FACILITATOR_NEAR_PRIV
     rpcUrls: NEAR_RPC_URL ? { [NEAR_NETWORK]: NEAR_RPC_URL } : undefined,
   });
   console.info(`NEAR Facilitator relayer: ${process.env.FACILITATOR_NEAR_ACCOUNT_ID}`);
+}
+
+// Cardano only broadcasts the client's signed transaction, so the facilitator
+// runs provider-only unless FACILITATOR_CARDANO_MNEMONIC is set.
+let cardanoSigner: ReturnType<typeof toFacilitatorCardanoSigner> | undefined;
+if (process.env.BLOCKFROST_PROJECT_ID && CARDANO_RPC_URL) {
+  cardanoSigner = toFacilitatorCardanoSigner({
+    mnemonic: process.env.FACILITATOR_CARDANO_MNEMONIC,
+    network: CARDANO_NETWORK,
+    provider: {
+      blockfrost: { baseUrl: CARDANO_RPC_URL, projectId: process.env.BLOCKFROST_PROJECT_ID },
+    },
+    awaitConfirmation: true,
+    // The e2e facilitator trusts its own provider's ledger rules; a production
+    // facilitator must supply a real phase-1 validator to advertise server submission.
+    validatePhase1Transaction: async () => undefined,
+  });
+  console.info(
+    `Cardano Facilitator account: ${cardanoSigner.getAddresses()[0] ?? "(provider-only, no wallet)"}`,
+  );
 }
 
 let concordiumSigner: ReturnType<typeof toConcordiumFacilitatorSigner> | undefined;
@@ -606,6 +633,12 @@ if (concordiumSigner) {
   facilitator.register(
     CCD_NETWORK as Network,
     new ExactConcordiumScheme({ signer: concordiumSigner }),
+  );
+}
+if (cardanoSigner) {
+  facilitator.register(
+    CARDANO_NETWORK as Network,
+    new ExactCardanoFacilitatorScheme(cardanoSigner, { inMemorySettlementStoreMaxEntries: 4096 }),
   );
 }
 
@@ -935,6 +968,7 @@ app.get("/health", (req, res) => {
     nearNetwork: nearSigner ? NEAR_NETWORK : "(not configured)",
     xrplNetwork: process.env.XRPL_NETWORK ? XRPL_NETWORK : "(not configured)",
     ccdNetwork: concordiumSigner ? CCD_NETWORK : "(not configured)",
+    cardanoNetwork: cardanoSigner ? CARDANO_NETWORK : "(not configured)",
     facilitator: "typescript",
     version: "2.0.0",
     extensions: [BAZAAR.key],

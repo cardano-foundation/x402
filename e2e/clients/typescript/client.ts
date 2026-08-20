@@ -30,6 +30,8 @@ import { Wallet } from "xrpl";
 import { ExactAvmScheme as ExactAvmClientScheme } from "@x402/avm/exact/client";
 import { toClientAvmSigner } from "@x402/avm";
 import { ExactConcordiumScheme } from "@x402/concordium/exact/client";
+import { ExactCardanoScheme as ExactCardanoClientScheme } from "@x402/cardano/exact/client";
+import { toClientCardanoSigner } from "@x402/cardano";
 import { AccountAddress, buildBasicAccountSigner } from "@concordium/web-sdk";
 import * as KeetaNet from "@keetanetwork/keetanet-client";
 import { base58 } from "@scure/base";
@@ -37,7 +39,7 @@ import { createKeyPairSignerFromBytes } from "@solana/kit";
 import { keyPairFromSeed, type KeyPair } from "@ton/crypto";
 import { x402Client, type SchemeRegistration } from "@x402/core/client";
 import type { SettleResponse } from "@x402/core/types";
-import { networkCaip2Pattern, resolveNetworkCaip2 } from "./catalog-network.ts";
+import { catalogRpcUrlDefault, networkCaip2Pattern, resolveNetworkCaip2 } from "./catalog-network.ts";
 
 export type RequestResult = {
   success: boolean;
@@ -269,6 +271,24 @@ export async function createE2EClient(): Promise<E2EClientContext> {
     schemes.push({
       network: networkCaip2Pattern("near"),
       client: new ExactNearClientScheme(nearSigner),
+    });
+  }
+  if (process.env.CLIENT_CARDANO_MNEMONIC && process.env.BLOCKFROST_PROJECT_ID) {
+    const cardanoNetwork = resolveNetworkCaip2("cardano");
+    const cardanoSigner = toClientCardanoSigner({
+      mnemonic: process.env.CLIENT_CARDANO_MNEMONIC,
+      network: cardanoNetwork,
+      provider: {
+        blockfrost: {
+          baseUrl:
+            process.env.CARDANO_RPC_URL ?? catalogRpcUrlDefault("cardano", cardanoNetwork) ?? "",
+          projectId: process.env.BLOCKFROST_PROJECT_ID,
+        },
+      },
+    });
+    schemes.push({
+      network: networkCaip2Pattern("cardano"),
+      client: new ExactCardanoClientScheme(cardanoSigner),
     });
   }
   if (process.env.CLIENT_XRPL_SEED) {
