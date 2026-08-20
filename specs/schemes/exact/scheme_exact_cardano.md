@@ -198,7 +198,9 @@ The requirements contain one top-level `amount` and one `asset`. This method doe
 
 The requirements issuer MUST generate a fresh `sellerNonce` for every new requirements object. It MUST use a cryptographically secure random generator.
 
-It MUST store the complete requirements object and reuse it on the paid retry. It MUST NOT regenerate the nonce, deadlines, commitment, or policies. The resource server compares the stored requirements with the retry's `accepted` object before it calls a facilitator.
+It MUST store the complete requirements object, keyed by its `termsDigest`, and reuse it on the paid retry. It MUST NOT regenerate the nonce, deadlines, commitment, or policies. The first issuance for a digest is authoritative: a later response carrying the same terms MUST NOT replace it.
+
+Before it calls a facilitator, the resource server recomputes `termsDigest` from the retry's `accepted` object and compares that object with the stored requirements. A digest it never issued, or requirements that differ from the stored copy, MUST be rejected. It binds the **first** canonical transaction ID to claim a digest, atomically; the same transaction MAY retry, and a different transaction for that digest MUST be rejected.
 
 ```js
 {
@@ -942,7 +944,7 @@ If a valid transaction has not reached the required evidence level, the resource
 
 The server MAY include `Retry-After`. A paid retry MUST repeat the exact original `PAYMENT-SIGNATURE`. The client MUST NOT build another transaction. The server resumes observation of the same canonical transaction ID and MUST NOT submit it again. The protected operation MUST be idempotent if it can run before settlement reaches the required evidence.
 
-If the protected handler runs before final settlement, the resource server MUST store its result and return that result on an identical paid retry. For default and script, it keys the record by canonical Cardano transaction ID. For Masumi, it keys the record by `termsDigest` and binds that digest to the first canonical transaction ID. The record also binds the protected-request fingerprint. A mismatched transaction or fingerprint is a conflict and MUST NOT run the handler again.
+The protected handler runs once settlement reaches the required evidence, as in the other `exact` schemes. A resource server that chooses to run it earlier is responsible for making that operation idempotent across the paid retries described above.
 
 ## Transaction Fees
 
@@ -994,22 +996,6 @@ The claim SHOULD be released only after it is established that no submission occ
 
 This approach requires no external storage — only an in-process map with time-based eviction. It preserves the facilitator's otherwise stateless design while closing the duplicate settlement attack vector. Note that the cache is per-process: across multiple facilitator instances it does not deduplicate, but the on-chain nonce spend (Rule 5) remains the authoritative cross-instance replay guard.
 
-### Replay challenge
-
-A resource server MUST put an opaque challenge in every Cardano 402, bound to the request and to the requirements it quotes:
-
-```js
-"extensions": {
-  "cardanoReplayProtection": {
-    "challenges": { "<requirementsFingerprint>": "<32-byte lowercase hex>" }
-  }
-}
-```
-
-`requirementsFingerprint` is lowercase hex `SHA-256(UTF-8(RFC8785-JCS(entry)))` over the `accepts` entry it keys. The paid retry echoes the same object in `paymentPayload.extensions`. A challenge stays valid for at least `maxTimeoutSeconds`; the first canonical transaction that uses it consumes it and it then retries only that transaction.
-
-The server MUST require the echoed challenge when `payload.submissionMode` is `client`, or whenever it cannot bind the request to an authenticated requester. It MAY waive it for an authenticated requester in server mode. Request headers alone do not authenticate a requester.
-
 ### Implementation limits
 
 An implementation MAY bound what it will process — transaction size and input count, inline script and datum size, script parameter count, commitment part count and content size, admin-key count — and MUST reject beyond its budget rather than process it. These budgets are implementation policy, not ledger rules.
@@ -1020,7 +1006,7 @@ Transaction-level deduplication is **not sufficient** for `masumi`. A client can
 
 `masumi` therefore has a logical replay key in addition to the transaction ID: **`termsDigest`**, which by construction covers the price, asset, contract, request commitment, identity and deadlines of exactly one issued 402.
 
-- The requirements issuer SHOULD bind each `termsDigest` to the **first** durably claimed transaction ID, atomically. A retry carrying the same transaction is idempotent; a *different* transaction for the same digest is a conflict and MUST NOT start further work, even if it lands earlier in canonical ledger order.
+- The requirements issuer MUST bind each `termsDigest` to the **first** durably claimed transaction ID, atomically, in the same record that holds the issued requirements. A retry carrying the same transaction is idempotent; a *different* transaction for the same digest is a conflict and MUST NOT start further work, even if it lands earlier in canonical ledger order. This binding is a property of the payment, not of the HTTP request that carried it.
 - Once claimed, a `termsDigest` SHOULD stay bound to that transaction ID, including after rejection or expiry. A failed payment needs new requirements with a fresh `sellerNonce` — reusing the terms would reuse the signature.
 - The facilitator MAY cache `termsDigest` → transaction ID → outcome as an advisory check, retained through the signed validity window plus the confirmation and rollback grace period.
 - The verified `blockchainIdentifier` is a compatibility lookup key for the same record; it does not replace the `termsDigest` binding.

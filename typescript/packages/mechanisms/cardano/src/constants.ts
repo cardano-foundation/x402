@@ -267,6 +267,10 @@ export const ERR_SETTLEMENT_DEFINITIVELY_REJECTED =
 export const ERR_SETTLEMENT_NOT_CONFIRMED = "exact_cardano_settlement_not_confirmed";
 /** Error: duplicate settlement detected within the cache window. */
 export const ERR_DUPLICATE_SETTLEMENT = "duplicate_settlement";
+/** Error: a paid retry quotes Masumi terms this resource server never issued. */
+export const ERR_MASUMI_TERMS_UNKNOWN = "masumi_terms_unknown";
+/** Error: a paid retry altered the Masumi requirements it was issued. */
+export const ERR_MASUMI_TERMS_MISMATCH = "masumi_terms_mismatch";
 /** Error: the transaction is valid but has not yet reached the required evidence level. */
 export const ERR_PAYMENT_PENDING = "payment_pending";
 /** Error: the script assetTransferMethod was selected but reconstruction failed. */

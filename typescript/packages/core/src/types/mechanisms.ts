@@ -49,13 +49,11 @@ export type PaymentPayloadResult = Pick<PaymentPayload, "x402Version" | "payload
 
 /**
  * Context passed to scheme's createPaymentPayload for extensions awareness.
- * Contains the protected resource and server-declared extensions from
- * PaymentRequired so the scheme can validate resource-bound payment metadata.
+ * Contains the server-declared extensions from PaymentRequired so the scheme
+ * can check which extensions are advertised and respond accordingly.
  */
 export interface PaymentPayloadContext {
   extensions?: Record<string, unknown>;
-  /** Protected resource the payment is being created for. */
-  resource?: ResourceInfo;
 }
 
 export interface SchemeClientHooks {
@@ -206,8 +204,6 @@ export type SchemeEnrichSettlementResponseHook = (
 
 export interface SchemePaymentRequiredContext {
   requirements: PaymentRequirements[];
-  /** Requirement currently being enriched by the matched scheme implementation. */
-  requirement: PaymentRequirements;
   paymentPayload?: DeepReadonly<PaymentPayload>;
   resourceInfo: ResourceInfo;
   error?: string;
@@ -261,8 +257,6 @@ export interface SchemeNetworkServer {
   readonly paymentFlows: Readonly<Record<string, PaymentFlowConfig>>;
   readonly schemeHooks?: SchemeServerHooks;
   readonly dynamicExtraFields?: string[];
-  /** Require an optional client-carried resource to equal the current protected resource. */
-  readonly requireMatchingPayloadResource?: boolean;
   enrichPaymentRequiredResponse?: SchemeEnrichPaymentRequiredResponseHook;
   enrichSettlementPayload?: SchemeEnrichSettlementPayloadHook;
   enrichSettlementResponse?: SchemeEnrichSettlementResponseHook;

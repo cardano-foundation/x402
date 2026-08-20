@@ -160,12 +160,6 @@ export function handlePaymentError(response: HTTPResponseInstructions): NextResp
       headers,
     });
   }
-  if (response.isRaw) {
-    return new NextResponse(response.body as BodyInit, {
-      status: response.status,
-      headers,
-    });
-  }
   headers.set("Content-Type", "application/json");
   return new NextResponse(JSON.stringify(response.body || {}), {
     status: response.status,
@@ -230,7 +224,7 @@ export async function handleSettlement(
       paymentPayload,
       paymentRequirements,
       declaredExtensions,
-      { request: httpContext, responseBody, responseHeaders, responseStatus: response.status },
+      { request: httpContext, responseBody, responseHeaders },
       undefined,
       beforeHandlerSettlement,
     );

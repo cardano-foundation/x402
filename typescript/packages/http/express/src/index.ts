@@ -211,7 +211,7 @@ export function paymentMiddlewareFromHTTPServer(
         Object.entries(response.headers).forEach(([key, value]) => {
           res.setHeader(key, value);
         });
-        if (response.isHtml || response.isRaw) {
+        if (response.isHtml) {
           res.send(response.body);
         } else {
           res.json(response.body || {});
@@ -372,7 +372,7 @@ export function paymentMiddlewareFromHTTPServer(
             paymentPayload,
             paymentRequirements,
             declaredExtensions,
-            { request: context, responseBody, responseHeaders, responseStatus: res.statusCode },
+            { request: context, responseBody, responseHeaders },
             undefined,
             beforeHandlerSettlement,
           );

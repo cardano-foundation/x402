@@ -49,7 +49,8 @@ export class ExactCardanoScheme implements SchemeNetworkClient {
    *
    * @param x402Version - The x402 protocol version.
    * @param paymentRequirements - The payment requirements to fulfill.
-   * @param context - Payment-required context, including the protected resource.
+   * @param context - Payment-required context (unused; Masumi registry claims
+   *   are validated by the facilitator against `PaymentPayload.resource`).
    * @returns A promise resolving to the Cardano payment payload.
    */
   async createPaymentPayload(
@@ -57,6 +58,7 @@ export class ExactCardanoScheme implements SchemeNetworkClient {
     paymentRequirements: PaymentRequirements,
     context?: PaymentPayloadContext,
   ): Promise<PaymentPayloadResult> {
+    void context;
     if (!isCardanoNetwork(paymentRequirements.network)) {
       throw new Error(`Unsupported Cardano network: ${paymentRequirements.network}`);
     }
@@ -104,7 +106,6 @@ export class ExactCardanoScheme implements SchemeNetworkClient {
       maxTimeoutSeconds: paymentRequirements.maxTimeoutSeconds,
       extra: paymentRequirements.extra,
       submissionMode,
-      ...(context?.resource ? { resource: context.resource } : {}),
     });
 
     if (!result || typeof result.transaction !== "string" || result.transaction.length === 0) {

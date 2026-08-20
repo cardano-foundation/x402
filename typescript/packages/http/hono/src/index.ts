@@ -210,8 +210,6 @@ export function paymentMiddlewareFromHTTPServer(
         });
         if (response.isHtml) {
           return c.html(response.body as string, response.status as 402);
-        } else if (response.isRaw) {
-          return c.body(response.body as never, response.status as 200);
         } else {
           return c.json(response.body || {}, response.status as 402);
         }
@@ -293,7 +291,7 @@ export function paymentMiddlewareFromHTTPServer(
             paymentPayload,
             paymentRequirements,
             declaredExtensions,
-            { request: context, responseBody, responseHeaders, responseStatus: res.status },
+            { request: context, responseBody, responseHeaders },
             undefined,
             beforeHandlerSettlement,
           );

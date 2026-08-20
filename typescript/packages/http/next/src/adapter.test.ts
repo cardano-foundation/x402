@@ -151,18 +151,4 @@ describe("NextAdapter", () => {
       expect(await adapter.getBody()).toBeUndefined();
     });
   });
-
-  describe("getRawBody", () => {
-    it("returns exact bytes without consuming the request", async () => {
-      const req = new NextRequest("https://example.com/api", {
-        method: "POST",
-        body: '{ "data": "test" }',
-        headers: { "Content-Type": "application/json" },
-      });
-      const adapter = new NextAdapter(req);
-
-      expect(new TextDecoder().decode(await adapter.getRawBody())).toBe('{ "data": "test" }');
-      expect(await adapter.getBody()).toEqual({ data: "test" });
-    });
-  });
 });

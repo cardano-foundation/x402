@@ -95,15 +95,30 @@ Hydra settlement is **not implemented**: a `settlementLayer: "hydra"` payload is
 
 `settle()` is idempotent per canonical transaction ID, not one-shot. The spec requires a paid retry to repeat the exact original `PAYMENT-SIGNATURE` and the verifier to resume observing the same transaction, so a terminal "already settled" state would strand any payment that needs more confirmations than a single call can wait for. What this package guarantees is that a given transaction is **broadcast at most once** and always reports the same ledger truth.
 
-A definitive pre-ledger rejection is terminal for that issued payment. The facilitator retains both the transaction and Masumi `termsDigest` tombstones, and the resource server marks the protected operation for manual reconciliation. It does not accept corrected transaction bytes after the handler has run: doing so could bind one handler result to a different payment. Ambiguous transport or node failures remain non-releasable for the same reason.
+A definitive pre-ledger rejection is terminal for that issued payment: the facilitator retains both the transaction and Masumi `termsDigest` tombstones. It does not accept corrected transaction bytes afterwards, and ambiguous transport or node failures remain non-releasable for the same reason.
 
-Binding a settled payment to a **single protected operation** is the resource server's responsibility, which the spec assigns explicitly: key the record by canonical transaction ID for `default` and `script`. For `masumi` the binding is stronger and already enforced here — `termsDigest` covers exactly one issued 402, so a payment cannot be reused against a second one (each carries a fresh `sellerNonce`).
+Facilitators must supply an atomic durable `CardanoSettlementStore`. The process-local store is available through explicit configuration for tests and disposable development; it stops at its configured entry limit and must not be used in production.
 
-Replay state must survive restarts. Resource servers must supply an atomic durable `CardanoOperationStore`; facilitators must supply an atomic durable `CardanoSettlementStore`. The process-local stores are available only through explicit configuration for tests and disposable development. They stop at their configured entry limit and must not be used in production.
+## Masumi quote storage
 
-Each Cardano 402 includes an opaque `cardanoReplayProtection` challenge bound to the request fingerprint and the selected requirements. The normal x402 v2 paid retry echoes this top-level extension. The first canonical transaction that uses the challenge consumes it; the same challenge can then retry only that transaction. Anonymous server-submission retries therefore remain bound to their original 402.
+A Masumi 402 is a seller-signed offer: `termsDigest` covers exactly one issued quote (each carries a fresh `sellerNonce`), and the buyer's transaction locks against it. The resource-server scheme therefore persists every Masumi 402 it serves and holds the paid retry to that record:
 
-Client submission also requires a validated `requestBinding`. Its transaction is public before the paid request reaches the resource server, so an opaque HTTP challenge alone cannot stop a mempool observer from racing the request with another valid challenge. Run authentication before the x402 middleware and return the validated principal or tenant from `requestBinding`. Authorization, cookie and API-key headers remain part of the request fingerprint, but arbitrary non-empty header values do not prove authentication. Cached responses omit authentication and cookie headers. Production `CardanoOperationStore` implementations must persist challenge issuance and consumption atomically with operation claims.
+- `enrichPaymentRequiredResponse` stores the issued requirements under their `termsDigest`. The first 402 for a digest wins, so a later response cannot rotate what a buyer was quoted.
+- `onAfterVerify` recomputes the digest from `payload.accepted`, rejects a quote this server never issued (`masumi_terms_unknown`) or one whose requirements were altered (`masumi_terms_mismatch`), and binds the first transaction to claim it. A different transaction for the same terms is refused (`duplicate_settlement`); the same transaction may retry, which is what the spec's pending-confirmation flow needs.
+
+`default` and `script` payments never touch this store — they carry no server-issued terms, and binding a settled transaction to a single protected operation is the integrating server's concern, exactly as for the other exact schemes.
+
+```ts
+import { ExactCardanoScheme } from "@x402/cardano/exact/server";
+
+// Process-local store: fine for tests and single-process development.
+server.register("cardano:*", new ExactCardanoScheme());
+
+// Production: share one durable, atomically-updating store across workers.
+server.register("cardano:*", new ExactCardanoScheme({ masumiStorage: myRedisTermsStorage }));
+```
+
+`MasumiTermsStorage` mirrors the batch-settlement `ChannelStorage` contract: `updateTerms(termsDigest, current => next)` must apply the callback atomically for every instance sharing the backend. `InMemoryMasumiTermsStorage` only guarantees that inside one JS runtime, and evicts the oldest quote past `maxEntries`.
 
 ## Relationship to `masumi-payment-service`
 
