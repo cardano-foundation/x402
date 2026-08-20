@@ -45,7 +45,7 @@ After a server reports healthy, the harness requests every paid route it declare
 
 Four edits, no catalog type to touch:
 
-1. **Catalog** — add [`config/mechanisms_<id>.json`](config/) with `env` (per-key `{ required, roles }`), `testnet`/`mainnet` (RPC input keys are pure convention: `${ID}_TESTNET_RPC_URL` / `${ID}_MAINNET_RPC_URL`), and `routes`. Mark wallet credentials `required: true` so CI ([`scripts/ci-select-families.sh`](scripts/ci-select-families.sh)) and harness preflight pick up the family automatically.
+1. **Catalog** — add [`config/mechanisms_<id>.json`](config/) with `env` (per-key `{ required, roles }`), `testnet`/`mainnet` (RPC input keys are pure convention: `${ID}_TESTNET_RPC_URL` / `${ID}_MAINNET_RPC_URL`), and `routes`. Mark wallet credentials `required: true` so CI ([`scripts/ci-select-families.sh`](scripts/ci-select-families.sh)) and harness preflight pick up the family automatically. A route may also carry `price.extra` (static `extra` fields, including nested objects such as a script descriptor) and `payTo` (a fixed payee such as a script address, instead of the network's `SERVER_<ID>_ADDRESS`).
 2. **Server** — register the scheme in `servers/<lang>/` (e.g. [`servers/typescript/config.ts`](servers/typescript/config.ts) / [`servers/python/config.py`](servers/python/config.py) / [`servers/go/config.go`](servers/go/config.go)).
 3. **Client** — register the scheme in `clients/<lang>/` (e.g. [`clients/typescript/client.ts`](clients/typescript/client.ts) / [`clients/python/client.py`](clients/python/client.py) / [`clients/go/client.go`](clients/go/client.go)).
 4. **Facilitator** — register the scheme in [`facilitators/typescript`](facilitators/typescript) / [`facilitators/go`](facilitators/go) / [`facilitators/python`](facilitators/python).
@@ -68,6 +68,7 @@ These keep local `endpoints` overlays and/or special orchestration — not just 
 | Batch-settlement multi-phase | Catalog `routes` entries + orchestration in [`test.ts`](test.ts) + shared scheme registration |
 | Gas sponsoring / Permit2 coldstart | Route `schemeOptions.coldstart` + declared gas `extensions` + fund/revoke/drain in `test.ts` + facilitator extension registration |
 | Swig smart wallet | Overlay [`clients/typescript/http/svm-smart-wallet/test.config.json`](clients/typescript/http/svm-smart-wallet/test.config.json) + [`scripts/swig-setup.ts`](scripts/swig-setup.ts) |
+| Cardano one-shot Masumi offer | Catalog `routes."/exact/cardano/masumi".schemeOptions.masumi` + per-request issuance in [`servers/typescript/config.ts`](servers/typescript/config.ts). Cardano is excluded from MCP (`excludeNetworks` overlays on the MCP components): its replay protection binds a payment to a stable HTTP request adapter, which the MCP transport does not provide. |
 | Legacy (v1) | `legacy/` trees only — separate configs; do not extend the mechanisms catalog for v1 |
 
 If an SDK implements a route end-to-end (client + server + facilitator), list it in that route’s `sdks`. Omit only when the mechanism package is missing (e.g. Go has no TVM; Python/Go have no AVM/NEAR/XRPL; Python has no SVM upto).
