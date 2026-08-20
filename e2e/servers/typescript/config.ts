@@ -294,8 +294,13 @@ function cardanoMasumiAccepts(route: ResolvedRoute): Record<string, unknown> {
   // payTo and price both resolve from the same request context object, so the
   // first resolver decides the offer for that request: a paid retry gets the
   // offer it quoted (an unknown nonce gets a fresh one and fails to match),
-  // every unpaid request gets a fresh one.
-  const current = (context: HTTPRequestContext): Promise<PaymentRequirements> => {
+  // every unpaid request gets a fresh one. Surfaces that build requirements
+  // without a request context (e.g. MCP) cannot key the cache, so they issue
+  // one offer per call.
+  const current = (context: HTTPRequestContext | undefined): Promise<PaymentRequirements> => {
+    if (typeof context !== "object" || context === null) {
+      return issue().then(remember);
+    }
     let offer = byRequest.get(context);
     if (!offer) {
       const quoted = context.paymentHeader
@@ -311,8 +316,8 @@ function cardanoMasumiAccepts(route: ResolvedRoute): Record<string, unknown> {
     scheme: route.scheme,
     network: route.network as Caip2Network,
     maxTimeoutSeconds: CARDANO_MASUMI_MAX_TIMEOUT_SECONDS,
-    payTo: async (context: HTTPRequestContext) => (await current(context)).payTo,
-    price: async (context: HTTPRequestContext) => {
+    payTo: async (context?: HTTPRequestContext) => (await current(context)).payTo,
+    price: async (context?: HTTPRequestContext) => {
       const issued = await current(context);
       return { amount: issued.amount, asset: issued.asset, extra: issued.extra };
     },

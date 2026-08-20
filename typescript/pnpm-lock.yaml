@@ -6,10 +6,6 @@ settings:
 
 overrides:
   cssstyle: 5.3.6
-  '@effect/platform-node>ws': 8.21.0
-  '@effect/platform-node-shared>ws': 8.21.0
-  '@parcel/watcher>picomatch': 4.0.4
-  undici: 7.29.0
 
 packageExtensionsChecksum: sha256-9aEVigHYMKY79/D4KG0UAC0zjd2npsOZ16El58+Uvfk=
 

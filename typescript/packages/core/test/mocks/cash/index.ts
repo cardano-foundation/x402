@@ -52,7 +52,7 @@ export class CashSchemeNetworkClient implements SchemeNetworkClient {
       network: requirements.network,
       payload: {
         signature: `~${this.payer}`,
-        validUntil: (Date.now() + requirements.maxTimeoutSeconds * 1000).toString(),
+        validUntil: (Date.now() + requirements.maxTimeoutSeconds).toString(),
         name: this.payer,
       },
       accepted: requirements,
