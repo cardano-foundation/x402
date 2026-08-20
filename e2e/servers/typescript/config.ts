@@ -22,7 +22,7 @@ import {
   declareErc20ApprovalGasSponsoringExtension,
 } from "@x402/extensions";
 import { HTTPFacilitatorClient, type RoutesConfig, type x402ResourceServer } from "@x402/core/server";
-import type { HTTPRequestContext } from "@x402/core/http";
+import { decodePaymentSignatureHeader, type HTTPRequestContext } from "@x402/core/http";
 import type { PaymentRequirements } from "@x402/core/types";
 import { privateKeyToAccount } from "viem/accounts";
 import type { Caip2Network, ServerEnvConfig } from "../../src/server-env";
@@ -202,13 +202,28 @@ const CARDANO_TEST_SELLER_MNEMONIC = "test test test test test test test test te
 
 type CardanoMasumiOfferState = {
   seller: ReturnType<typeof toMasumiSellerSigner>;
-  offer?: Promise<PaymentRequirements>;
-  rotatedFor: WeakSet<object>;
+  /** Issued offers by `terms.sellerNonce`, oldest first; bounded by CARDANO_MASUMI_OFFER_CACHE. */
+  bySellerNonce: Map<string, PaymentRequirements>;
+  /** Offer resolved for a request, so payTo and price see the same one. */
+  byRequest: WeakMap<object, Promise<PaymentRequirements>>;
 };
 
 // Keyed by network + path: the Next e2e server rebuilds route configs per
-// request, so the one-shot offer must outlive a single `buildResolvedRouteConfig`.
+// request, so issued offers must outlive a single `buildResolvedRouteConfig`.
 const cardanoMasumiOffers = new Map<string, CardanoMasumiOfferState>();
+const CARDANO_MASUMI_OFFER_CACHE = 256;
+
+/** `terms.sellerNonce` of the offer a paid request was quoted, if decodable. */
+function quotedMasumiSellerNonce(paymentHeader: string): string | undefined {
+  try {
+    const terms = (decodePaymentSignatureHeader(paymentHeader).accepted.extra as
+      | { terms?: { sellerNonce?: unknown } }
+      | undefined)?.terms;
+    return typeof terms?.sellerNonce === "string" ? terms.sellerNonce : undefined;
+  } catch {
+    return undefined;
+  }
+}
 
 /**
  * Route `accepts` for a Cardano Masumi escrow route (catalog `schemeOptions.masumi`).
@@ -217,7 +232,8 @@ const cardanoMasumiOffers = new Map<string, CardanoMasumiOfferState>();
  * signature over `termsDigest`, so it must be issued rather than hand-written.
  * `termsDigest` binds to exactly one settled transaction, which makes an offer
  * one-shot: a fresh one is issued for every unpaid request, while a paid retry
- * sees the offer it was quoted (re-issuing would change `termsDigest`).
+ * resolves the offer its payload quotes by `terms.sellerNonce` (re-issuing
+ * would change `termsDigest`), so concurrent buyers never swap offers.
  */
 function cardanoMasumiAccepts(route: ResolvedRoute): Record<string, unknown> {
   if (typeof route.price === "string") {
@@ -232,11 +248,12 @@ function cardanoMasumiAccepts(route: ResolvedRoute): Record<string, unknown> {
         mnemonic: process.env.SERVER_CARDANO_SELLER_MNEMONIC || CARDANO_TEST_SELLER_MNEMONIC,
         network: route.network,
       }),
-      rotatedFor: new WeakSet<object>(),
+      bySellerNonce: new Map(),
+      byRequest: new WeakMap(),
     };
     cardanoMasumiOffers.set(key, state);
   }
-  const { seller } = state;
+  const { seller, bySellerNonce, byRequest } = state;
   const issue = (): Promise<PaymentRequirements> => {
     const payByMs = Date.now() + CARDANO_MASUMI_MAX_TIMEOUT_SECONDS * 1000;
     return issueMasumiRequirements({
@@ -265,14 +282,29 @@ function cardanoMasumiAccepts(route: ResolvedRoute): Record<string, unknown> {
     });
   };
 
-  // payTo and price both resolve from the same request context; rotate once per
-  // unpaid request regardless of which resolves first.
-  const current = (context: HTTPRequestContext): Promise<PaymentRequirements> => {
-    if (!state.offer || (!context.paymentHeader && !state.rotatedFor.has(context))) {
-      state.rotatedFor.add(context);
-      state.offer = issue();
+  const remember = (issued: PaymentRequirements): PaymentRequirements => {
+    const nonce = (issued.extra as { terms: { sellerNonce: string } }).terms.sellerNonce;
+    bySellerNonce.set(nonce, issued);
+    while (bySellerNonce.size > CARDANO_MASUMI_OFFER_CACHE) {
+      bySellerNonce.delete(bySellerNonce.keys().next().value as string);
     }
-    return state.offer;
+    return issued;
+  };
+
+  // payTo and price both resolve from the same request context object, so the
+  // first resolver decides the offer for that request: a paid retry gets the
+  // offer it quoted (an unknown nonce gets a fresh one and fails to match),
+  // every unpaid request gets a fresh one.
+  const current = (context: HTTPRequestContext): Promise<PaymentRequirements> => {
+    let offer = byRequest.get(context);
+    if (!offer) {
+      const quoted = context.paymentHeader
+        ? bySellerNonce.get(quotedMasumiSellerNonce(context.paymentHeader) ?? "")
+        : undefined;
+      offer = quoted ? Promise.resolve(quoted) : issue().then(remember);
+      byRequest.set(context, offer);
+    }
+    return offer;
   };
 
   return {
