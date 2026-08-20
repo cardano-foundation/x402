@@ -30,9 +30,9 @@ import {
 } from "@x402/concordium";
 import { x402Facilitator } from "@x402/core/facilitator";
 import {
-  Network,
   PaymentPayload,
   PaymentRequirements,
+  Network,
   SettleResponse,
   VerifyResponse,
 } from "@x402/core/types";
