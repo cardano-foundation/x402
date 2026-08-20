@@ -216,7 +216,8 @@ if (aptosAddress) {
   server.register(APTOS_NETWORK, new ExactAptosScheme());
 }
 if (cardanoAddress) {
-  server.register(CARDANO_NETWORK, new ExactCardanoScheme());
+  // Replay protection needs a store; in-memory is for examples and tests only.
+  server.register(CARDANO_NETWORK, new ExactCardanoScheme({ inMemoryStore: {} }));
 }
 if (ccdAddress) {
   server.register(CCD_NETWORK, new ExactConcordiumScheme());

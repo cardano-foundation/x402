@@ -26,6 +26,10 @@ These ids are valid CAIP-2 *syntax* over the `cardano` namespace, which is **not
 
 Clients and facilitators **SHOULD** accept the CIP-34 forms above as **input aliases** and normalize them to the canonical id before matching, settlement, and chain selection. A facilitator MUST treat a CIP-34 alias and its canonical id as the same network (e.g. an `accepted.network` of `cip34:1-764824073` matches a `requirements.network` of `cardano:mainnet`). The alias set is closed and fixed; no other forms are recognized.
 
+## Payment Flow
+
+Every `assetTransferMethod` of this scheme uses the `authorization` payment flow (verify → resource → settle) defined in [Payment Flow Models](../../x402-specification-v2.md) (section 6.1): the facilitator's `verify` is read-only and `settle` (broadcast or evidence check, then confirmation) runs after the resource handler. The submission policy (who broadcasts) and the confirmation policy (how much L1 evidence is required) are orthogonal to this ordering and never change it, so `extra.paymentFlow` is not emitted for this scheme.
+
 ## Protocol Flow
 
 ```mermaid

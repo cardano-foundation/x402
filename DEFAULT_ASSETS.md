@@ -101,7 +101,7 @@ Add an array entry under the CAIP-2 network key in the relevant mechanism packag
 ],
 ```
 
-Non-EVM families use the same `asset` / `decimals` / `symbol` core fields without EIP-712 metadata.
+Non-EVM families use the same `asset` / `decimals` / `symbol` core fields without EIP-712 metadata. On Cardano the `asset` is the native-token unit `policyId.assetNameHex` (USDM on `cardano:mainnet` / `cardano:preprod`; Preview has no default) and `lovelace` (ADA) is deliberately absent because it is not USD-pegged — price ADA routes with an explicit `AssetAmount` and let clients opt in via `spendControls.allowedAssets`.
 
 Also update Go/Python constants when those SDKs support the network (see cross-SDK checklist below).
 

@@ -6,7 +6,8 @@ This package implements the [`exact` scheme on Cardano](../../../../specs/scheme
 
 - A **client scheme** (`@x402/cardano/exact/client`) that delegates transaction signing to a user-supplied `ClientCardanoSigner`.
 - A **facilitator scheme** (`@x402/cardano/exact/facilitator`) that verifies and settles transactions per the spec's six verification rules.
-- A **server scheme** (`@x402/cardano/exact/server`) that parses prices, defaults to USDM, and enhances payment requirements.
+- A **server scheme** (`@x402/cardano/exact/server`) that parses prices (`"$0.10"` and `"0.10 USDM"` resolve to the network's USDM from `DEFAULT_ASSETS`), declares the `authorization` payment flow for every asset transfer method, and enhances payment requirements.
+- A **default-asset table** (`DEFAULT_ASSETS`, `getDefaultAsset`, `findDefaultAsset`) listing USDM on mainnet and preprod. The client scheme exposes `findDefaultAsset`, so `x402Client`'s default spend controls accept USDM under the `$1` cap; `lovelace` is not USD-pegged and needs `spendControls.allowedAssets` (or `spendControls: false`) on the client.
 
 ## Networks
 
