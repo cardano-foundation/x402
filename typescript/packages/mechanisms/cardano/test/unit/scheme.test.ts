@@ -1225,6 +1225,21 @@ describe("ExactCardanoScheme server", () => {
     );
   });
 
+  it("reports decimals only for default assets", () => {
+    const server = new ExactCardanoServer();
+    expect(server.getAssetDecimals(USDM_MAINNET_ASSET, CARDANO_MAINNET_CAIP2)).toBe(6);
+    expect(server.getAssetDecimals(LOVELACE_ASSET, CARDANO_MAINNET_CAIP2)).toBeUndefined();
+  });
+
+  it("resolves a ticker-suffixed Money string to USDM", async () => {
+    const server = new ExactCardanoServer();
+    const parsed = await server.parsePrice("0.25 USDM", CARDANO_MAINNET_CAIP2);
+    expect(parsed).toEqual({ amount: "250000", asset: USDM_MAINNET_ASSET, extra: {} });
+    await expect(server.parsePrice("0.25 USDC", CARDANO_MAINNET_CAIP2)).rejects.toThrow(
+      /No USDC default asset/,
+    );
+  });
+
   it("rejects a Money value that rounds to zero atomic units", async () => {
     const server = new ExactCardanoServer();
     await expect(server.parsePrice("$0.0000001", CARDANO_MAINNET_CAIP2)).rejects.toThrow(
