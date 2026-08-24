@@ -180,6 +180,8 @@ In client mode, the client broadcasts before the paid retry. The verifier MUST a
 
 An absent confirmation policy normalizes to `{ "l1Confirmations": 1 }`. Greater evidence satisfies a lower threshold. The response reports the strongest verified evidence, not only the minimum.
 
+"Authenticated" mempool acceptance means the facilitator has first-hand knowledge that a node took the transaction. When the facilitator broadcast it itself, the node's acceptance is that knowledge and it MAY settle a `-1` policy on it directly; it MUST NOT wait for block inclusion, which would settle at a stronger level than the resource server asked for and hold the response open for a full block. A facilitator that did not submit the transaction (client submission) has no such first-hand result and MUST authenticate evidence from the chain instead. Mempool acceptance can be rolled back, so a facilitator MAY refuse `-1` outright unless its operator opted in.
+
 For all methods, the policy is a top-level `extra.confirmationPolicy` bound by the selected requirements and exact `accepted` matching. It is not part of Masumi `termsDigest`. Hydra settlement is Masumi-only and uses verified `SnapshotConfirmed` evidence instead of the L1 count.
 
 #### Masumi assetTransferMethod Schema

@@ -1,8 +1,0 @@
-{
-  "name": "typescript/mcp",
-  "type": "client",
-  "language": "typescript",
-  "transport": "mcp",
-  "x402Versions": [2],
-  "excludeNetworks": ["cardano"]
-}

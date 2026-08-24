@@ -749,6 +749,32 @@ describe("ExactCardanoScheme facilitator", () => {
       expect(settle.extra).toMatchObject({ status: "pending", confirmations: 0 });
     });
 
+    it("settles a self-submitted -1 payment without polling for inclusion", async () => {
+      let evidenceCalls = 0;
+      const facilitator = new FakeOk(
+        stubFacilitator({
+          submitTransaction: async () => ({ txHash: canonicalTxHash, status: "mempool" }),
+          // Present but must not be consulted: providers cannot see the mempool,
+          // so polling would block until the transaction reaches a block.
+          getTransactionEvidence: async () => {
+            evidenceCalls++;
+            return { status: "unknown", confirmations: -2 };
+          },
+        }),
+        { acceptMempool: true },
+      );
+      const lenient = buildRequirements({
+        ...reqs,
+        extra: { confirmationPolicy: { l1Confirmations: -1 } },
+      });
+
+      const settle = await facilitator.settle({ ...payloadFor(), accepted: lenient }, lenient);
+
+      expect(settle.success).toBe(true);
+      expect(settle.extra?.status).toBe("mempool");
+      expect(evidenceCalls).toBe(0);
+    });
+
     it("rejects mempool-only settlements when acceptMempool is disabled (default)", async () => {
       const facilitator = new FakeOk(
         stubFacilitator({

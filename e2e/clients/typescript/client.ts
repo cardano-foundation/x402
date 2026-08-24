@@ -39,7 +39,7 @@ import { createKeyPairSignerFromBytes } from "@solana/kit";
 import { keyPairFromSeed, type KeyPair } from "@ton/crypto";
 import { x402Client, type SchemeRegistration } from "@x402/core/client";
 import type { SettleResponse } from "@x402/core/types";
-import { catalogRpcUrlDefault, networkCaip2Pattern, resolveNetworkCaip2 } from "./catalog-network.ts";
+import { networkCaip2Pattern, resolveNetworkCaip2 } from "./catalog-network.ts";
 
 export type RequestResult = {
   success: boolean;
@@ -273,15 +273,19 @@ export async function createE2EClient(): Promise<E2EClientContext> {
       client: new ExactNearClientScheme(nearSigner),
     });
   }
-  if (process.env.CLIENT_CARDANO_MNEMONIC && process.env.BLOCKFROST_PROJECT_ID) {
-    const cardanoNetwork = resolveNetworkCaip2("cardano");
+  // Blockfrost needs an explicit base URL, so CARDANO_RPC_URL is part of the
+  // credential gate rather than optional as it is for NEAR/XRPL.
+  if (
+    process.env.CLIENT_CARDANO_MNEMONIC &&
+    process.env.BLOCKFROST_PROJECT_ID &&
+    process.env.CARDANO_RPC_URL
+  ) {
     const cardanoSigner = toClientCardanoSigner({
       mnemonic: process.env.CLIENT_CARDANO_MNEMONIC,
-      network: cardanoNetwork,
+      network: resolveNetworkCaip2("cardano"),
       provider: {
         blockfrost: {
-          baseUrl:
-            process.env.CARDANO_RPC_URL ?? catalogRpcUrlDefault("cardano", cardanoNetwork) ?? "",
+          baseUrl: process.env.CARDANO_RPC_URL,
           projectId: process.env.BLOCKFROST_PROJECT_ID,
         },
       },

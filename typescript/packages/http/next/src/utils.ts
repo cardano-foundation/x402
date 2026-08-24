@@ -239,7 +239,7 @@ export async function handleSettlement(
       });
     }
 
-    // Settlement succeeded - add headers and return original response.
+    // Settlement succeeded - add headers and return the buffered body.
     Object.entries(result.headers).forEach(([key, value]) => {
       response.headers.set(key, value);
     });
@@ -251,7 +251,16 @@ export async function handleSettlement(
     // Strip internal settlement override header before sending to client.
     response.headers.delete(SETTLEMENT_OVERRIDES_HEADER);
 
-    return response;
+    // Reply with the bytes buffered above rather than `response` itself: its
+    // body is the unread branch of the `clone()`, and Node/undici can mark that
+    // branch consumed while settlement is awaited. The client would then get an
+    // empty body for a request it paid for. Chains whose settlement takes
+    // seconds rather than milliseconds hit this regularly.
+    return new NextResponse(responseBody.byteLength > 0 ? responseBody : null, {
+      status: response.status,
+      statusText: response.statusText,
+      headers: response.headers,
+    });
   } catch (error) {
     if (error instanceof FacilitatorResponseError) {
       return createFacilitatorErrorResponse(error);

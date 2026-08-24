@@ -98,7 +98,7 @@ import {
 } from "viem";
 import { privateKeyToAccount } from "viem/accounts";
 import { baseSepolia, base } from "viem/chains";
-import { catalogRpcUrlDefault, resolveNetworkCaip2 } from "./catalog-network.js";
+import { resolveNetworkCaip2 } from "./catalog-network.js";
 import { toFacilitatorCardanoSigner } from "@x402/cardano";
 import { ExactCardanoScheme as ExactCardanoFacilitatorScheme } from "@x402/cardano/exact/facilitator";
 import { BazaarCatalog } from "./bazaar.js";
@@ -121,8 +121,7 @@ const XRPL_NETWORK = resolveNetworkCaip2("xrpl");
 const XRPL_RPC_URL = process.env.XRPL_RPC_URL;
 const CCD_NETWORK = resolveNetworkCaip2("ccd");
 const CARDANO_NETWORK = resolveNetworkCaip2("cardano");
-const CARDANO_RPC_URL =
-  process.env.CARDANO_RPC_URL ?? catalogRpcUrlDefault("cardano", CARDANO_NETWORK);
+const CARDANO_RPC_URL = process.env.CARDANO_RPC_URL;
 const CCD_RPC_URL =
   process.env.CCD_RPC_URL || getConcordiumGrpcUrl(CCD_NETWORK as Network);
 const EVM_RPC_URL = process.env.EVM_RPC_URL;
@@ -326,7 +325,9 @@ if (process.env.BLOCKFROST_PROJECT_ID && CARDANO_RPC_URL) {
     provider: {
       blockfrost: { baseUrl: CARDANO_RPC_URL, projectId: process.env.BLOCKFROST_PROJECT_ID },
     },
-    awaitConfirmation: true,
+    // Return as soon as the node accepts the broadcast; the routes ask for
+    // mempool-level evidence (l1Confirmations: -1), which `acceptMempool` allows.
+    awaitConfirmation: false,
     // The e2e facilitator trusts its own provider's ledger rules; a production
     // facilitator must supply a real phase-1 validator to advertise server submission.
     validatePhase1Transaction: async () => undefined,
@@ -638,7 +639,10 @@ if (concordiumSigner) {
 if (cardanoSigner) {
   facilitator.register(
     CARDANO_NETWORK as Network,
-    new ExactCardanoFacilitatorScheme(cardanoSigner, { inMemorySettlementStoreMaxEntries: 4096 }),
+    new ExactCardanoFacilitatorScheme(cardanoSigner, {
+      inMemorySettlementStoreMaxEntries: 4096,
+      acceptMempool: true,
+    }),
   );
 }
 

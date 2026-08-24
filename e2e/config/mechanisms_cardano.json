@@ -27,7 +27,7 @@
         "amountEnv": "SERVER_CARDANO_AMOUNT",
         "asset": "lovelace",
         "assetEnv": "SERVER_CARDANO_ASSET",
-        "extra": { "confirmationPolicy": { "l1Confirmations": 0 } }
+        "extra": { "confirmationPolicy": { "l1Confirmations": -1 } }
       },
       "extensions": ["bazaar"]
     },
@@ -54,7 +54,7 @@
         "assetEnv": "SERVER_CARDANO_ASSET",
         "extra": {
           "assetTransferMethod": "script",
-          "confirmationPolicy": { "l1Confirmations": 0 },
+          "confirmationPolicy": { "l1Confirmations": -1 },
           "script": { "type": "plutusV3", "code": "4d01000033222220051200120011" },
           "datum": "d8799f182aff"
         }

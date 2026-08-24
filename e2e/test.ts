@@ -676,8 +676,10 @@ function envFlagDefaultTrue(value: string | undefined): boolean {
 /**
  * Waits until Blockfrost's address-UTXO index reflects a just-settled Cardano
  * transaction, so the next payment from the same wallet selects fresh UTXOs
- * instead of an already-spent input. Best-effort: returns after `timeoutMs`
- * even if not yet visible, so a Blockfrost hiccup never hard-fails the run.
+ * instead of an already-spent input. Settlement returns on the facilitator's
+ * broadcast acceptance, so this wait covers block inclusion (~20s) plus the
+ * index lag behind it. Best-effort: returns after `timeoutMs` even if not yet
+ * visible, so a Blockfrost hiccup never hard-fails the run.
  */
 async function waitForCardanoWalletSettled(opts: {
   addr: string;
@@ -688,7 +690,7 @@ async function waitForCardanoWalletSettled(opts: {
   timeoutMs?: number;
   intervalMs?: number;
 }): Promise<void> {
-  const { addr, txHash, url, projectId, log, timeoutMs = 60000, intervalMs = 3000 } = opts;
+  const { addr, txHash, url, projectId, log, timeoutMs = 120000, intervalMs = 3000 } = opts;
   const deadline = Date.now() + timeoutMs;
   log(`  ⏳ Waiting for Blockfrost to reflect settled tx ${txHash.slice(0, 12)}… on the wallet`);
   while (Date.now() < deadline) {

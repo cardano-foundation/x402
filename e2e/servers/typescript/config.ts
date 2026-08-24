@@ -198,9 +198,11 @@ function declareExtension(
 // How long a Cardano Masumi payment stays valid. The client anchors the tx TTL to
 // pay_by_time and the facilitator refuses a TTL further ahead than maxTimeoutSeconds.
 const CARDANO_MASUMI_MAX_TIMEOUT_SECONDS = 600;
-// Canonical block inclusion is the bar for the e2e: the spec default of 1 would
-// make every Cardano scenario wait an extra ~20s block for no added signal.
-const CARDANO_MASUMI_CONFIRMATION_POLICY = { l1Confirmations: 0 };
+// Settle on the facilitator's own broadcast acceptance (-1). Waiting for block
+// inclusion would hold the HTTP response open for a whole ~20s Cardano block;
+// the harness still waits for real inclusion between scenarios, so the payment
+// is on chain before the next one reuses the payer wallet.
+const CARDANO_MASUMI_CONFIRMATION_POLICY = { l1Confirmations: -1 };
 // The seller signs the Masumi terms with its selling wallet; the escrow pays that
 // address. A real deployment MUST set SERVER_CARDANO_SELLER_MNEMONIC — the
 // well-known test phrase only keeps the e2e self-contained. It needs no funds.
