@@ -328,30 +328,6 @@ describe("handleSettlement", () => {
     } as unknown as x402HTTPResourceServer;
   });
 
-  it("delivers the handler body even when the original response body is disturbed", async () => {
-    const response = NextResponse.json({ message: "protected" });
-    // Node/undici can mark the unread branch of a `clone()` consumed while
-    // settlement is awaited; a paid request would then receive an empty body.
-    (mockHttpServer.processSettlement as ReturnType<typeof vi.fn>).mockImplementation(async () => {
-      await response.text();
-      return { success: true, headers: { "PAYMENT-RESPONSE": "settled" } };
-    });
-
-    const result = await handleSettlement(
-      mockHttpServer,
-      response,
-      mockPaymentPayload,
-      mockRequirements,
-      mockDeclaredExtensions,
-      mockPaymentCancellationDispatcher,
-      mockHttpContext,
-    );
-
-    expect(result.status).toBe(200);
-    expect(result.headers.get("PAYMENT-RESPONSE")).toBe("settled");
-    await expect(result.json()).resolves.toEqual({ message: "protected" });
-  });
-
   it("returns original response when status >= 400 without settling", async () => {
     const response = new NextResponse("Error", { status: 500 });
 

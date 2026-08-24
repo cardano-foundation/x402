@@ -81,8 +81,6 @@ export type PriceSpec = {
   /** Add the Permit2 EIP-712 domain (`name`, `version`) to `extra`. */
   permit2Domain?: boolean;
   extraEnv?: Record<string, ExtraEnvSpec>;
-  /** Static `extra` fields (may be nested), e.g. a Cardano script descriptor. */
-  extra?: Record<string, unknown>;
 };
 
 /** One network's file contents (mechanisms_<id>.json). */
@@ -105,8 +103,6 @@ export type RouteDefinition = {
   assetTransferMethod?: AssetTransferMethod;
   /** SDKs that implement this route. */
   sdks: SdkId[];
-  /** Fixed payee when the route does not pay the server wallet (e.g. a script address). The network must still be configured via `SERVER_<ID>_ADDRESS`. */
-  payTo?: string;
   schemeOptions?: Record<string, boolean>;
   /** Every route declares its own price. */
   price: PriceSpec;
@@ -770,7 +766,7 @@ export function networkModeForCaip2(network: CatalogNetworkId, caip2: string): N
   return def.networks.mainnet.caip2 === caip2 ? 'mainnet' : 'testnet';
 }
 
-export type ResolvedPrice = string | { amount: string; asset: string; extra?: Record<string, unknown> };
+export type ResolvedPrice = string | { amount: string; asset: string; extra?: Record<string, string> };
 
 /** A catalog route with all env-dependent values resolved for one server process. */
 export type ResolvedRoute = {
@@ -782,8 +778,7 @@ export type ResolvedRoute = {
   payTo: string;
   price: ResolvedPrice;
   /** PaymentOption-level `extra`, used when `price` is a USD string. */
-  extra?: Record<string, unknown>;
-  schemeOptions?: Record<string, boolean>;
+  extra?: Record<string, string>;
   extensions: string[];
   settlementOverride?: { amount: string };
 };
@@ -797,16 +792,16 @@ function resolvePrice(
   route: SdkRoute,
   caip2: string,
   env: EnvLookup,
-): { price: ResolvedPrice; extra?: Record<string, unknown> } {
+): { price: ResolvedPrice; extra?: Record<string, string> } {
   const def = getNetworkDefinition(route.network);
   const spec = route.price;
 
   if (spec.usd) {
-    const extra: Record<string, unknown> = { ...spec.extra };
-    if (spec.declareAssetTransferMethod && route.assetTransferMethod) {
-      extra.assetTransferMethod = route.assetTransferMethod;
-    }
-    return { price: spec.usd, ...(Object.keys(extra).length > 0 ? { extra } : {}) };
+    const extra =
+      spec.declareAssetTransferMethod && route.assetTransferMethod
+        ? { assetTransferMethod: route.assetTransferMethod }
+        : undefined;
+    return { price: spec.usd, ...(extra ? { extra } : {}) };
   }
 
   const mode = networkModeForCaip2(route.network, caip2);
@@ -825,7 +820,7 @@ function resolvePrice(
   }
   const assetOverridden = Boolean(assetDefault) && asset !== assetDefault;
 
-  const extra: Record<string, unknown> = { ...spec.extra };
+  const extra: Record<string, string> = {};
   if (route.assetTransferMethod) {
     extra.assetTransferMethod = route.assetTransferMethod;
   }
@@ -860,9 +855,8 @@ export function resolvePaymentRoutes(
 
   for (const route of filterRoutes(sdkRoutesFor(sdk), filter)) {
     const def = getNetworkDefinition(route.network);
-    const serverAddress = env(serverAddressEnvKey(route.network));
-    if (!serverAddress) continue;
-    const payTo = route.payTo ?? serverAddress;
+    const payTo = env(serverAddressEnvKey(route.network));
+    if (!payTo) continue;
 
     const caip2 = env(derivedNetworkKey(route.network)) ?? def.networks.testnet.caip2;
     const { price, extra } = resolvePrice(route, caip2, env);
@@ -875,7 +869,6 @@ export function resolvePaymentRoutes(
       payTo,
       price,
       ...(extra ? { extra } : {}),
-      ...(route.schemeOptions ? { schemeOptions: route.schemeOptions } : {}),
       extensions: route.extensions ?? [],
       ...(route.settlementOverride ? { settlementOverride: route.settlementOverride } : {}),
     });

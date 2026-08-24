@@ -316,17 +316,6 @@ export function paymentMiddlewareFromHTTPServer(
               withPrivateCacheControl(res.headers.get("Cache-Control")),
             );
             res.headers.delete(SETTLEMENT_OVERRIDES_HEADER);
-            // Reply with the bytes buffered above rather than `res` itself: its
-            // body is the unread branch of the `clone()`, and Node/undici can
-            // mark that branch consumed while settlement is awaited. The client
-            // would then get an empty body for a request it paid for. Chains
-            // whose settlement takes seconds rather than milliseconds hit this
-            // regularly.
-            res = new Response(responseBody.byteLength > 0 ? responseBody : null, {
-              status: res.status,
-              statusText: res.statusText,
-              headers: res.headers,
-            });
           }
         } catch (error) {
           if (error instanceof FacilitatorResponseError) {

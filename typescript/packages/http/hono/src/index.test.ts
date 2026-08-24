@@ -364,44 +364,6 @@ describe("paymentMiddleware", () => {
     expect(context.header).toHaveBeenCalledWith("X-Custom-Header", "custom-value");
   });
 
-  it("delivers the handler body even when the original response body is disturbed", async () => {
-    const handlerResponse = new Response(JSON.stringify({ message: "protected" }), {
-      status: 200,
-      headers: { "content-type": "application/json" },
-    });
-    // Node/undici can mark the unread branch of a `clone()` consumed while
-    // settlement is awaited; a paid request would then receive an empty body.
-    setupMockHttpServer(
-      {
-        type: "payment-verified",
-        paymentPayload: mockPaymentPayload,
-        paymentRequirements: mockPaymentRequirements,
-      },
-      { success: true, headers: { "PAYMENT-RESPONSE": "settled" } },
-    );
-    mockProcessSettlement.mockImplementation(async () => {
-      await handlerResponse.text();
-      return { success: true, headers: { "PAYMENT-RESPONSE": "settled" } };
-    });
-
-    const middleware = paymentMiddleware(
-      mockRoutes,
-      {} as unknown as x402ResourceServer,
-      undefined,
-      undefined,
-      false,
-    );
-    const context = createMockContext();
-    const next = vi.fn().mockImplementation(async () => {
-      context.res = handlerResponse;
-    });
-
-    await middleware(context, next);
-
-    expect(context.res.headers.get("PAYMENT-RESPONSE")).toBe("settled");
-    await expect(context.res.json()).resolves.toEqual({ message: "protected" });
-  });
-
   it("settles and returns response for payment-verified with successful handler", async () => {
     setupMockHttpServer(
       {
