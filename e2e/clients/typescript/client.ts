@@ -354,6 +354,43 @@ export type ClientScenarioDeps = {
 };
 
 /**
+ * Waits until Blockfrost's address-UTXO index reflects a just-settled Cardano
+ * payment before this client exits, so the next scenario's client does not
+ * reselect the input this one spent. Settlement returns on the facilitator's
+ * broadcast acceptance, so this covers block inclusion (~20s) plus the index
+ * lag behind it. Best-effort and Cardano-only: any other network, a missing
+ * Blockfrost config, or a timeout simply returns.
+ *
+ * @param result - The completed request result, carrying the settlement receipt.
+ */
+async function awaitCardanoWalletSettled(result: RequestResult): Promise<void> {
+  const receipt = result.payment_response as
+    | { network?: string; transaction?: string; payer?: string }
+    | undefined;
+  if (!receipt?.network?.startsWith("cardano:")) return;
+  const { transaction, payer } = receipt;
+  const projectId = process.env.BLOCKFROST_PROJECT_ID;
+  const baseUrl = process.env.CARDANO_RPC_URL;
+  if (!transaction || !payer || !projectId || !baseUrl) return;
+
+  const deadline = Date.now() + 120_000;
+  while (Date.now() < deadline) {
+    try {
+      const response = await fetch(`${baseUrl}/addresses/${payer}/utxos`, {
+        headers: { project_id: projectId },
+      });
+      if (response.ok) {
+        const utxos = (await response.json()) as Array<{ tx_hash?: string }>;
+        if (Array.isArray(utxos) && utxos.some(utxo => utxo.tx_hash === transaction)) return;
+      }
+    } catch {
+      // Transient Blockfrost/network error — keep polling until the deadline.
+    }
+    await new Promise(resolve => setTimeout(resolve, 3000));
+  }
+}
+
+/**
  * Runs the standard single-request or batch-settlement client scenario and prints JSON.
  */
 export async function runClientScenario(deps: ClientScenarioDeps): Promise<void> {
@@ -362,6 +399,7 @@ export async function runClientScenario(deps: ClientScenarioDeps): Promise<void>
 
   if (!batchSettlementPhase) {
     const result = await issueRequest();
+    await awaitCardanoWalletSettled(result);
     console.log(JSON.stringify(result));
     process.exit(0);
   }

@@ -208,6 +208,33 @@ const CARDANO_MASUMI_CONFIRMATION_POLICY = { l1Confirmations: -1 };
 // well-known test phrase only keeps the e2e self-contained. It needs no funds.
 const CARDANO_TEST_SELLER_MNEMONIC = "test test test test test test test test test test test junk";
 
+/** Catalog paths of the Cardano routes, one per `assetTransferMethod`. */
+const CARDANO_DEFAULT_ROUTE = "/exact/cardano/default";
+const CARDANO_MASUMI_ROUTE = "/exact/cardano/masumi";
+const CARDANO_SCRIPT_ROUTE = "/exact/cardano/script";
+/**
+ * Always-succeeds Plutus V3 validator and the enterprise script address it
+ * hashes to (see the cardano package's scriptAddress tests for the derivation).
+ */
+const CARDANO_SCRIPT_CODE = "4d01000033222220051200120011";
+const CARDANO_SCRIPT_ADDRESS = "addr_test1wp8l7eylksmjas7ypzm0q35dwnjdxxvsfn0z0lflqzgs55stpd682";
+/**
+ * Scheme-specific `extra` per Cardano route. These are Cardano payload
+ * semantics rather than catalog data, so they live with the scheme
+ * registration instead of widening the shared mechanisms catalog.
+ */
+const CARDANO_ROUTE_EXTRA: Record<string, Record<string, unknown>> = {
+  [CARDANO_DEFAULT_ROUTE]: { confirmationPolicy: CARDANO_MASUMI_CONFIRMATION_POLICY },
+  [CARDANO_SCRIPT_ROUTE]: {
+    assetTransferMethod: "script",
+    confirmationPolicy: CARDANO_MASUMI_CONFIRMATION_POLICY,
+    script: { type: "plutusV3", code: CARDANO_SCRIPT_CODE },
+    // Optional inline datum (CBOR hex) attached to the payTo output; the
+    // always-succeeds validator ignores it. `d8799f182aff` = Constr 0 [42].
+    datum: "d8799f182aff",
+  },
+};
+
 /**
  * Quote store shared by the Cardano scheme and the Masumi route below.
  *
@@ -247,7 +274,7 @@ async function quotedMasumiOffer(paymentHeader: string): Promise<PaymentRequirem
 }
 
 /**
- * Route `accepts` for a Cardano Masumi escrow route (catalog `schemeOptions.masumi`).
+ * Route `accepts` for the Cardano Masumi escrow route.
  *
  * A spec-conformant Masumi 402 carries a request commitment and a seller
  * signature over `termsDigest`, so it must be issued rather than hand-written,
@@ -326,15 +353,21 @@ export function buildResolvedRouteConfig(
 ): Record<string, unknown> {
   const extensions = Object.assign({}, ...route.extensions.map(id => declareExtension(id, route, transport)));
 
-  const accepts = route.schemeOptions?.masumi
-    ? cardanoMasumiAccepts(route)
-    : {
-        payTo: route.payTo,
-        scheme: route.scheme,
-        network: route.network as Caip2Network,
-        price: route.price,
-        ...(route.extra ? { extra: route.extra } : {}),
-      };
+  const cardanoExtra = CARDANO_ROUTE_EXTRA[route.path];
+  const accepts =
+    route.path === CARDANO_MASUMI_ROUTE
+      ? cardanoMasumiAccepts(route)
+      : {
+          // The script method pays the script address the facilitator
+          // reconstructs from the descriptor below, not the server wallet.
+          payTo: route.path === CARDANO_SCRIPT_ROUTE ? CARDANO_SCRIPT_ADDRESS : route.payTo,
+          scheme: route.scheme,
+          network: route.network as Caip2Network,
+          price: route.price,
+          ...(route.extra || cardanoExtra
+            ? { extra: { ...route.extra, ...cardanoExtra } }
+            : {}),
+        };
 
   return {
     accepts,
