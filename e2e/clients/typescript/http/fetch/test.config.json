@@ -1,8 +1,8 @@
 {
-  "name": "typescript/mcp",
+  "name": "typescript/http/fetch",
   "type": "client",
   "language": "typescript",
-  "transport": "mcp",
-  "x402Versions": [2],
+  "transport": "http",
+  "x402Versions": [1, 2],
   "excludeNetworks": ["cardano"]
 }

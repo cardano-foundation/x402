@@ -477,12 +477,7 @@ export function paymentMiddlewareFromHTTPServer(
         x402Context.paymentPayload,
         x402Context.paymentRequirements,
         x402Context.declaredExtensions,
-        {
-          request: x402Context.requestContext,
-          responseBody,
-          responseHeaders,
-          responseStatus: reply.statusCode,
-        },
+        { request: x402Context.requestContext, responseBody, responseHeaders },
         undefined,
         x402Context.beforeHandlerSettlement,
       );

@@ -673,44 +673,6 @@ function envFlagDefaultTrue(value: string | undefined): boolean {
   return !['0', 'false', 'no', 'off'].includes(value.toLowerCase());
 }
 
-/**
- * Waits until Blockfrost's address-UTXO index reflects a just-settled Cardano
- * transaction, so the next payment from the same wallet selects fresh UTXOs
- * instead of an already-spent input. Best-effort: returns after `timeoutMs`
- * even if not yet visible, so a Blockfrost hiccup never hard-fails the run.
- */
-async function waitForCardanoWalletSettled(opts: {
-  addr: string;
-  txHash: string;
-  url: string;
-  projectId: string;
-  log: (message: string) => void;
-  timeoutMs?: number;
-  intervalMs?: number;
-}): Promise<void> {
-  const { addr, txHash, url, projectId, log, timeoutMs = 60000, intervalMs = 3000 } = opts;
-  const deadline = Date.now() + timeoutMs;
-  log(`  ⏳ Waiting for Blockfrost to reflect settled tx ${txHash.slice(0, 12)}… on the wallet`);
-  while (Date.now() < deadline) {
-    try {
-      const res = await fetch(`${url}/addresses/${addr}/utxos`, {
-        headers: { project_id: projectId },
-      });
-      if (res.ok) {
-        const utxos = (await res.json()) as Array<{ tx_hash?: string }>;
-        if (Array.isArray(utxos) && utxos.some(u => u.tx_hash === txHash)) {
-          log(`  ✅ Wallet reflects settled tx ${txHash.slice(0, 12)}…; proceeding`);
-          return;
-        }
-      }
-    } catch {
-      // Transient Blockfrost/network error — keep polling until the deadline.
-    }
-    await new Promise(resolve => setTimeout(resolve, intervalMs));
-  }
-  log(`  ⚠️ Timed out waiting for Blockfrost to reflect ${txHash.slice(0, 12)}…; proceeding`);
-}
-
 function waitForChildProcess(child: ChildProcess, timeoutMs: number): Promise<boolean> {
   if (child.exitCode !== null || child.signalCode !== null) {
     return Promise.resolve(true);
@@ -1102,7 +1064,6 @@ async function runTest() {
     passed: boolean;
     error?: string;
     transaction?: string;
-    payer?: string;
     depositTransaction?: string;
     refundTransaction?: string;
     network?: string;
@@ -1428,7 +1389,6 @@ async function runTest() {
         passed: result.success,
         error: result.error,
         transaction: result.payment_response?.transaction,
-        payer: result.payment_response?.payer,
         network: result.payment_response?.network,
       };
 
@@ -1538,7 +1498,6 @@ async function runTest() {
         const tn = nextTestNumber();
         const isEvm = scenario.protocolFamily === 'evm';
         const isAvm = scenario.protocolFamily === 'avm';
-        const isCardano = scenario.protocolFamily === 'cardano';
         const resourceKeys = getScenarioResourceKeys(scenario, evmResourceKeyContext);
 
         const runScenario = async (): Promise<DetailedTestResult> => {
@@ -1626,24 +1585,6 @@ async function runTest() {
             // sends from the same account (fundClientForRevoke). Without this,
             // the two can collide on the same nonce on load-balanced RPCs.
             await new Promise(resolve => setTimeout(resolve, 1500));
-          } else if (isCardano) {
-            // All Cardano tests pay from the same client wallet. The settlement is
-            // confirmed on-chain (the facilitator awaits inclusion), but Blockfrost's
-            // address-UTXO index lags the block, so wait until it reflects this
-            // settlement before the next payment reselects the just-spent input.
-            const projectId = process.env.BLOCKFROST_PROJECT_ID;
-            if (result.transaction && result.payer && projectId) {
-              await waitForCardanoWalletSettled({
-                addr: result.payer,
-                txHash: result.transaction,
-                url: networks.cardano.rpcUrl,
-                projectId,
-                log: message => cLog.verboseLog(message),
-              });
-            } else {
-              // No settled tx to wait on (e.g. the test failed) — short fallback pause.
-              await new Promise(resolve => setTimeout(resolve, 20000));
-            }
           }
 
           return result;

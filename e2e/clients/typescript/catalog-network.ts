@@ -31,16 +31,6 @@ export function catalogTestnetCaip2(networkId: string): string {
   return data.testnet.caip2;
 }
 
-/** Catalog `rpcUrlDefault` for the mode whose CAIP-2 matches, else undefined. */
-export function catalogRpcUrlDefault(networkId: string, caip2: string): string | undefined {
-  const path = join(catalogDir(), `mechanisms_${networkId}.json`);
-  const data = JSON.parse(readFileSync(path, "utf-8")) as {
-    testnet: { caip2: string; rpcUrlDefault?: string };
-    mainnet: { caip2: string; rpcUrlDefault?: string };
-  };
-  return [data.testnet, data.mainnet].find(mode => mode.caip2 === caip2)?.rpcUrlDefault;
-}
-
 /** Prefer `${ID}_NETWORK`, else catalog testnet CAIP-2. */
 export function resolveNetworkCaip2(networkId: string): string {
   const fromEnv = process.env[`${networkId.toUpperCase()}_NETWORK`];

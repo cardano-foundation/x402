@@ -501,7 +501,19 @@ export class ExactCardanoScheme implements SchemeNetworkFacilitator {
     // submitting it again.
 
     let evidence: CardanoSettlementEvidence;
-    if (this.canAuthenticateEvidence() || submissionStatus === undefined) {
+    if (submissionStatus !== undefined && this.acceptMempool && required === MIN_L1_CONFIRMATIONS) {
+      // The 402 asked for mempool-level evidence, the operator opted into
+      // accepting it, and this facilitator broadcast the transaction itself —
+      // the node's acceptance is exactly the evidence that policy describes.
+      // Polling instead would wait for block inclusion, because providers like
+      // Blockfrost cannot read the mempool at all and report an in-flight
+      // transaction as `unknown`; that holds the response open for a whole
+      // block and settles at a stronger level than the server asked for.
+      evidence = {
+        status: submissionStatus,
+        confirmations: submissionStatus === "confirmed" ? 0 : MIN_L1_CONFIRMATIONS,
+      };
+    } else if (this.canAuthenticateEvidence() || submissionStatus === undefined) {
       evidence = await this.awaitEvidence(decoded.txHash, requirements.network, required);
       // A transaction the node accepted may simply not be observable yet — most
       // providers expose no mempool read. That is the pending-confirmation case,

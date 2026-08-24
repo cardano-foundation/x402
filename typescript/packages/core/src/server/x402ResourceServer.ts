@@ -114,20 +114,12 @@ export interface VerifyResultContext extends VerifyContext {
  * (e.g. cooperative refund). Travels in-process only — never on the facilitator wire.
  */
 export interface SkipHandlerDirective {
-  /** Original successful handler status, when replaying a stored result. */
-  status?: number;
   contentType?: string;
   body?: unknown;
-  /** Additional original handler headers safe to replay. */
-  headers?: Record<string, string>;
-  /** Send `body` as bytes/text instead of JSON encoding it. */
-  isRaw?: boolean;
 }
 
 export type ResourceVerifyRespone = VerifyResponse & {
   skipHandler?: SkipHandlerDirective;
-  /** Optional transport status selected by a local after-verify guard. */
-  httpStatus?: number;
 };
 
 export interface VerifyFailureContext extends VerifyContext {
@@ -196,7 +188,7 @@ export type AfterVerifyHook = (
 ) => Promise<
   | void
   | { skipHandler: true; response?: SkipHandlerDirective }
-  | { abort: true; reason: string; message?: string; status?: number }
+  | { abort: true; reason: string; message?: string }
 >;
 
 export type OnVerifyFailureHook = (
@@ -423,19 +415,6 @@ export class x402ResourceServer {
    */
   getRegisteredScheme(network: Network, scheme: string): SchemeNetworkServer | undefined {
     return findByNetworkAndScheme(this.registeredServerSchemes, scheme, network);
-  }
-
-  /**
-   * Whether the matched scheme binds a client-carried resource to this request.
-   *
-   * @param requirements - Matched payment requirements.
-   * @returns True when the registered scheme requires exact resource matching.
-   */
-  requiresMatchingPayloadResource(requirements: PaymentRequirements): boolean {
-    return (
-      this.getRegisteredScheme(requirements.network as Network, requirements.scheme)
-        ?.requireMatchingPayloadResource === true
-    );
   }
 
   /**
@@ -936,7 +915,6 @@ export class x402ResourceServer {
 
       const context: SchemePaymentRequiredContext = {
         requirements: workingAccepts,
-        requirement: accept,
         paymentPayload,
         resourceInfo,
         error,
@@ -1624,7 +1602,6 @@ export class x402ResourceServer {
             isValid: false,
             invalidReason: directive.reason,
             invalidMessage: directive.message,
-            httpStatus: directive.status,
           };
         }
         if (directive && "skipHandler" in directive && directive.skipHandler) {

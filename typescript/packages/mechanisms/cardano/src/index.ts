@@ -13,6 +13,14 @@ export { jcs, jcsBytes } from "./exact/masumi/jcs";
 export { buildMasumiLock, type MasumiBuyerInput, type MasumiLock } from "./exact/masumi/lock";
 export { validateMasumiExtra, type MasumiSchemaResult } from "./exact/masumi/schema";
 export {
+  InMemoryMasumiTermsStorage,
+  DEFAULT_MASUMI_TERMS_STORAGE_ENTRIES,
+  type InMemoryMasumiTermsStorageOptions,
+  type MasumiTerms,
+  type MasumiTermsStorage,
+  type MasumiTermsUpdateResult,
+} from "./exact/masumi/storage";
+export {
   verifyMasumiAuthorization,
   verifyMasumiLock,
   type MasumiDeploymentValidator,
@@ -25,7 +33,7 @@ export { buildScriptDatumInline } from "./exact/script/datum";
 // Types
 export * from "./types";
 
-// Replay and settlement idempotency stores
+// Facilitator settlement idempotency store
 export * from "./idempotency";
 
 // Constants
