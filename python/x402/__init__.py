@@ -88,6 +88,14 @@ from .payment_flow import (
     resolve_payment_flow_phases,
 )
 
+# Pending-settlement store (settlement_pending auto-recovery)
+from .pending_settlement_store import (
+    ERR_SETTLEMENT_PENDING,
+    PENDING_SETTLEMENT_TTL_SECONDS,
+    InMemoryPendingSettlementStore,
+    PendingSettlementStore,
+)
+
 # Types (re-export commonly used types)
 from .schemas import (
     # Base
@@ -163,7 +171,7 @@ from .server import (
     x402ResourceServerSync,
 )
 
-__version__ = "2.20.0"
+__version__ = "2.21.0"
 
 __all__ = [
     # Version
@@ -185,6 +193,10 @@ __all__ = [
     # Protocols
     "FacilitatorClient",
     "FacilitatorClientSync",
+    "PendingSettlementStore",
+    "InMemoryPendingSettlementStore",
+    "ERR_SETTLEMENT_PENDING",
+    "PENDING_SETTLEMENT_TTL_SECONDS",
     # Policies
     "default_payment_selector",
     "prefer_network",
