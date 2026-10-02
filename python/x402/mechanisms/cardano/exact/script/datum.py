@@ -6,7 +6,7 @@ from typing import Any
 from pycardano import RawPlutusData
 
 from ...limits import MAX_CARDANO_DATUM_BYTES
-from ...utils import decode_cbor
+from ...utils import ChunkedPlutusData, decode_cbor
 
 
 def build_script_datum_inline(extra: dict[str, Any]) -> RawPlutusData | None:
@@ -23,6 +23,6 @@ def build_script_datum_inline(extra: dict[str, Any]) -> RawPlutusData | None:
     try:
         raw = bytes.fromhex(value)
         decode_cbor(raw)
-        return RawPlutusData.from_cbor(raw)
+        return ChunkedPlutusData.from_cbor(raw)
     except Exception as exc:
         raise ValueError('Cardano script payment "datum" is not valid Plutus data') from exc

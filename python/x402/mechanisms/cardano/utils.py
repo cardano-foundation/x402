@@ -5,6 +5,7 @@ from __future__ import annotations
 import base64
 import binascii
 import hashlib
+from collections.abc import Mapping
 from io import BytesIO
 from typing import Any
 
@@ -13,6 +14,7 @@ try:
     from nacl.signing import VerifyKey
     from pycardano import RawPlutusData, Transaction
     from pycardano.cbor import cbor2
+    from pycardano.serialization import ByteString, IndefiniteFrozenList, IndefiniteList
 except ImportError as e:
     raise ImportError("Cardano mechanism requires: pip install x402[cardano]") from e
 
@@ -94,6 +96,38 @@ def decode_cardano_transaction_bytes(transaction_base64: str) -> bytes:
     ):
         raise ValueError("Cardano transaction must use canonical padded base64")
     return decoded
+
+
+def _chunk_long_bytes(value: Any) -> Any:
+    if isinstance(value, bytes) and len(value) > 64:
+        return ByteString(value)
+    if isinstance(value, IndefiniteFrozenList):
+        # Map keys decode frozen; keep them hashable.
+        frozen = IndefiniteFrozenList([_chunk_long_bytes(item) for item in value])
+        frozen.freeze()
+        return frozen
+    if isinstance(value, IndefiniteList):
+        return IndefiniteList([_chunk_long_bytes(item) for item in value])
+    if isinstance(value, (list, tuple)):
+        return type(value)(_chunk_long_bytes(item) for item in value)
+    if isinstance(value, Mapping):
+        mapping: Any = type(value)  # dict, or FrozenDict for a map used as a key
+        return mapping({_chunk_long_bytes(k): _chunk_long_bytes(v) for k, v in value.items()})
+    if isinstance(value, cbor2.CBORTag):
+        return cbor2.CBORTag(value.tag, _chunk_long_bytes(value.value))
+    return value
+
+
+class ChunkedPlutusData(RawPlutusData):  # type: ignore[misc]
+    """Plutus data that keeps bytestrings over 64 bytes chunked when copied.
+
+    PyCardano's ``RawPlutusData`` loses the chunking on ``deepcopy``, which
+    ``TransactionBuilder`` applies to every output, and the ledger rejects the
+    resulting definite-length bytestring (Python-Cardano/pycardano#507).
+    """
+
+    def to_primitive(self) -> Any:
+        return _chunk_long_bytes(super().to_primitive())
 
 
 def decode_cbor(data: bytes) -> Any:

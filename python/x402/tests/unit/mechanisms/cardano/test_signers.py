@@ -1,5 +1,7 @@
 """Build complete payments through a real PyCardano builder and offline provider."""
 
+import base64
+
 import httpx
 import pytest
 from pycardano import Address, Network, ScriptHash, VerificationKeyHash
@@ -143,6 +145,68 @@ def test_real_transaction_builder_all_transfer_methods(wallet, method, asset):
             == (5_000_000 if asset == "lovelace" else 0) + datum.collateral_return_lovelace
         )
     assert set(calls) == {f"/addresses/{signer.get_address()}/utxos", "/epochs/latest/parameters"}
+
+
+def _assert_chunked(raw: bytes, value: bytes) -> None:
+    # Plutus data bytestrings over 64 bytes must be indefinite 64-byte chunks.
+    assert bytes([0x5F, 0x58, 0x40]) + value[:64] in raw
+    assert bytes([0x58, len(value)]) + value not in raw
+
+
+LONG_BYTES = bytes(range(100))
+CHUNKED_LONG_BYTES = f"5f5840{LONG_BYTES[:64].hex()}5824{LONG_BYTES[64:].hex()}ff"
+
+
+@pytest.mark.parametrize(
+    "method,datum",
+    [
+        ("script", f"d8799f{CHUNKED_LONG_BYTES}ff"),
+        # A map keyed by a constructor decodes to a frozen, hashable key.
+        ("script", f"a1d8799f{CHUNKED_LONG_BYTES}ff00"),
+        ("masumi", None),
+    ],
+)
+def test_real_transaction_builder_keeps_long_datum_bytes_chunked(wallet, method, datum):
+    signer, _ = wallet
+    long_bytes = LONG_BYTES
+    extra = {"assetTransferMethod": method}
+    if method == "script":
+        extra.update(
+            script={"type": "plutusV3", "code": "4d01000033222220051200120011"},
+            datum=datum,
+        )
+        recipient = str(
+            Address(
+                ScriptHash(bytes.fromhex(derive_script_hash_hex(extra))), network=Network.TESTNET
+            )
+        )
+    else:
+        recipient = masumi_escrow_address(NETWORK)
+    requirement = PaymentRequirements(
+        scheme="exact",
+        network=NETWORK,
+        asset="lovelace",
+        amount="5000000",
+        pay_to=recipient,
+        max_timeout_seconds=120,
+        extra=extra,
+    )
+    if method == "masumi":
+        seller = to_masumi_seller_signer(MNEMONIC, NETWORK, account_index=1)
+        requirement = MasumiQuoteIssuer(MasumiIssuerConfig(seller)).issue(
+            requirement, ResourceInfo(url="https://example.test/service"), None
+        )
+    payload = ExactCardanoScheme(signer).create_payment_payload(requirement)
+    raw = base64.b64decode(payload["transaction"])
+    if method == "masumi":
+        payment = next(
+            o
+            for o in decode_cardano_transaction(payload["transaction"]).outputs
+            if o.address == recipient
+        )
+        long_bytes = bytes.fromhex(parse_masumi_lock_datum(payment.datum).reference_signature)
+        assert len(long_bytes) > 64
+    _assert_chunked(raw, long_bytes)
 
 
 def test_malformed_masumi_rejected_before_provider_access(wallet):

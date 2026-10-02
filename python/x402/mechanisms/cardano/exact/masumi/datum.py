@@ -6,7 +6,7 @@ from typing import Any, cast
 from pycardano import Address, PointerAddress, RawPlutusData, ScriptHash
 
 from ...limits import MAX_CARDANO_DATUM_BYTES
-from ...utils import decode_cbor
+from ...utils import ChunkedPlutusData, decode_cbor
 
 MASUMI_STATE_FUNDS_LOCKED = 0
 
@@ -138,7 +138,7 @@ def build_masumi_lock_datum(input: MasumiLockDatumInput) -> RawPlutusData:
         )
     )
     fields.append(_constr(MASUMI_STATE_FUNDS_LOCKED))
-    return RawPlutusData.from_dict(_constr(0, fields))
+    return ChunkedPlutusData.from_dict(_constr(0, fields))
 
 
 def _fields(data: dict[str, Any], index: int, length: int) -> list[dict[str, Any]]:
