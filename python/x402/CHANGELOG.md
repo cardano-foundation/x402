@@ -2,6 +2,27 @@
 
 <!-- towncrier release notes start -->
 
+## [2.25.0] - 2026-09-29
+
+### Fixed
+
+- Cap the `svm` extra at `solana<0.40`. `solana` 0.40.0 removed the synchronous `solana.rpc.api` module that the SVM signers, clients and server import, so a fresh `pip install x402[svm]` resolved to 0.40.x and `from x402.mechanisms.svm import KeypairSigner` failed with a misleading "requires solana packages" error. ([#3573](https://github.com/x402-foundation/x402/pull/3573)) - Thanks [@JulienKervarrec](https://github.com/JulienKervarrec)!
+
+### Added
+
+- Add Arc mainnet (chain ID 5042) and Arc Testnet (chain ID 5042002) with native USDC as the default stablecoin. ([#3590](https://github.com/x402-foundation/x402/pull/3590)) - Thanks [@NotMcAfee](https://github.com/NotMcAfee)!
+- Add Monad testnet USDC (EIP-3009) as the default asset for `eip155:10143` so `"$0.10"` dollar-string pricing resolves on Monad testnet. Register v1 network name `monad-testnet`. ([#3570](https://github.com/x402-foundation/x402/pull/3570)) - Thanks [@phdargen](https://github.com/phdargen) and [@cursoragent](https://github.com/cursoragent)!
+
+
+## [2.24.0] - 2026-09-22
+
+### Fixed
+
+- FastAPI and Flask payment middleware now also match routes against each framework's decoded request path (Starlette's `request.url.path`, Werkzeug's `PATH_INFO`) in addition to the escaped path, requiring payment if either matches. A literal protected route (e.g. `GET /api/premium`) could previously be reached unpaid by encoding its path separator (`/api%2Fpremium`), since the escaped-path check alone did not match while the framework still decoded and dispatched to the paid handler. The FastAPI decoded-path check now also strips the ASGI `root_path` mount prefix (as Starlette's own router does internally) so apps mounted under a non-empty `root_path` remain protected instead of always fail-opening. ([#3502](https://github.com/x402-foundation/x402/pull/3502)) - Thanks [@CarsonRoscoe](https://github.com/CarsonRoscoe) and [@cursoragent](https://github.com/cursoragent), [@claude](https://github.com/claude)!
+- FastMCP paid-tool 402s now expose the protocol InvalidReason instead of a prefixed verify error string. ([#3494](https://github.com/x402-foundation/x402/pull/3494)) - Thanks [@PhilBot402](https://github.com/PhilBot402) and [@phdargen](https://github.com/phdargen)!
+- MCP 402 responses snapshot payment accepts before scheme enrichers so batch-settlement recovery retries still match. ([#3495](https://github.com/x402-foundation/x402/pull/3495)) - Thanks [@PhilBot402](https://github.com/PhilBot402) and [@phdargen](https://github.com/phdargen)!
+
+
 ## [2.23.0] - 2026-09-15
 
 ### Fixed
