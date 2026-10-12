@@ -3,6 +3,7 @@ import {
   ERR_FEE_BELOW_MINIMUM,
   ERR_NONCE_NOT_ON_CHAIN,
   ERR_TTL_EXPIRED,
+  ERR_TTL_TOO_FAR,
   USDM_PREPROD_ASSET,
 } from "@x402/cardano";
 import { describe, expect, it, vi } from "vitest";
@@ -13,7 +14,6 @@ import {
   decodeWalletBalance,
   describeAsset,
   estimateExtraLovelace,
-  expectedWalletNetworkId,
   explorerTxUrl,
   formatAmount,
   formatAmountParts,
@@ -80,13 +80,11 @@ describe("createAnchoredClock", () => {
 });
 
 describe("format", () => {
-  it("names networks, testnets, wallet network ids and explorers", () => {
+  it("names networks, testnets and explorers", () => {
     expect(cardanoNetworkName("cardano:preview")).toBe("Cardano Preview");
     expect(cardanoNetworkName("cardano:x")).toBe("cardano:x");
     expect(isCardanoTestnet("cardano:preprod")).toBe(true);
     expect(isCardanoTestnet("cardano:mainnet")).toBe(false);
-    expect(expectedWalletNetworkId("cardano:mainnet")).toBe(1);
-    expect(expectedWalletNetworkId("cardano:preview")).toBe(0);
     expect(explorerTxUrl("cardano:preprod", "AB".repeat(32))).toBe(
       `https://preprod.cardanoscan.io/transaction/${"ab".repeat(32)}`,
     );
@@ -127,10 +125,19 @@ describe("format", () => {
     });
     const policy = new Uint8Array(28).fill(0xab);
     const name = new Uint8Array([0x55, 0x53]);
-    const value = [7n, new Map([[policy, new Map([[name, 42n]])]])];
+    const names = new Map([
+      [name, 42n],
+      [new Uint8Array([0x00, 0x0f]), 3n],
+      [new Uint8Array(0), 1n],
+    ]);
+    const value = [7n, new Map([[policy, names]])];
     expect(decodeWalletBalance(hex(CBOR.toCBORBytes(value)))).toEqual({
       lovelace: 7n,
-      assets: { [`${"ab".repeat(28)}.5553`]: 42n },
+      assets: {
+        [`${"ab".repeat(28)}.5553`]: 42n,
+        [`${"ab".repeat(28)}.000f`]: 3n,
+        [`${"ab".repeat(28)}.`]: 1n,
+      },
     });
     expect(decodeWalletBalance("zz")).toBeUndefined();
     expect(decodeWalletBalance(hex(CBOR.toCBORBytes(["x"])))).toBeUndefined();
@@ -215,6 +222,7 @@ describe("messages", () => {
     expect(rejectionMessage(ERR_NONCE_NOT_ON_CHAIN, "Cardano Preprod")).toMatch(/Cardano Preprod/);
     expect(rejectionMessage(ERR_FEE_BELOW_MINIMUM, "x")).toMatch(/Reload the page/);
     expect(rejectionMessage(ERR_TTL_EXPIRED, "x")).toMatch(/payment window/);
+    expect(rejectionMessage(ERR_TTL_TOO_FAR, "x")).toMatch(/clock does not match/);
     expect(rejectionMessage("weird", "x")).toMatch(/\(weird\)/);
     expect(rejectionMessage(undefined, "x")).toMatch(/Nothing was charged/);
   });
@@ -228,6 +236,9 @@ describe("messages", () => {
       /outside the range/,
     );
     expect(signingErrorMessage(err("fee_drain"), "Lace")).toMatch(/Consolidate/);
+    expect(signingErrorMessage(err("amount_below_min_utxo"), "Lace")).toMatch(
+      /below the minimum ADA/,
+    );
     expect(signingErrorMessage(err("no_spendable_utxo"), "Lace")).toMatch(/^Lace has no plain ADA/);
     expect(signingErrorMessage(err("payment_window_too_short"), "Lace")).toMatch(/240/);
     expect(signingErrorMessage(err("payment_window_expired"), "Lace")).toMatch(/sign again/);

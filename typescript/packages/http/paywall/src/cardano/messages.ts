@@ -47,9 +47,10 @@ export function rejectionMessage(reason: string | undefined, networkName: string
     case ERR_FEE_BELOW_MINIMUM:
       return "Network fees have changed since this page loaded. Reload the page and try again.";
     case ERR_TTL_EXPIRED:
-    case ERR_TTL_TOO_FAR:
     case "payment_window_expired":
       return "The payment window ran out before the server received it. Try again.";
+    case ERR_TTL_TOO_FAR:
+      return "This site's clock does not match its payment service, so the payment was refused. Nothing was charged. Contact the site if this keeps happening.";
     case ERR_EVIDENCE_UNAVAILABLE:
       return `${SETTLEMENT_UNAVAILABLE_MESSAGE} Nothing was charged. Try again later or contact the site.`;
     default:
@@ -101,6 +102,8 @@ export function signingErrorMessage(error: unknown, walletName: string): string 
     case "protocol_parameters_out_of_bounds":
     case "protocol_parameters_invalid":
       return PARAMETERS_OUT_OF_BOUNDS_MESSAGE;
+    case "amount_below_min_utxo":
+      return "This price is below the minimum ADA a Cardano payment must carry, so it cannot be paid. Contact the site.";
     case "fee_drain":
       return "This payment would burn leftover ADA as fee. Consolidate your wallet (send yourself a payment) and try again.";
     case "no_spendable_utxo":

@@ -27,7 +27,7 @@ import {
   inputRef,
 } from "../../src/cip30/utxo";
 import { LOVELACE_ASSET, USDM_PREPROD_ASSET } from "../../src/constants";
-import { parseAssetUnit } from "../../src/utils";
+import { minUtxoLovelace, parseAssetUnit } from "../../src/utils";
 import { encodeCip30Utxo, encodeRawCip30Utxo } from "../helpers/cip30Shim";
 import { OFFLINE_PROTOCOL_PARAMETERS } from "../helpers/buildSignedTx";
 import { freshPreprodAddress, hex64 } from "../helpers/stubs";
@@ -309,6 +309,15 @@ describe("assertBuiltPaymentAllowed", () => {
       () => assertBuiltPaymentAllowed(ada.tx, { ...ada.ctx, amount: ada.ctx.amount - 1n }),
       "recipient_value_mismatch",
     );
+  });
+
+  it("refuses an ADA amount one lovelace below the payee output's min-UTxO", async () => {
+    const payee = ada.tx.body.outputs.find(o => Address.toBech32(o.address) === ada.payTo)!;
+    const min = minUtxoLovelace(TxOut.toCBORBytes(payee).length, PARAMS.coinsPerUtxoByte);
+    const atMin = await buildFixture(LOVELACE_ASSET, min);
+    expect(() => assertBuiltPaymentAllowed(atMin.tx, atMin.ctx)).not.toThrow();
+    const below = await buildFixture(LOVELACE_ASSET, min - 1n);
+    expectRefusal(() => assertBuiltPaymentAllowed(below.tx, below.ctx), "amount_below_min_utxo");
   });
 
   /**

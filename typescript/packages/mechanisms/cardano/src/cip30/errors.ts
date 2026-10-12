@@ -19,6 +19,7 @@ export type Cip30SignerErrorCode =
   | "unexpected_output"
   | "recipient_output_count"
   | "recipient_value_mismatch"
+  | "amount_below_min_utxo"
   | "recipient_lovelace_too_high"
   | "fee_too_high"
   | "fee_drain"

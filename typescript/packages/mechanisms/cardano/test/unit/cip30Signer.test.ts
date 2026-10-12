@@ -200,6 +200,28 @@ describe("createCip30ClientCardanoSigner", () => {
       },
     );
 
+    it("refuses an ADA price below min-UTxO before signing", async () => {
+      const payTo = await freshPreprodAddress();
+      const shim = await createCip30Shim({
+        utxos: [{ ref: `${hash("7")}#0`, owner: 0, lovelace: 10_000_000n }],
+      });
+      const signer = await createCip30ClientCardanoSigner(shim.api, {
+        network: NETWORK,
+        protocolParameters: TODAY_PARAMS,
+        clock: { now: () => NOW_MS },
+      });
+      await expect(
+        signer.buildAndSignPaymentTransaction({
+          network: NETWORK,
+          payTo,
+          asset: LOVELACE_ASSET,
+          amount: "500000",
+          maxTimeoutSeconds: 600,
+        }),
+      ).rejects.toMatchObject({ code: "amount_below_min_utxo" });
+      expect(shim.calls.signTx).toHaveLength(0);
+    });
+
     it("refuses a payment window under the minimum before reading UTxOs", async () => {
       const payTo = await freshPreprodAddress();
       const shim = await createCip30Shim({

@@ -1,5 +1,10 @@
-import { CBOR } from "@evolution-sdk/evolution";
-import { DEFAULT_ASSETS, type Cip30ProtocolParameters } from "@x402/cardano";
+import { Bytes, CBOR } from "@evolution-sdk/evolution";
+import {
+  DEFAULT_ASSETS,
+  LOVELACE_ASSET,
+  minUtxoLovelace,
+  type Cip30ProtocolParameters,
+} from "@x402/cardano";
 
 /** How the page names and scales an asset. */
 export interface AssetLabel {
@@ -66,16 +71,6 @@ export function isCardanoTestnet(network: string): boolean {
 }
 
 /**
- * Expected CIP-30 `getNetworkId()` value for a network.
- *
- * @param network - Canonical `cardano:*` id.
- * @returns 1 for mainnet, 0 for testnets.
- */
-export function expectedWalletNetworkId(network: string): number {
-  return network === "cardano:mainnet" ? 1 : 0;
-}
-
-/**
  * Explorer link for a transaction.
  *
  * @param network - Canonical `cardano:*` id.
@@ -84,7 +79,7 @@ export function expectedWalletNetworkId(network: string): number {
  */
 export function explorerTxUrl(network: string, txId: string): string | undefined {
   const base = EXPLORERS[network];
-  // The id may come from a server header; only link a well-formed hash.
+  // The id is read back from localStorage; only link a well-formed hash.
   return base && /^[0-9a-f]{64}$/i.test(txId) ? `${base}${txId.toLowerCase()}` : undefined;
 }
 
@@ -97,7 +92,7 @@ export function explorerTxUrl(network: string, txId: string): string | undefined
  */
 export function describeAsset(asset: string, network: string): AssetLabel {
   const unit = asset.toLowerCase();
-  if (unit === "lovelace") return { symbol: "ADA", decimals: 6 };
+  if (unit === LOVELACE_ASSET) return { symbol: "ADA", decimals: 6 };
   const known = (DEFAULT_ASSETS[network as keyof typeof DEFAULT_ASSETS] ?? []).find(
     entry => entry.asset.toLowerCase() === unit,
   );
@@ -146,18 +141,6 @@ export interface WalletBalance {
 }
 
 /**
- * Hex-encodes bytes.
- *
- * @param bytes - Bytes.
- * @returns Lowercase hex.
- */
-function hex(bytes: Uint8Array): string {
-  let out = "";
-  for (const b of bytes) out += b.toString(16).padStart(2, "0");
-  return out;
-}
-
-/**
  * Decodes a CIP-30 `getBalance()` CBOR value (`coin` or `[coin, multiasset]`).
  *
  * @param cborHex - CBOR hex from the wallet.
@@ -175,7 +158,7 @@ export function decodeWalletBalance(cborHex: string): WalletBalance | undefined 
       if (!(policy instanceof Uint8Array) || !(names instanceof Map)) return undefined;
       for (const [name, qty] of names) {
         if (!(name instanceof Uint8Array) || typeof qty !== "bigint") return undefined;
-        assets[`${hex(policy)}.${hex(name)}`] = qty;
+        assets[`${Bytes.toHex(policy)}.${Bytes.toHex(name)}`] = qty;
       }
     }
     return { lovelace: value[0], assets };
@@ -201,7 +184,7 @@ export function summarizeBalance(
 ): string {
   if (!balance) return "–";
   const adaText = formatAmount(balance.lovelace, ada);
-  if (asset.toLowerCase() === "lovelace") return adaText;
+  if (asset.toLowerCase() === LOVELACE_ASSET) return adaText;
   return `${formatAmount(balance.assets[asset.toLowerCase()] ?? 0n, label)} · ${adaText}`;
 }
 
@@ -222,7 +205,7 @@ export function lacksFunds(
   extraLovelace: bigint | undefined,
 ): boolean {
   if (!balance || extraLovelace === undefined) return false;
-  if (asset.toLowerCase() === "lovelace") return balance.lovelace < amount + extraLovelace;
+  if (asset.toLowerCase() === LOVELACE_ASSET) return balance.lovelace < amount + extraLovelace;
   return (balance.assets[asset.toLowerCase()] ?? 0n) < amount || balance.lovelace < extraLovelace;
 }
 
@@ -238,8 +221,8 @@ export function lacksFunds(
 export function estimateExtraLovelace(isToken: boolean, params: Cip30ProtocolParameters): bigint {
   // A one-input, two-output payment is ~300 bytes before witnesses (~100 each).
   const fee = BigInt(params.minFeeB) + BigInt(params.minFeeA) * 450n;
-  // A token output is ~90 serialized bytes plus the 160-byte ledger overhead.
-  const minUtxo = isToken ? (160n + 90n) * params.coinsPerUtxoByte : 0n;
+  // A token output is ~90 serialized bytes.
+  const minUtxo = isToken ? minUtxoLovelace(90, params.coinsPerUtxoByte) : 0n;
   return fee + minUtxo;
 }
 

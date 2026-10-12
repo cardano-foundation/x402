@@ -1,6 +1,7 @@
-import { Address, Bytes, type Transaction } from "@evolution-sdk/evolution";
+import { Address, Bytes, type Transaction, TxOut } from "@evolution-sdk/evolution";
 
 import { LOVELACE_ASSET } from "../constants";
+import { minUtxoLovelace } from "../utils";
 import { Cip30SignerError } from "./errors";
 import { type Cip30TxOutput, inputRef, outputCarriesScriptData } from "./utxo";
 
@@ -266,7 +267,8 @@ export function assertBuiltPaymentAllowed(
 }
 
 /**
- * Checks the single payee output carries exactly the requested value.
+ * Checks the single payee output carries exactly the requested value, and for
+ * ADA that the amount clears the output's min-UTxO (the facilitator's rule 8).
  *
  * @param output - The output paying `payTo`.
  * @param ctx - Values expected before the build.
@@ -279,6 +281,13 @@ function assertRecipientOutput(output: Cip30TxOutput, ctx: BuiltPaymentContext):
       throw new Cip30SignerError(
         "recipient_value_mismatch",
         "Payee output does not carry exactly the requested ADA",
+      );
+    }
+    const minUtxo = minUtxoLovelace(TxOut.toCBORBytes(output).length, ctx.params.coinsPerUtxoByte);
+    if (coin < minUtxo) {
+      throw new Cip30SignerError(
+        "amount_below_min_utxo",
+        `Payee output carries ${coin} lovelace, below its ${minUtxo} lovelace min-UTxO`,
       );
     }
     return;

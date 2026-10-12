@@ -65,7 +65,7 @@ const verify402 = (reason: string): Response =>
     },
   });
 
-const settle402 = (reason: string, transaction = "tx-settle"): Response =>
+const settle402 = (reason: string, transaction = "tx-from-server"): Response =>
   new Response("{}", {
     status: 402,
     headers: {
@@ -84,7 +84,7 @@ const ok = (): Response =>
     headers: {
       "PAYMENT-RESPONSE": encodePaymentResponseHeader({
         success: true,
-        transaction: "tx-final",
+        transaction: "tx-from-server",
         network: "cardano:preprod",
       }),
     },
@@ -167,8 +167,8 @@ describe("classifyPaymentResponse", () => {
 
   it("classifies requirement changes, success and everything else as ambiguous", () => {
     expect(classifyPaymentResponse(verify402(REQS_CHANGED_REASON)).cls).toBe("REQS_CHANGED");
-    expect(classifyPaymentResponse(ok())).toEqual({ cls: "SUCCESS", txId: "tx-final" });
-    expect(classifyPaymentResponse(new Response("x"))).toEqual({ cls: "SUCCESS", txId: undefined });
+    expect(classifyPaymentResponse(ok())).toEqual({ cls: "SUCCESS" });
+    expect(classifyPaymentResponse(new Response("x"))).toEqual({ cls: "SUCCESS" });
     expect(classifyPaymentResponse(undefined).cls).toBe("AMBIGUOUS");
     expect(classifyPaymentResponse(new Response("{}", { status: 402 })).cls).toBe("AMBIGUOUS");
     expect(classifyPaymentResponse(new Response("{}", { status: 502 })).cls).toBe("AMBIGUOUS");
@@ -176,12 +176,8 @@ describe("classifyPaymentResponse", () => {
     expect(
       classifyPaymentResponse(verify402("invalid_exact_cardano_payload_masumi_new_thing")).cls,
     ).toBe("AMBIGUOUS");
-    const settle = classifyPaymentResponse(settle402(cardano.ERR_SETTLEMENT_PENDING, "tx-9"));
-    expect(settle).toEqual({
-      cls: "AMBIGUOUS",
-      reason: cardano.ERR_SETTLEMENT_PENDING,
-      txId: "tx-9",
-    });
+    const settle = classifyPaymentResponse(settle402(cardano.ERR_SETTLEMENT_PENDING));
+    expect(settle).toEqual({ cls: "AMBIGUOUS", reason: cardano.ERR_SETTLEMENT_PENDING });
     const both = verify402(cardano.ERR_RECIPIENT_MISMATCH);
     both.headers.set(
       "PAYMENT-RESPONSE",
@@ -239,8 +235,8 @@ describe("PaymentController", () => {
     await c.pay();
     // The page crashed reading the body: completeDelivery() was never called.
     const reloaded = controller();
-    expect(reloaded.view()).toEqual({ kind: "settled", txId: "tx-final" });
-    expect(await reloaded.pay()).toEqual({ kind: "settled", txId: "tx-final" });
+    expect(reloaded.view()).toEqual({ kind: "settled", txId: "tx-1" });
+    expect(await reloaded.pay()).toEqual({ kind: "settled", txId: "tx-1" });
     responses = [ok()];
     expect((await reloaded.checkAgain()).kind).toBe("success");
     expect(sentHeaders).toEqual(["header-1", "header-1"]);
@@ -253,14 +249,14 @@ describe("PaymentController", () => {
     await controller().pay();
     responses = [verify402(cardano.ERR_NONCE_NOT_ON_CHAIN)];
     const c = controller();
-    expect(await c.checkAgain()).toEqual({ kind: "settled", txId: "tx-final" });
+    expect(await c.checkAgain()).toEqual({ kind: "settled", txId: "tx-1" });
     expect(stored()?.header).toBe("header-1");
-    expect(await c.pay()).toEqual({ kind: "settled", txId: "tx-final" });
+    expect(await c.pay()).toEqual({ kind: "settled", txId: "tx-1" });
     // A resend whose answer is lost (reload mid-request) keeps it settled too.
     responses = ["hang"];
     void controller().checkAgain();
     await vi.waitFor(() => expect(sentHeaders).toHaveLength(3));
-    expect(controller().view()).toEqual({ kind: "settled", txId: "tx-final" });
+    expect(controller().view()).toEqual({ kind: "settled", txId: "tx-1" });
     expect(signCalls).toHaveLength(1);
   });
 
@@ -295,10 +291,10 @@ describe("PaymentController", () => {
   });
 
   it("resends a byte-identical header after settlement_pending and signs only once", async () => {
-    responses = [settle402(cardano.ERR_SETTLEMENT_PENDING, "tx-pending"), ok()];
+    responses = [settle402(cardano.ERR_SETTLEMENT_PENDING), ok()];
     const c = controller();
     const first = await c.pay();
-    expect(first).toMatchObject({ kind: "ambiguous", autoRetry: true, txId: "tx-pending" });
+    expect(first).toMatchObject({ kind: "ambiguous", autoRetry: true, txId: "tx-1" });
     const early = await c.pay();
     expect(early.kind).toBe("ambiguous");
     expect(sentHeaders).toHaveLength(1);
@@ -496,8 +492,8 @@ describe("PaymentController", () => {
     await controller().pay();
     responses = [verify402(cardano.ERR_EVIDENCE_UNAVAILABLE)];
     const c = controller();
-    expect(await c.checkAgain()).toEqual({ kind: "settled", txId: "tx-final" });
-    expect(c.view()).toEqual({ kind: "settled", txId: "tx-final" });
+    expect(await c.checkAgain()).toEqual({ kind: "settled", txId: "tx-1" });
+    expect(c.view()).toEqual({ kind: "settled", txId: "tx-1" });
     responses = [ok()];
     expect((await c.checkAgain()).kind).toBe("success");
     expect(signCalls).toHaveLength(1);
@@ -514,7 +510,7 @@ describe("PaymentController", () => {
       kind: "terminal",
       reason: "merchant_misconfigured",
       possiblyPaid: true,
-      txId: "tx-settle",
+      txId: "tx-1",
     };
     expect(await c.pay()).toEqual(terminal);
     expect(stored()?.header).toBe("header-1");

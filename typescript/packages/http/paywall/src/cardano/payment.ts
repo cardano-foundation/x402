@@ -140,20 +140,20 @@ export interface ResponseLike {
 export interface ClassifiedResponse {
   cls: ResponseClass;
   reason?: string;
-  txId?: string;
 }
 
 /**
  * Classifies the server's answer to a paid request. Anything not provably
- * pre-broadcast is AMBIGUOUS.
+ * pre-broadcast is AMBIGUOUS. The transaction id in `PAYMENT-RESPONSE` is
+ * ignored: the page shows the id of the transaction its wallet signed.
  *
  * @param response - The response, or undefined when fetch failed.
- * @returns Its class, reason and any transaction id.
+ * @returns Its class and reason.
  */
 export function classifyPaymentResponse(response: ResponseLike | undefined): ClassifiedResponse {
   if (!response) return { cls: "AMBIGUOUS", reason: "network_error" };
   const settleHeader = response.headers.get("PAYMENT-RESPONSE");
-  let settle: { errorReason?: string; transaction?: string } | undefined;
+  let settle: { errorReason?: string } | undefined;
   if (settleHeader) {
     try {
       settle = decodePaymentResponseHeader(settleHeader);
@@ -161,9 +161,8 @@ export function classifyPaymentResponse(response: ResponseLike | undefined): Cla
       settle = {};
     }
   }
-  const txId = settle?.transaction || undefined;
-  if (response.status >= 200 && response.status < 300) return { cls: "SUCCESS", txId };
-  if (settleHeader) return { cls: "AMBIGUOUS", reason: settle?.errorReason, txId };
+  if (response.status >= 200 && response.status < 300) return { cls: "SUCCESS" };
+  if (settleHeader) return { cls: "AMBIGUOUS", reason: settle?.errorReason };
   if (response.status !== 402) return { cls: "AMBIGUOUS", reason: `http_${response.status}` };
   const requiredHeader = response.headers.get("PAYMENT-REQUIRED");
   if (!requiredHeader) return { cls: "AMBIGUOUS", reason: "bare_402" };
@@ -750,7 +749,6 @@ export class PaymentController {
       ...record,
       lastClass: outcome.cls,
       lastReason: outcome.reason,
-      txId: outcome.txId ?? record.txId,
     };
     if (record.settled && outcome.cls !== "SUCCESS") {
       // Resending a confirmed payment to collect content: whatever the server

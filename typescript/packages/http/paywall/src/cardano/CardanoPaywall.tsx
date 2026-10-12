@@ -1,8 +1,11 @@
 import { Address } from "@evolution-sdk/evolution";
 import {
   assertCip30ProtocolParametersInBounds,
+  CARDANO_NETWORK_ID_MAINNET,
   CIP30_MIN_WINDOW_SECONDS,
   type Cip30ProtocolParameters,
+  getCardanoNetworkId,
+  LOVELACE_ASSET,
 } from "@x402/cardano";
 import type { PaymentRequired } from "@x402/core/types";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
@@ -20,7 +23,6 @@ import {
   decodeWalletBalance,
   describeAsset,
   estimateExtraLovelace,
-  expectedWalletNetworkId,
   formatAmount,
   formatAmountParts,
   isCardanoTestnet,
@@ -74,7 +76,7 @@ export function CardanoPaywall(props: Props) {
   const label = describeAsset(requirement.asset, network);
   const amount = BigInt(requirement.amount);
   const amountText = formatAmount(amount, label);
-  const isToken = requirement.asset.toLowerCase() !== "lovelace";
+  const isToken = requirement.asset.toLowerCase() !== LOVELACE_ASSET;
 
   const [wallets, setWallets] = useState<DiscoveredWallet[] | null>(null);
   const [selectedKey, setSelectedKey] = useState<string>("");
@@ -220,8 +222,9 @@ export function CardanoPaywall(props: Props) {
     try {
       const api = await wallet.provider.enable();
       const networkId = await api.getNetworkId();
-      if (networkId !== expectedWalletNetworkId(network)) {
-        const walletNetwork = networkId === 1 ? "Cardano Mainnet" : "a Cardano testnet";
+      if (networkId !== getCardanoNetworkId(network)) {
+        const walletNetwork =
+          networkId === CARDANO_NETWORK_ID_MAINNET ? "Cardano Mainnet" : "a Cardano testnet";
         setError(
           `${wallet.name} is on ${walletNetwork}, and this page charges on ${networkName}. Switch ${wallet.name} to ${networkName}, then connect again.`,
         );
@@ -240,7 +243,7 @@ export function CardanoPaywall(props: Props) {
 
   const extraLovelace =
     params && params !== "invalid" ? estimateExtraLovelace(isToken, params) : undefined;
-  const ada = describeAsset("lovelace", network);
+  const ada = describeAsset(LOVELACE_ASSET, network);
   const balanceText = summarizeBalance(connection?.balance, requirement.asset, label, ada);
   // Only gates a new signature: resending a sent payment must stay possible even
   // after the wallet's balance dropped because that payment landed.
