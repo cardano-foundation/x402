@@ -6,6 +6,7 @@ import {
   Transaction,
   TransactionHash,
   TransactionInput,
+  TxOut,
 } from "@evolution-sdk/evolution";
 import { addressFromSeed } from "@evolution-sdk/evolution/sdk/wallet/Derivation";
 import type { PaymentRequirements, ResourceInfo } from "@x402/core/types";
@@ -33,7 +34,12 @@ import { isKeyCredentialAddressOn, validateMasumiExtra } from "./exact/masumi/sc
 import { buildScriptDatumInline } from "./exact/script/datum";
 import { DEFAULT_CARDANO_PROVIDER_TIMEOUT_MS } from "./limits";
 import type { CardanoExtra, CardanoExtraMasumi, CardanoExtraScript } from "./types";
-import { decodeCardanoTransactionBytes, parseAssetUnit, parseUtxoRef } from "./utils";
+import {
+  decodeCardanoTransactionBytes,
+  minUtxoLovelace,
+  parseAssetUnit,
+  parseUtxoRef,
+} from "./utils";
 
 /**
  * Provider connection used by the reference signers. Exactly one of
@@ -624,16 +630,17 @@ export function toClientCardanoSigner(config: ClientCardanoSignerConfig): Client
       const isLovelace = input.asset.toLowerCase() === LOVELACE_ASSET;
       let outputAssets = buildPaymentOutputAssets(input.asset, amount);
       let paymentDatum = scriptExtra ? buildScriptDatumInline(scriptExtra) : undefined;
+      const protocolParameters = await withCardanoProviderTimeout(
+        client.getProtocolParameters(),
+        timeoutMs,
+        "getProtocolParameters",
+      );
+      const { coinsPerUtxoByte } = protocolParameters;
 
       if (masumiExtra) {
         // The seller never signs `collateral_return_lovelace`; the client derives
         // it from the requested asset and live protocol parameters so the escrow
         // still clears min-UTXO after `SubmitResult`.
-        const { coinsPerUtxoByte } = await withCardanoProviderTimeout(
-          client.getProtocolParameters(),
-          timeoutMs,
-          "getProtocolParameters",
-        );
         const lock = buildMasumiLock(
           masumiExtra,
           Address.toBech32(nonceUtxo.address),
@@ -703,6 +710,7 @@ export function toClientCardanoSigner(config: ClientCardanoSignerConfig): Client
           .setValidity({ to: ttlMs })
           .build({
             changeAddress,
+            fullProtocolParameters: protocolParameters,
             // Bump the output to the protocol min-UTXO for native-asset outputs
             // and for datum-bearing outputs (an attached datum raises it). A
             // Masumi lock already carries its exact structural lovelace, and
@@ -713,8 +721,19 @@ export function toClientCardanoSigner(config: ClientCardanoSignerConfig): Client
         "buildTransaction",
       );
 
-      const submitBuilder = await signBuilder.sign();
       const unsigned = await signBuilder.toTransaction();
+      // Facilitator rule 8, before signing. Only a plain ADA output can fail it: the
+      // builder raises token and datum outputs, and the Masumi lock is sized to clear it.
+      // The payment is the only declared output; Evolution appends change after it.
+      const payee = unsigned.body.outputs[0];
+      const coin = payee.assets.lovelace;
+      const minUtxo = minUtxoLovelace(TxOut.toCBORBytes(payee).length, coinsPerUtxoByte);
+      if (coin < minUtxo) {
+        throw new Error(
+          `Payee output carries ${coin} lovelace, below its ${minUtxo} lovelace min-UTXO`,
+        );
+      }
+      const submitBuilder = await signBuilder.sign();
       const signed = new Transaction.Transaction({
         body: unsigned.body,
         witnessSet: submitBuilder.witnessSet,
