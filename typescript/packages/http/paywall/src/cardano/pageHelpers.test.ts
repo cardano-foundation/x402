@@ -86,7 +86,7 @@ describe("format", () => {
     expect(isCardanoTestnet("cardano:preprod")).toBe(true);
     expect(isCardanoTestnet("cardano:mainnet")).toBe(false);
     expect(explorerTxUrl("cardano:preprod", "AB".repeat(32))).toBe(
-      `https://preprod.cardanoscan.io/transaction/${"ab".repeat(32)}`,
+      `https://explorer.cardano.org/preprod/tx/${"ab".repeat(32)}`,
     );
     expect(explorerTxUrl("cardano:preprod", "../evil")).toBeUndefined();
     expect(explorerTxUrl("cardano:x", "ab".repeat(32))).toBeUndefined();

@@ -21,9 +21,9 @@ const NETWORK_NAMES: Record<string, string> = {
 };
 
 const EXPLORERS: Record<string, string> = {
-  "cardano:mainnet": "https://cardanoscan.io/transaction/",
-  "cardano:preprod": "https://preprod.cardanoscan.io/transaction/",
-  "cardano:preview": "https://preview.cardanoscan.io/transaction/",
+  "cardano:mainnet": "https://explorer.cardano.org/mainnet/tx/",
+  "cardano:preprod": "https://explorer.cardano.org/preprod/tx/",
+  "cardano:preview": "https://explorer.cardano.org/preview/tx/",
 };
 
 /**
