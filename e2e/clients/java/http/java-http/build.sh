@@ -1,0 +1,7 @@
+#!/bin/bash
+# Installs the Java v2 reactor (so a clean checkout resolves org.x402:*:2.0.0-SNAPSHOT),
+# then packages this client with its runtime dependencies in target/lib.
+set -euo pipefail
+cd "$(dirname "$0")"
+mvn -q -f ../../../../../java/pom.xml install -DskipTests
+mvn -q clean package

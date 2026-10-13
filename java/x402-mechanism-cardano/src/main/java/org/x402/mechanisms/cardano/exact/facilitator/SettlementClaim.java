@@ -1,0 +1,33 @@
+package org.x402.mechanisms.cardano.exact.facilitator;
+
+import java.util.Objects;
+
+/**
+ * One atomic facilitator claim (TS {@code CardanoSettlementClaim}).
+ *
+ * @param txHash the canonical transaction id (body hash), never the CBOR
+ * @param ownerToken an unpredictable token owning a fresh claim
+ * @param termsDigest the Masumi terms digest, or {@code null}
+ * @param retainUntilMs once broadcast, keep the record at least until this POSIX time (the
+ *     transaction's TTL plus 120 s grace), or {@code null} when unknown: never evicted once
+ *     broadcast (decision 126)
+ */
+public record SettlementClaim(String txHash, String ownerToken, String termsDigest, Long retainUntilMs) {
+
+  /** Validates. */
+  public SettlementClaim {
+    Objects.requireNonNull(txHash, "txHash");
+    Objects.requireNonNull(ownerToken, "ownerToken");
+  }
+
+  /**
+   * A claim without a known retention deadline (source-compatible with the 3-field form).
+   *
+   * @param txHash the transaction id
+   * @param ownerToken the caller's owner token
+   * @param termsDigest the Masumi terms digest, or {@code null}
+   */
+  public SettlementClaim(String txHash, String ownerToken, String termsDigest) {
+    this(txHash, ownerToken, termsDigest, null);
+  }
+}

@@ -105,12 +105,16 @@ default_build() {
     run_step "Build" "$dir" uv sync --reinstall-package x402
     return $?
   fi
+  if [ -f "$dir/pom.xml" ]; then
+    run_step "Build" "$dir" mvn -q package
+    return $?
+  fi
   return 0
 }
 
 has_setup_work() {
   local dir=$1
-  [ -f "$dir/install.sh" ] || [ -f "$dir/build.sh" ] || [ -f "$dir/go.mod" ] || [ -f "$dir/pyproject.toml" ]
+  [ -f "$dir/install.sh" ] || [ -f "$dir/build.sh" ] || [ -f "$dir/go.mod" ] || [ -f "$dir/pyproject.toml" ] || [ -f "$dir/pom.xml" ]
 }
 
 setup_component() {
@@ -165,7 +169,7 @@ process_role_v2() {
     local language
     language=$(basename "$language_dir")
     case "$language" in
-      typescript|go|python) ;;
+      typescript|go|python|java) ;;
       *) continue ;;
     esac
 
