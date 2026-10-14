@@ -39,6 +39,8 @@ Resource servers authenticate with `Authorization: Basic base64(x402:<password>)
 
 ## Optional: accept only your own sellers
 
+[`LifecycleHooks.java`](src/main/java/org/x402/examples/facilitator/LifecycleHooks.java) registers all six lifecycle hooks (before/after verify, verify failure, before/after settle, settle failure). Each logs one line such as `before verify: cardano:preprod pay 1500000 lovelace to addr_test1...`; replace the log lines with your own code. A before-hook can refuse with `Decision.abort(reason)`, a failure hook can answer with `Recovery.recovered(response)`.
+
 [`PayeeAllowlist.java`](src/main/java/org/x402/examples/facilitator/PayeeAllowlist.java) adds an `onBeforeVerify` and an `onBeforeSettle` hook when `example.allowed-pay-to` is set: payments to other addresses get `isValid: false` from `/verify` and `success: false` from `/settle`, both with reason `payee_not_allowed`, before the chain is asked. The settle hook matters because a caller can post to `/settle` without verifying first. For Masumi the `payTo` is the escrow address, which the canonical deployment shares among **all** Masumi sellers: listing it admits every Masumi seller. Telling sellers apart needs a hook that reads the seller from the escrow datum.
 
 ```yaml
