@@ -12,7 +12,10 @@ import org.x402.core.json.X402Json;
 import org.x402.core.types.PaymentPayload;
 import org.x402.core.types.PaymentRequirements;
 
-/** Loads the TS-exported fixtures under {@code src/test/resources/vectors}. */
+/**
+ * Loads the fixtures under {@code src/test/resources/vectors}, exported from the TypeScript SDK
+ * by {@code java/tools/ts-vectors}.
+ */
 public final class Vectors {
 
   private Vectors() {}
@@ -59,7 +62,7 @@ public final class Vectors {
   }
 
   /**
-   * The epoch millisecond the TS export ran at.
+   * The epoch millisecond the fixtures were exported at.
    *
    * @return {@code now}
    */

@@ -15,10 +15,8 @@ import org.x402.core.types.SettleResponse;
 import org.x402.core.types.VerifyResponse;
 
 /**
- * A framework-free facilitator HTTP endpoint (beyond parity, plan Roles §3) around an {@link
- * X402Facilitator}. It implements the plan's normative wire table, taken from the TS client
- * schema ({@code httpFacilitatorClient.ts:165-193}) and the TS e2e handlers ({@code
- * e2e/facilitators/typescript/index.ts:1039-1131}):
+ * A framework-free facilitator HTTP endpoint around an {@link
+ * X402Facilitator}. It implements the wire contract x402 resource servers expect:
  *
  * <table>
  *   <caption>Wire contract, relative to the base path</caption>
@@ -39,12 +37,14 @@ import org.x402.core.types.VerifyResponse;
  *
  * <p>Unknown JSON fields inside the open maps of the typed model ({@code payload}, {@code
  * extensions}, {@code extra}) reach the scheme unchanged; unknown top-level fields are accepted
- * and ignored (decision 130). The server-internal {@code extensionResponses} side channel is
+ * and ignored. The server-internal {@code extensionResponses} side channel is
  * never written, and no {@code EXTENSION-RESPONSES} header exists. One log line per verify and
  * settle (network, payTo, result) goes to {@link System.Logger}.
  *
- * <p>Status codes and bodies are fixed: TS/Go/Python resource servers depend on them. Stateless
- * and thread-safe.
+ * <p>Status codes and bodies are fixed: other x402 resource servers depend on them. A
+ * 500 body carries the exception's message, which can include a chain provider's error text;
+ * expose the endpoint only to the resource servers you run, or map errors in front of it.
+ * Stateless and thread-safe.
  */
 public final class FacilitatorHttpHandler {
 
@@ -242,7 +242,7 @@ public final class FacilitatorHttpHandler {
     return X402Json.write(Map.of("error", message));
   }
 
-  /** TS {@code responseExcerpt}: whitespace collapsed, at most 200 characters. */
+  /** An excerpt of a response body: whitespace collapsed, at most 200 characters. */
   static String excerpt(String text) {
     String compact = text == null ? "" : text.strip().replaceAll("\\s+", " ");
     if (compact.isEmpty()) {

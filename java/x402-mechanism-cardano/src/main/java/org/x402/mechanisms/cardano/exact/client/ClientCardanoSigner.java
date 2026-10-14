@@ -1,7 +1,7 @@
 package org.x402.mechanisms.cardano.exact.client;
 
 /**
- * The buyer's wallet (TS {@code ClientCardanoSigner}): builds and signs, never broadcasts. The
+ * The buyer's wallet: builds and signs, never broadcasts. The
  * mnemonic-backed default is {@code signer.MnemonicClientCardanoSigner}; wallets and HSMs
  * implement this interface.
  */

@@ -1,12 +1,9 @@
 package org.x402.spring.web.reactive;
 
-import java.nio.charset.StandardCharsets;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
-import java.util.concurrent.Callable;
-import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.function.Supplier;
 import org.apache.commons.logging.Log;
@@ -24,10 +21,8 @@ import org.springframework.web.server.ServerWebExchange;
 import org.springframework.web.server.WebFilter;
 import org.springframework.web.server.WebFilterChain;
 import org.x402.core.FacilitatorResponseException;
-import org.x402.core.json.X402Json;
 import org.x402.core.server.CancelOptions;
 import org.x402.core.server.ServerHooks.CancellationReason;
-import org.x402.core.types.SettleResponse;
 import org.x402.http.HttpProcessResult;
 import org.x402.http.HttpRequestContext;
 import org.x402.http.HttpResponseInstructions;
@@ -37,12 +32,12 @@ import org.x402.http.ProcessSettleResult;
 import org.x402.http.X402Headers;
 import org.x402.http.X402HttpResourceServer;
 import org.x402.spring.offer.OfferRegistry;
+import org.x402.spring.web.PaidResponses;
 import org.x402.spring.offer.OfferRouteResolver;
 import reactor.core.publisher.Mono;
-import reactor.core.scheduler.Schedulers;
 
 /**
- * The WebFlux adapter (WP6): the same contract as the servlet filter. The offer comes from the
+ * The WebFlux adapter: the same contract as the servlet filter. The offer comes from the
  * {@code DispatcherHandler}'s own handler mappings; every core call (which may block on a
  * facilitator) runs on {@code boundedElastic}; the paid handler's response is buffered by a
  * decorator covering {@code writeWith}, {@code writeAndFlushWith} and {@code setComplete}.
@@ -90,7 +85,7 @@ public final class X402WebFilter implements WebFilter, Ordered {
   @Override
   public Mono<Void> filter(ServerWebExchange exchange, WebFilterChain chain) {
     ServerHttpRequest request = exchange.getRequest();
-    if (CorsUtils.isPreFlightRequest(request)) {
+    if (CorsUtils.isPreFlightRequest(request) || !registry.hasOffers()) {
       return chain.filter(exchange);
     }
     return handlers.resolve(exchange).flatMap(resolution -> {
@@ -110,7 +105,7 @@ public final class X402WebFilter implements WebFilter, Ordered {
           new ReactiveRequestAdapter(request, paths[0], offer, pattern, paywall), method,
           paths[0], paths[1], null);
       String selected = offer;
-      return offload(() -> server.processHttpRequest(context, paywallConfig))
+      return BlockingCalls.offload(() -> server.processHttpRequest(context, paywallConfig))
           .map(Optional::of)
           .onErrorResume(FacilitatorResponseException.class, e -> writeJson(exchange.getResponse(),
               502, Map.of("error", String.valueOf(e.getMessage()))).then(Mono.empty()))
@@ -168,7 +163,7 @@ public final class X402WebFilter implements WebFilter, Ordered {
             : Mono.error(e))
         .doOnCancel(() -> {
           if (paid.finish()) {
-            offload(() -> paid.verified.cancellationDispatcher().cancel(
+            BlockingCalls.offload(() -> paid.verified.cancellationDispatcher().cancel(
                 new CancelOptions(CancellationReason.HANDLER_THREW,
                     new IllegalStateException("request cancelled before completion"), null)))
                 .subscribe(r -> { }, e -> LOG.warn("x402: cancel after a dropped request "
@@ -179,13 +174,9 @@ public final class X402WebFilter implements WebFilter, Ordered {
 
   private Mono<Void> handlerThrew(PaidExchange paid, Throwable error) {
     ServerHttpResponse real = paid.buffered.getDelegate();
-    return offload(() -> {
-      SettleResponse cancel = paid.verified.cancellationDispatcher().cancel(
-          new CancelOptions(CancellationReason.HANDLER_THREW, error, null));
-      return Optional.ofNullable(server.createFailurePathSettlementHeaders(cancel,
-          paid.verified.beforeHandlerSettlement(), paid.verified.paymentPayload(),
-          real.getHeaders().getCacheControl()));
-    }).doOnNext(headers -> {
+    return BlockingCalls.offload(() -> Optional.ofNullable(PaidResponses.cancel(server, paid.verified,
+        CancellationReason.HANDLER_THREW, error, null, real.getHeaders().getCacheControl())))
+        .doOnNext(headers -> {
       if (!real.isCommitted()) {
         headers.ifPresent(h -> h.forEach(real.getHeaders()::set));
       }
@@ -203,13 +194,9 @@ public final class X402WebFilter implements WebFilter, Ordered {
     String overrides = handlerHeaders.getFirst(X402Headers.SETTLEMENT_OVERRIDES);
     handlerHeaders.remove(X402Headers.SETTLEMENT_OVERRIDES);
     if (code >= 400) {
-      return offload(() -> {
-        SettleResponse cancel = paid.verified.cancellationDispatcher().cancel(
-            new CancelOptions(CancellationReason.HANDLER_FAILED, null, code));
-        return Optional.ofNullable(server.createFailurePathSettlementHeaders(cancel,
-            paid.verified.beforeHandlerSettlement(), paid.verified.paymentPayload(),
-            handlerHeaders.getCacheControl()));
-      }).flatMap(headers -> {
+      return BlockingCalls.offload(() -> Optional.ofNullable(PaidResponses.cancel(server, paid.verified,
+          CancellationReason.HANDLER_FAILED, null, code, handlerHeaders.getCacheControl())))
+          .flatMap(headers -> {
         headers.ifPresent(h -> h.forEach(handlerHeaders::set));
         return release(paid);
       });
@@ -219,7 +206,7 @@ public final class X402WebFilter implements WebFilter, Ordered {
       responseHeaders.put(X402Headers.SETTLEMENT_OVERRIDES, overrides);
     }
     byte[] body = paid.buffered.bytes();
-    return offload(() -> server.processSettlement(paid.verified,
+    return BlockingCalls.offload(() -> server.processSettlement(paid.verified,
             new HttpTransportContext(paid.context, body, responseHeaders)))
         .flatMap(result -> {
           if (result instanceof ProcessSettleResult.Failure failure) {
@@ -232,27 +219,6 @@ public final class X402WebFilter implements WebFilter, Ordered {
         })
         .onErrorResume(FacilitatorResponseException.class, e -> writeJson(real, 502,
             Map.of("error", String.valueOf(e.getMessage()))));
-  }
-
-  /**
-   * Runs a blocking call on {@code boundedElastic}. Once started it is not interrupted by a
-   * cancelled subscription (a client that went away): a settle or cancel always completes, and its
-   * hooks run (decision 147). Also used by the WebFlux facilitator endpoints.
-   *
-   * @param <T> the result type
-   * @param call the blocking call
-   * @return the result, emitted when the call completes
-   */
-  public static <T> Mono<T> offload(Callable<T> call) {
-    return Mono.fromFuture(() -> CompletableFuture.supplyAsync(() -> {
-      try {
-        return call.call();
-      } catch (RuntimeException e) {
-        throw e;
-      } catch (Exception e) {
-        throw new IllegalStateException(e);
-      }
-    }, task -> Schedulers.boundedElastic().schedule(task)), true);
   }
 
   private static Mono<Void> release(PaidExchange paid) {
@@ -269,16 +235,13 @@ public final class X402WebFilter implements WebFilter, Ordered {
   static Mono<Void> write(ServerHttpResponse response, HttpResponseInstructions instructions) {
     response.setStatusCode(HttpStatusCode.valueOf(instructions.status()));
     instructions.headers().forEach(response.getHeaders()::set);
-    byte[] bytes = instructions.html() || instructions.body() instanceof String
-        ? String.valueOf(instructions.body()).getBytes(StandardCharsets.UTF_8)
-        : X402Json.write(instructions.body() == null ? Map.of() : instructions.body())
-            .getBytes(StandardCharsets.UTF_8);
+    byte[] bytes = PaidResponses.body(instructions);
     response.getHeaders().setContentLength(bytes.length);
     return response.writeWith(Mono.fromSupplier(() -> response.bufferFactory().wrap(bytes)));
   }
 
   static Mono<Void> writeJson(ServerHttpResponse response, int status, Map<String, ?> body) {
-    byte[] bytes = X402Json.write(body).getBytes(StandardCharsets.UTF_8);
+    byte[] bytes = PaidResponses.json(body);
     response.setStatusCode(HttpStatusCode.valueOf(status));
     response.getHeaders().setContentType(MediaType.APPLICATION_JSON);
     response.getHeaders().setContentLength(bytes.length);

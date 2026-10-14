@@ -1,7 +1,7 @@
 package org.x402.http;
 
 /**
- * What the HTTP layer needs from a framework's request (TS {@code HTTPAdapter}). Header lookup
+ * What the HTTP layer needs from a framework's request. Header lookup
  * must be case-insensitive.
  */
 public interface HttpAdapter {

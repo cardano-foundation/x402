@@ -4,7 +4,7 @@ import java.util.LinkedHashMap;
 import java.util.Map;
 
 /**
- * One part of the Masumi request commitment (TS {@code MasumiCommitmentPart}).
+ * One part of the Masumi request commitment.
  *
  * @param name unique non-empty part name
  * @param canonicalization {@code jcs} or {@code raw}
@@ -17,7 +17,7 @@ public record MasumiCommitmentPart(
     String name, String canonicalization, String mediaType, boolean hasContent, Object content, String digest) {
 
   /**
-   * The JSON form, in TS field order.
+   * The JSON form, in wire field order.
    *
    * @return the map
    */

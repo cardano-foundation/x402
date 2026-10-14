@@ -32,7 +32,7 @@ import org.x402.spring.offer.X402OptionContributor;
 import org.x402.spring.offer.X402Offers;
 import org.x402.spring.properties.X402Properties;
 
-/** {@code x402.*} binding: the developer-facing contract of the plan. */
+/** {@code x402.*} binding: the documented configuration contract. */
 class X402PropertiesBindingTest {
 
   private static FakeFacilitator facilitator;

@@ -11,6 +11,7 @@ import java.util.Map;
 import org.junit.jupiter.api.Test;
 import org.x402.core.json.X402Json;
 import org.x402.core.types.PaymentRequirements;
+import org.x402.mechanisms.cardano.CardanoAddresses;
 import org.x402.mechanisms.cardano.Jcs;
 import org.x402.mechanisms.cardano.exact.script.ScriptAddresses;
 import org.x402.mechanisms.cardano.exact.server.CardanoSellerSigner;
@@ -18,7 +19,7 @@ import org.x402.mechanisms.cardano.testing.Vectors;
 
 /**
  * Masumi digests, JCS, identifiers, escrow derivation, script hashes and deterministic issuance
- * byte-match TS {@code @x402/cardano} 2.28.0 (vectors from {@code export-cardano.ts}).
+ * byte-match the TypeScript SDK (vectors exported by {@code java/tools/ts-vectors}).
  */
 class MasumiDigestVectorsTest {
 
@@ -204,8 +205,9 @@ class MasumiDigestVectorsTest {
     assertThat(view.payByTime().toString()).isEqualTo(extra.terms().payByTime());
     assertThat(view.state()).isZero();
     assertThat(view.resultHash()).isEmpty();
-    assertThat(view.seller().payment().hash())
-        .isEqualTo(MasumiDatum.addressCredentials(extra.terms().sellerAddress()).payment().hash());
+    assertThat(CardanoAddresses.hashHex(view.seller().payment()))
+        .isEqualTo(CardanoAddresses.hashHex(
+            MasumiDatum.addressCredentials(extra.terms().sellerAddress()).payment()));
     assertThat(MasumiDatum.parse(new byte[] {0x00})).isNull();
   }
 }

@@ -9,8 +9,8 @@ import org.x402.core.types.PaymentPayload;
 import org.x402.core.types.PaymentRequirements;
 
 /**
- * The outcome of {@link X402HttpResourceServer#processHttpRequest} (TS {@code HTTPProcessResult},
- * plus the Java {@link RouteUnavailable} case).
+ * The outcome of {@link X402HttpResourceServer#processHttpRequest}.
+ * {@link RouteUnavailable} reports a route that cannot be served as configured.
  */
 public sealed interface HttpProcessResult
     permits HttpProcessResult.NoPaymentRequired, HttpProcessResult.PaymentVerified,
@@ -97,7 +97,7 @@ public sealed interface HttpProcessResult
   }
 
   /**
-   * The matched route failed validation in the current sync (Java, plan Roles §1b). An adapter
+   * The matched route failed validation in the current sync. An adapter
    * answers 503 with {@code Retry-After} when {@code retryable} (a facilitator it might need is
    * down), else 500 {@code {"error": "x402 route configuration"}}.
    *

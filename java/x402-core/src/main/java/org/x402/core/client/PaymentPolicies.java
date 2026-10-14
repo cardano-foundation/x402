@@ -8,10 +8,8 @@ import java.util.function.Function;
 import org.x402.core.types.PaymentRequirements;
 
 /**
- * Built-in policies. {@code preferNetwork} and {@code preferScheme} are stable partitions as in
- * Python {@code prefer_network} / {@code prefer_scheme} ({@code client_base.py:338-363}), taking
- * several values where the first is most preferred. {@code maxAmount} is a Java extension: unlike
- * Python's {@code max_amount} it applies to one asset only.
+ * Built-in policies. {@code preferNetwork} and {@code preferScheme} are stable partitions taking
+ * several values, the first being most preferred. {@code maxAmount} applies to one asset only.
  */
 public final class PaymentPolicies {
 

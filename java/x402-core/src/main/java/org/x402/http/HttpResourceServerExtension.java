@@ -3,9 +3,8 @@ package org.x402.http;
 import org.x402.core.server.ResourceServerExtension;
 
 /**
- * A resource-server extension with HTTP transport hooks (TS {@code ResourceServerExtension
- * .transportHooks.http}). Its protected-request hook runs after the server-wide ones, only for
- * routes that declare the extension.
+ * A resource-server extension with HTTP transport hooks. Its protected-request hook runs after the
+ * server-wide ones, only for routes that declare the extension.
  */
 public interface HttpResourceServerExtension extends ResourceServerExtension {
 

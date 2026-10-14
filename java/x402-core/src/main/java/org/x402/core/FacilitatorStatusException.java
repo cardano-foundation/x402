@@ -1,11 +1,11 @@
 package org.x402.core;
 
 /**
- * A facilitator answered verify or settle with an error status and no verdict body (TS throws a
- * plain {@code Error("Facilitator verify failed (503): …")}, {@code httpFacilitatorClient.ts}).
- * Unlike {@link FacilitatorResponseException} it is not a transport failure for the HTTP layer:
- * like TS, the request ends in a 402 rather than a 502. A 5xx or 429 status still counts as a
- * transport-level failure for opt-in verify failover (plan Roles §1b).
+ * A facilitator answered verify or settle with an error status and no verdict body (the message
+ * reads e.g. {@code Facilitator verify failed (503): busy}). Unlike {@link
+ * FacilitatorResponseException} it is not a transport failure for the HTTP layer: the request ends
+ * in a 402 rather than a 502. A 5xx or 429 status still counts as a transport-level failure for
+ * opt-in verify failover.
  */
 public class FacilitatorStatusException extends RuntimeException {
 
@@ -16,7 +16,7 @@ public class FacilitatorStatusException extends RuntimeException {
   /**
    * Creates the exception.
    *
-   * @param message the TS-shaped message, e.g. {@code Facilitator verify failed (503): busy}
+   * @param message the message, e.g. {@code Facilitator verify failed (503): busy}
    * @param statusCode the HTTP status
    */
   public FacilitatorStatusException(String message, int statusCode) {

@@ -1,25 +1,28 @@
 package org.x402.spring.extensions;
 
-import java.util.ArrayList;
 import java.util.LinkedHashMap;
-import java.util.List;
 import java.util.Map;
 import java.util.Set;
+import org.springframework.core.Ordered;
+import org.springframework.core.annotation.Order;
 import org.x402.extensions.bazaar.Bazaar;
 import org.x402.extensions.bazaar.DiscoveryOutput;
 import org.x402.extensions.bazaar.HttpDiscoveryConfig;
 import org.x402.http.RouteConfig;
 import org.x402.spring.X402ConfigurationException;
 import org.x402.spring.X402RouteCustomizer;
+import org.x402.spring.properties.RawProperties;
 
 /**
- * Turns {@code x402.routes.<offer>.extensions.bazaar} from YAML into the WP9a declaration (TS
- * {@code declareDiscoveryExtension}). Keys: {@code discoverable} ({@code false} omits the
+ * Turns {@code x402.routes.<offer>.extensions.bazaar} from YAML into a discovery declaration. It runs first among route customizers, so a customizer can
+ * still adjust or replace the result; a map that already is a declaration ({@code info} and
+ * {@code schema}) is left as it is. Keys: {@code discoverable} ({@code false} omits the
  * extension), {@code method}, {@code input}, {@code input-schema}, {@code path-params}, {@code
  * path-params-schema}, {@code body-type} ({@code json}, {@code form-data}, {@code text}) and
  * {@code output.{example, schema}}. The method is narrowed per request by the bazaar server
  * extension.
  */
+@Order(Ordered.HIGHEST_PRECEDENCE)
 public final class BazaarDeclarations implements X402RouteCustomizer {
 
   private static final Set<String> KEYS = Set.of("discoverable", "method", "input",
@@ -32,7 +35,11 @@ public final class BazaarDeclarations implements X402RouteCustomizer {
     if (extensions == null || !extensions.containsKey(Bazaar.KEY)) {
       return route;
     }
-    Object raw = restore(extensions.get(Bazaar.KEY));
+    Object raw = RawProperties.restoreLists(extensions.get(Bazaar.KEY));
+    if (raw instanceof Map<?, ?> ready && ready.containsKey("info") && ready.containsKey("schema")) {
+      // Already a declaration (built with Bazaar.declareDiscoveryExtension, e.g. in YAML).
+      return route;
+    }
     Map<String, Object> out = new LinkedHashMap<>(extensions);
     out.remove(Bazaar.KEY);
     if (raw instanceof Map<?, ?> map) {
@@ -117,31 +124,5 @@ public final class BazaarDeclarations implements X402RouteCustomizer {
   @SuppressWarnings("unchecked")
   private static Map<String, Object> cast(Map<?, ?> map) {
     return (Map<String, Object>) map;
-  }
-
-  /** Spring binds lists inside {@code Map<String, Object>} as maps keyed "0", "1", …. */
-  static Object restore(Object value) {
-    if (value instanceof Map<?, ?> map) {
-      boolean indexed = !map.isEmpty();
-      for (int i = 0; i < map.size() && indexed; i++) {
-        indexed = map.containsKey(String.valueOf(i));
-      }
-      if (indexed) {
-        List<Object> list = new ArrayList<>();
-        for (int i = 0; i < map.size(); i++) {
-          list.add(restore(map.get(String.valueOf(i))));
-        }
-        return list;
-      }
-      Map<String, Object> out = new LinkedHashMap<>();
-      map.forEach((k, v) -> out.put(String.valueOf(k), restore(v)));
-      return out;
-    }
-    if (value instanceof List<?> list) {
-      List<Object> out = new ArrayList<>();
-      list.forEach(v -> out.add(restore(v)));
-      return out;
-    }
-    return value;
   }
 }

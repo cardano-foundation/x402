@@ -14,6 +14,7 @@ import static com.github.tomakehurst.wiremock.core.WireMockConfiguration.wireMoc
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
+import com.bloxbean.cardano.client.api.model.ProtocolParams;
 import com.github.tomakehurst.wiremock.junit5.WireMockExtension;
 import java.math.BigInteger;
 import java.time.Clock;
@@ -26,6 +27,7 @@ import java.util.Map;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.RegisterExtension;
 import org.x402.mechanisms.cardano.CardanoTransactionDecoder;
+import org.x402.mechanisms.cardano.testing.Ccl;
 import org.x402.mechanisms.cardano.testing.Vectors;
 
 /** The Blockfrost backend against a WireMock Blockfrost: every SPI method, incl. evidence. */
@@ -116,11 +118,11 @@ class BlockfrostChainBackendTest {
             .willReturn(okJson("{\"coins_per_utxo_size\":\"4310\",\"min_fee_a\":44,\"min_fee_b\":155381}")));
     BlockfrostChainBackend backend = backend(false);
 
-    ProtocolParameters first = backend.getProtocolParameters("cardano:preprod");
-    ProtocolParameters second = backend.getProtocolParameters("cardano:preprod");
+    ProtocolParams first = backend.getProtocolParameters("cardano:preprod");
+    ProtocolParams second = backend.getProtocolParameters("cardano:preprod");
 
     assertThat(first)
-        .isEqualTo(new ProtocolParameters(BigInteger.valueOf(4310), BigInteger.valueOf(44), BigInteger.valueOf(155381)));
+        .isEqualTo(Ccl.params(BigInteger.valueOf(4310), BigInteger.valueOf(44), BigInteger.valueOf(155381)));
     assertThat(second).isEqualTo(first);
     wm.verify(1, getRequestedFor(urlEqualTo("/epochs/latest/parameters")));
   }
@@ -150,7 +152,6 @@ class BlockfrostChainBackendTest {
 
     assertThat(backend(true).submitTransaction(tx, "cardano:preprod").status())
         .isEqualTo(SettlementEvidence.Status.CONFIRMED);
-    backend(true).waitForConfirmation(hash, "cardano:preprod");
   }
 
   @Test
@@ -211,5 +212,152 @@ class BlockfrostChainBackendTest {
         .isEqualTo("https://cardano-preprod.blockfrost.io/api/v0");
     assertThat(BlockfrostChainBackend.defaultBaseUrl("cardano:preview"))
         .isEqualTo("https://cardano-preview.blockfrost.io/api/v0");
+  }
+
+  @Test
+  void anOutputIndexPast32BitsNeverMatchesIndexZero() {
+    wm.stubFor(get("/txs/" + TX + "/utxos").willReturn(okJson(utxos("null"))));
+
+    assertThat(backend(false).getUtxo(TX + "#4294967296", "cardano:preprod").exists()).isFalse();
+  }
+
+  @Test
+  void anOutputIndexPast32BitsNeverMatchesIndexZeroOnTheAddressScan() {
+    wm.stubFor(get("/txs/" + TX + "/utxos").willReturn(okJson(
+        "{\"hash\":\"" + TX + "\",\"inputs\":[],\"outputs\":[{\"output_index\":0,\"address\":\""
+            + PAYER + "\",\"amount\":[{\"unit\":\"lovelace\",\"quantity\":\"5000000\"}]}]}")));
+    wm.stubFor(get(urlPathEqualTo("/addresses/" + PAYER + "/utxos")).willReturn(okJson(
+        "[{\"tx_hash\":\"" + TX + "\",\"output_index\":0,\"amount\":[]}]")));
+
+    assertThat(backend(false).getUtxo(TX + "#4294967296", "cardano:preprod").exists()).isFalse();
+  }
+
+  @Test
+  void aFailedWalletPageIsALookupFailureNotAShortList() {
+    StringBuilder full = new StringBuilder("[");
+    for (int i = 0; i < 100; i++) {
+      full.append(i == 0 ? "" : ",").append("{\"tx_hash\":\"").append(TX).append("\",\"output_index\":")
+          .append(i).append(",\"amount\":[{\"unit\":\"lovelace\",\"quantity\":\"1000000\"}]}");
+    }
+    full.append("]");
+    wm.stubFor(get(urlPathEqualTo("/addresses/" + PAYER + "/utxos")).withQueryParam("page", equalTo("1"))
+        .willReturn(okJson(full.toString())));
+    wm.stubFor(get(urlPathEqualTo("/addresses/" + PAYER + "/utxos")).withQueryParam("page", equalTo("2"))
+        .willReturn(aResponse().withStatus(500).withBody("boom")));
+
+    assertThatThrownBy(() -> backend(false).getAll(PAYER)).isInstanceOf(ChainLookupException.class);
+  }
+
+  @Test
+  void aWalletPageThatIsNotAListIsALookupFailure() {
+    wm.stubFor(get(urlPathEqualTo("/addresses/" + PAYER + "/utxos"))
+        .willReturn(okJson("{\"error\":\"unexpected\"}")));
+
+    assertThatThrownBy(() -> backend(false).getAll(PAYER)).isInstanceOf(ChainLookupException.class);
+  }
+
+  @Test
+  void aUtxoAnswerWithoutOutputsIsALookupFailureNotSpent() {
+    wm.stubFor(get("/txs/" + TX + "/utxos").willReturn(okJson("{\"hash\":\"" + TX + "\"}")));
+
+    assertThatThrownBy(() -> backend(false).getUtxo(TX + "#0", "cardano:preprod"))
+        .isInstanceOf(ChainLookupException.class);
+  }
+
+  @Test
+  void aMatchingOutputWithoutAnAddressIsALookupFailureNotSpent() {
+    wm.stubFor(get("/txs/" + TX + "/utxos").willReturn(okJson(
+        "{\"hash\":\"" + TX + "\",\"outputs\":[{\"output_index\":0,\"amount\":[]}]}")));
+
+    assertThatThrownBy(() -> backend(false).getUtxo(TX + "#0", "cardano:preprod"))
+        .isInstanceOf(ChainLookupException.class);
+  }
+
+  @Test
+  void anAddressScanPageThatIsNotAListIsALookupFailure() {
+    wm.stubFor(get("/txs/" + TX + "/utxos").willReturn(okJson(
+        "{\"hash\":\"" + TX + "\",\"outputs\":[{\"output_index\":0,\"address\":\""
+            + PAYER + "\",\"amount\":[{\"unit\":\"lovelace\",\"quantity\":\"5000000\"}]}]}")));
+    wm.stubFor(get(urlPathEqualTo("/addresses/" + PAYER + "/utxos")).willReturn(okJson("{}")));
+
+    assertThatThrownBy(() -> backend(false).getUtxo(TX + "#0", "cardano:preprod"))
+        .isInstanceOf(ChainLookupException.class);
+  }
+
+  @Test
+  void anOversizedBlockHeightIsALookupFailure() {
+    wm.stubFor(get("/txs/" + TX).willReturn(okJson(
+        "{\"hash\":\"" + TX + "\",\"block_height\":18446744073709551616}")));
+    wm.stubFor(get("/blocks/latest").willReturn(okJson("{\"height\":103}")));
+
+    assertThatThrownBy(() -> backend(false).getTransactionEvidence(TX, "cardano:preprod"))
+        .isInstanceOf(ChainLookupException.class);
+  }
+
+  @Test
+  void evidenceForAnotherOrNoTransactionIsALookupFailure() {
+    wm.stubFor(get("/blocks/latest").willReturn(okJson("{\"height\":103}")));
+    for (String body : new String[] {"{\"block_height\":100}",
+        "{\"hash\":\"" + "cd".repeat(32) + "\",\"block_height\":100}"}) {
+      wm.stubFor(get("/txs/" + TX).willReturn(okJson(body)));
+      assertThatThrownBy(() -> backend(false).getTransactionEvidence(TX, "cardano:preprod"))
+          .as(body).isInstanceOf(ChainLookupException.class);
+    }
+  }
+
+  @Test
+  void aMissingTipIsALookupFailure() {
+    wm.stubFor(get("/txs/" + TX).willReturn(okJson("{\"hash\":\"" + TX + "\",\"block_height\":100}")));
+    wm.stubFor(get("/blocks/latest").willReturn(aResponse().withStatus(404)));
+
+    assertThatThrownBy(() -> backend(false).getTransactionEvidence(TX, "cardano:preprod"))
+        .isInstanceOf(ChainLookupException.class);
+  }
+
+  @Test
+  void aMistypedConsumedByIsALookupFailureNotUnspent() {
+    wm.stubFor(get("/txs/" + TX + "/utxos").willReturn(okJson(utxos("7"))));
+
+    assertThatThrownBy(() -> backend(false).getUtxo(TX + "#0", "cardano:preprod"))
+        .isInstanceOf(ChainLookupException.class);
+  }
+
+  @Test
+  void malformedTransactionEvidenceIsALookupFailure() {
+    wm.stubFor(get("/blocks/latest").willReturn(okJson("{\"height\":103}")));
+    for (String body : new String[] {"null", "[]", "{\"hash\":\"" + TX + "\",\"block_height\":100,\"valid_contract\":\"false\"}"}) {
+      wm.stubFor(get("/txs/" + TX).willReturn(okJson(body)));
+      assertThatThrownBy(() -> backend(false).getTransactionEvidence(TX, "cardano:preprod"))
+          .as(body).isInstanceOf(ChainLookupException.class);
+    }
+  }
+
+  @Test
+  void anEmptyConsumedByIsALookupFailureNotUnspent() {
+    wm.stubFor(get("/txs/" + TX + "/utxos").willReturn(okJson(utxos("\"\""))));
+
+    assertThatThrownBy(() -> backend(false).getUtxo(TX + "#0", "cardano:preprod"))
+        .isInstanceOf(ChainLookupException.class);
+  }
+
+  @Test
+  void anAddressScanRowWithoutAnIndexIsALookupFailureNotAMatch() {
+    wm.stubFor(get("/txs/" + TX + "/utxos").willReturn(okJson(
+        "{\"hash\":\"" + TX + "\",\"outputs\":[{\"output_index\":0,\"address\":\""
+            + PAYER + "\",\"amount\":[{\"unit\":\"lovelace\",\"quantity\":\"5000000\"}]}]}")));
+    wm.stubFor(get(urlPathEqualTo("/addresses/" + PAYER + "/utxos")).willReturn(okJson(
+        "[{\"tx_hash\":\"" + TX + "\",\"amount\":[]}]")));
+
+    assertThatThrownBy(() -> backend(false).getUtxo(TX + "#0", "cardano:preprod"))
+        .isInstanceOf(ChainLookupException.class);
+  }
+
+  @Test
+  void anOutputRowWithoutAnIndexIsALookupFailureNotSpent() {
+    wm.stubFor(get("/txs/" + TX + "/utxos").willReturn(okJson(
+        "{\"hash\":\"" + TX + "\",\"outputs\":[{\"address\":\"" + PAYER + "\",\"amount\":[]}]}")));
+
+    assertThatThrownBy(() -> backend(false).getUtxo(TX + "#0", "cardano:preprod"))
+        .isInstanceOf(ChainLookupException.class);
   }
 }

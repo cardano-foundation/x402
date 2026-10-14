@@ -1,5 +1,8 @@
 package org.x402.mechanisms.cardano.exact.masumi;
 
+import com.bloxbean.cardano.client.plutus.spec.BigIntPlutusData;
+import com.bloxbean.cardano.client.plutus.spec.ListPlutusData;
+import com.bloxbean.cardano.client.plutus.spec.PlutusData;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
@@ -14,13 +17,12 @@ import java.util.Map;
 import org.junit.jupiter.api.Test;
 import org.x402.mechanisms.cardano.CardanoAddresses;
 import org.x402.mechanisms.cardano.Cbor;
-import org.x402.mechanisms.cardano.PlutusData;
+import org.x402.mechanisms.cardano.PlutusEncoding;
 import org.x402.mechanisms.cardano.testing.MasumiFixtures;
 import org.x402.mechanisms.cardano.testing.TxBuilder;
 
 /**
- * COSE, datum, identifier, LZ and issuance edge cases. Added after the implementation for branch
- * coverage; not red-first.
+ * COSE, datum, identifier, LZ and issuance edge cases.
  */
 class MasumiPrimitivesTest {
 
@@ -41,7 +43,7 @@ class MasumiPrimitivesTest {
         .integer(-2).bytes(TxBuilder.WALLET.publicKeyBytes());
   }
 
-  /** Signs an arbitrary protected header the way Evolution re-encodes it. */
+  /** Signs an arbitrary protected header the way a verifier re-encodes it. */
   private static String sign1(byte[] protectedBytes, byte[] unprotected, byte[] payload) {
     byte[] sig =
         new EdDSASigningProvider()
@@ -127,26 +129,26 @@ class MasumiPrimitivesTest {
   @Test
   void datumParsingAndCredentials() {
     PlutusData datum = MasumiDatum.build(MasumiFixtures.lockInput(MasumiFixtures.issue(b -> {}), 0));
-    assertThat(MasumiDatum.parse(datum.toCbor())).isNotNull();
+    assertThat(MasumiDatum.parse(PlutusEncoding.encode(datum))).isNotNull();
     for (int i = 0; i < 19; i++) {
-      assertThat(MasumiDatum.parse(MasumiFixtures.withField(datum, i, new PlutusData.ListData(List.of()))))
+      assertThat(MasumiDatum.parse(MasumiFixtures.withField(datum, i, new ListPlutusData())))
           .as("field " + i).isNull();
     }
-    assertThat(MasumiDatum.parse(MasumiFixtures.withField(datum, 18, PlutusData.Constr.of(0, PlutusData.IntData.of(1))))).isNull();
-    assertThat(MasumiDatum.parse(PlutusData.Constr.of(1).toCbor())).isNull();
+    assertThat(MasumiDatum.parse(MasumiFixtures.withField(datum, 18, PlutusEncoding.constr(0, BigIntPlutusData.of(1))))).isNull();
+    assertThat(MasumiDatum.parse(PlutusEncoding.encode(PlutusEncoding.constr(1)))).isNull();
 
-    PlutusData.Constr address = (PlutusData.Constr) ((PlutusData.Constr) datum).fields().get(0);
-    PlutusData shortHash = PlutusData.Constr.of(0, PlutusData.Constr.of(0, PlutusData.BytesData.ofHex("00")), PlutusData.Constr.of(1));
-    PlutusData badCred = PlutusData.Constr.of(0, PlutusData.Constr.of(2, PlutusData.BytesData.ofHex(TxBuilder.hash28(1))), PlutusData.Constr.of(1));
-    PlutusData badOpt = PlutusData.Constr.of(0, address.fields().get(0), PlutusData.Constr.of(1, PlutusData.IntData.of(1)));
-    PlutusData badRef = PlutusData.Constr.of(0, address.fields().get(0), PlutusData.Constr.of(0, PlutusData.Constr.of(2)));
-    PlutusData negPointer = PlutusData.Constr.of(0, address.fields().get(0),
-        PlutusData.Constr.of(0, PlutusData.Constr.of(1, PlutusData.IntData.of(-1), PlutusData.IntData.of(0), PlutusData.IntData.of(0))));
-    for (PlutusData bad : List.of(shortHash, badCred, badOpt, badRef, negPointer, PlutusData.IntData.of(1))) {
+    PlutusData address = PlutusEncoding.fields(datum).get(0);
+    PlutusData shortHash = PlutusEncoding.constr(0, PlutusEncoding.constr(0, PlutusEncoding.bytes("00")), PlutusEncoding.constr(1));
+    PlutusData badCred = PlutusEncoding.constr(0, PlutusEncoding.constr(2, PlutusEncoding.bytes(TxBuilder.hash28(1))), PlutusEncoding.constr(1));
+    PlutusData badOpt = PlutusEncoding.constr(0, PlutusEncoding.fields(address).get(0), PlutusEncoding.constr(1, BigIntPlutusData.of(1)));
+    PlutusData badRef = PlutusEncoding.constr(0, PlutusEncoding.fields(address).get(0), PlutusEncoding.constr(0, PlutusEncoding.constr(2)));
+    PlutusData negPointer = PlutusEncoding.constr(0, PlutusEncoding.fields(address).get(0),
+        PlutusEncoding.constr(0, PlutusEncoding.constr(1, BigIntPlutusData.of(-1), BigIntPlutusData.of(0), BigIntPlutusData.of(0))));
+    for (PlutusData bad : List.of(shortHash, badCred, badOpt, badRef, negPointer, BigIntPlutusData.of(1))) {
       assertThat(MasumiDatum.parse(MasumiFixtures.withField(datum, 0, bad))).isNull();
-      assertThat(MasumiDatum.parse(MasumiFixtures.withField(datum, 1, PlutusData.Constr.of(0, bad)))).isNull();
+      assertThat(MasumiDatum.parse(MasumiFixtures.withField(datum, 1, PlutusEncoding.constr(0, bad)))).isNull();
     }
-    assertThat(MasumiDatum.parse(MasumiFixtures.withField(datum, 1, PlutusData.Constr.of(2)))).isNull();
+    assertThat(MasumiDatum.parse(MasumiFixtures.withField(datum, 1, PlutusEncoding.constr(2)))).isNull();
 
     // Pointer and base addresses round-trip through the datum.
     byte[] pointerBytes = new byte[33];
@@ -165,7 +167,7 @@ class MasumiPrimitivesTest {
     var withPointer = new MasumiDatum.LockInput(pointer, input.sellerAddress(), ADDRESS, input.sellerAddress(), input.referenceKey(),
         input.referenceSignature(), input.sellerNonce(), input.buyerNonce(), input.agentIdentifier(), BigInteger.ZERO,
         input.inputHash(), input.payByTime(), input.submitResultTime(), input.unlockTime(), input.externalDisputeUnlockTime());
-    MasumiDatum.View view = MasumiDatum.parse(MasumiDatum.build(withPointer).toCbor());
+    MasumiDatum.View view = MasumiDatum.parse(PlutusEncoding.encode(MasumiDatum.build(withPointer)));
     assertThat(view.buyer().pointer()).isNotNull();
     assertThat(view.buyerReturnAddress()).isNotNull();
     assertThat(view.sellerReturnAddress()).isNotNull();

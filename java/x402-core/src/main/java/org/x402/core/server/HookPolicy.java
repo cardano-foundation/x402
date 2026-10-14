@@ -7,8 +7,8 @@ import org.x402.core.types.PaymentRequirements;
 import org.x402.core.utils.JsonValues;
 
 /**
- * Mutation policies for scheme enrichment hooks (TS {@code server/hookPolicy.ts}). Violations
- * throw {@link IllegalStateException} with TS's message.
+ * Mutation policies for scheme enrichment hooks. Violations
+ * throw {@link IllegalStateException}.
  */
 final class HookPolicy {
 
@@ -17,7 +17,7 @@ final class HookPolicy {
   private HookPolicy() {}
 
   /**
-   * TS {@code assertAcceptsAdditiveExtraAfterSchemeEnrich}: a scheme may only add {@code extra}
+   * A scheme may only add {@code extra}
    * keys, and only to its own accepts.
    *
    * @param baseline the accepts before the hook
@@ -70,7 +70,7 @@ final class HookPolicy {
   }
 
   /**
-   * TS {@code assertAdditivePayloadEnrichment}: settle-payload enrichment may only add keys.
+   * Settle-payload enrichment may only add keys.
    *
    * @param payload the client payload
    * @param enrichment the scheme's additions
@@ -87,7 +87,7 @@ final class HookPolicy {
   }
 
   /**
-   * TS {@code assertAdditiveSettlementExtra}: response enrichment may only add keys, recursing
+   * Response enrichment may only add keys, recursing
    * into objects present on both sides.
    *
    * @param target the settlement {@code extra}
@@ -119,7 +119,7 @@ final class HookPolicy {
   }
 
   /**
-   * TS {@code mergeAdditiveSettlementExtra}: deep-merges objects, otherwise the enrichment wins.
+   * Deep-merges objects, otherwise the enrichment wins.
    *
    * @param target the settlement {@code extra}
    * @param enrichment the additions

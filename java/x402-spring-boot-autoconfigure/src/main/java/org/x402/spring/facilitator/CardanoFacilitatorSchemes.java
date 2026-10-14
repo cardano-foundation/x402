@@ -18,12 +18,13 @@ import org.x402.mechanisms.cardano.exact.masumi.MasumiRegistryValidator;
 import org.x402.spring.X402ConfigurationException;
 import org.x402.spring.cardano.NetworkBeans;
 import org.x402.spring.cardano.X402CardanoNetworkBeans;
+import org.x402.spring.cardano.X402CardanoProperties;
 
 /**
  * The auto-built Cardano facilitator schemes, one per {@code
- * x402.facilitator-server.cardano.networks[]} entry (plan §3a level 6). A custom scheme can wrap
- * {@link #forNetwork(String)} by composition (its {@code verify}/{@code settle} are final,
- * decision 121) and register itself in an {@link X402FacilitatorCustomizer}.
+ * x402.facilitator-server.cardano.networks[]} entry. A custom scheme can wrap
+ * {@link #forNetwork(String)} by composition (its {@code verify}/{@code settle} are final)
+ * and register itself in an {@link X402FacilitatorCustomizer}.
  */
 public final class CardanoFacilitatorSchemes {
 
@@ -60,7 +61,7 @@ public final class CardanoFacilitatorSchemes {
       CardanoChainBackend backend = NetworkBeans.resolve(network, entries.size(), networkBeans,
           b -> b.chainBackend(network), backendBean, "CardanoChainBackend");
       if (backend == null) {
-        X402FacilitatorServerProperties.Blockfrost bf = entry.blockfrost();
+        X402CardanoProperties.Blockfrost bf = entry.blockfrost();
         String projectId = bf == null ? null : bf.projectId();
         String baseUrl = bf == null || bf.baseUrl() == null || bf.baseUrl().isBlank() ? null
             : bf.baseUrl();

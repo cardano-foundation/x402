@@ -4,7 +4,7 @@ import java.util.HexFormat;
 import java.util.regex.Pattern;
 
 /**
- * The Masumi compatibility identifier (TS {@code exact/masumi/identifier.ts}): five
+ * The Masumi compatibility identifier: five
  * period-delimited text segments, LZString-compressed, as lowercase hex.
  */
 public final class MasumiIdentifier {

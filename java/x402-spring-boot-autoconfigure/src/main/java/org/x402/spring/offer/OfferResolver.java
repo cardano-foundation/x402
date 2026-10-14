@@ -32,7 +32,7 @@ import org.x402.spring.properties.X402Properties.Facilitator;
 import org.x402.spring.properties.X402Properties.Offer;
 
 /**
- * Turns offers + accounts + defaults into core routes (plan Roles §1a rules 1–5 and 8). Every
+ * Turns offers + accounts + defaults into core routes. Every
  * problem is an {@link X402ConfigurationException} naming the offer and option index.
  */
 public final class OfferResolver {
@@ -159,8 +159,8 @@ public final class OfferResolver {
     }
 
     /**
-     * Sets the server whose registered schemes check static prices at startup (TS throws on
-     * {@code "1.5 ADA"}; the starter fails startup instead of the first request).
+     * Sets the server whose registered schemes check static prices at startup, so an
+     * unsupported price such as {@code "1.5 ADA"} fails startup instead of the first request.
      *
      * @param value the server, may be {@code null}
      * @return this builder

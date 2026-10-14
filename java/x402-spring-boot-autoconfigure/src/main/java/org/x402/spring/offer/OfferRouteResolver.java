@@ -13,7 +13,7 @@ import org.x402.http.RouteResolver;
 
 /**
  * Routes keyed by offer name. A request whose adapter carries an {@link OfferSelection} resolves to
- * that offer; otherwise the {@code path:} offers are matched with TS route-pattern semantics (raw
+ * that offer; otherwise the {@code path:} offers are matched as x402 route patterns (raw
  * path first, then the decoded one; {@code HEAD} also tries {@code GET}, as Spring dispatches HEAD
  * to GET handlers).
  */

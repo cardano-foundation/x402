@@ -9,22 +9,22 @@ import java.util.List;
 import java.util.Map;
 import org.x402.mechanisms.cardano.CardanoTransactionDecoder;
 import org.x402.mechanisms.cardano.chain.CardanoChainBackend;
-import org.x402.mechanisms.cardano.chain.ProtocolParameters;
+import com.bloxbean.cardano.client.api.model.ProtocolParams;
 import org.x402.mechanisms.cardano.chain.SettlementEvidence;
 import org.x402.mechanisms.cardano.chain.SubmissionResult;
 import org.x402.mechanisms.cardano.chain.UtxoSnapshot;
 
 /**
- * A chain backend that replays the chain-stub snapshot exported with each TS fixture
- * ({@code java/tools/ts-vectors/export-cardano.ts}, {@code signerFor}). It behaves exactly like
- * the TS stub signer the fixture was verified against, and records every submission.
+ * A chain backend that replays the chain-stub snapshot exported with each fixture
+ * (see {@code java/tools/ts-vectors}). It answers every chain read from that snapshot, as the
+ * stub the fixture was originally verified against did, and records every submission.
  */
 public final class SnapshotChainBackend implements CardanoChainBackend {
 
   private final JsonNode chain;
   private final List<String> submissions = Collections.synchronizedList(new ArrayList<>());
   private volatile boolean submitted;
-  private ProtocolParameters protocolParametersOverride;
+  private ProtocolParams protocolParametersOverride;
 
   /**
    * Creates the backend.
@@ -41,7 +41,7 @@ public final class SnapshotChainBackend implements CardanoChainBackend {
    * @param parameters the parameters to serve
    * @return this backend
    */
-  public SnapshotChainBackend withProtocolParameters(ProtocolParameters parameters) {
+  public SnapshotChainBackend withProtocolParameters(ProtocolParams parameters) {
     this.protocolParametersOverride = parameters;
     return this;
   }
@@ -90,7 +90,7 @@ public final class SnapshotChainBackend implements CardanoChainBackend {
   }
 
   @Override
-  public ProtocolParameters getProtocolParameters(String network) {
+  public ProtocolParams getProtocolParameters(String network) {
     if (chain.has("protocolParametersError")) {
       throw new IllegalStateException(chain.get("protocolParametersError").asText());
     }
@@ -101,7 +101,7 @@ public final class SnapshotChainBackend implements CardanoChainBackend {
     if (params == null || params.isNull()) {
       return null;
     }
-    return new ProtocolParameters(
+    return Ccl.params(
         new BigInteger(params.get("coinsPerUtxoByte").asText()),
         new BigInteger(params.get("minFeeCoefficient").asText()),
         new BigInteger(params.get("minFeeConstant").asText()));

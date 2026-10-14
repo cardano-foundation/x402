@@ -11,8 +11,8 @@ import java.util.function.Function;
 
 /**
  * Turns the e2e catalog and the harness environment into Spring properties for the x402 starter
- * ({@code x402.facilitators}, {@code x402.accounts}, {@code x402.routes}), mirroring how the TS e2e
- * server resolves routes ({@code e2e/src/mechanisms.ts} {@code resolvePaymentRoutes}).
+ * ({@code x402.facilitators}, {@code x402.accounts}, {@code x402.routes}), with the routes the
+ * catalog lists for the Java SDK.
  *
  * <ul>
  *   <li>One account per (network, transfer method): {@code cardano} (SERVER_CARDANO_ADDRESS),
@@ -44,7 +44,7 @@ public final class E2eServerConfig {
   /** Property set to {@code true} when {@link #ANNOTATED_PATH} is served. */
   public static final String ANNOTATED_ROUTE_PROPERTY = "e2e.annotated-route";
 
-  /** always-succeeds Plutus V3 fixture, same bytes as the TS e2e server. */
+  /** always-succeeds Plutus V3 fixture. */
   static final String ALWAYS_SUCCEEDS_SCRIPT = "4d01000033222220051200120011";
 
   static final String ALWAYS_SUCCEEDS_DATUM = "d8799f182aff";
@@ -260,7 +260,7 @@ public final class E2eServerConfig {
     p.put(accept + "price.asset", asset);
   }
 
-  /** Bazaar declaration matching the TS e2e server's {@code routeDiscoveryOutput()}. */
+  /** Bazaar discovery output declared for the protected route. */
   private static void putBazaar(Map<String, Object> p, String b) {
     p.put(b + "output.example.message", PROTECTED_ROUTE_MESSAGE);
     p.put(b + "output.example.timestamp", "2024-01-01T00:00:00Z");
@@ -279,7 +279,7 @@ public final class E2eServerConfig {
       }
     } else if (node.isArray()) {
       // One List value: index-keyed properties would bind as a map {"0": …, "1": …} under
-      // Map<String, Object> (decision 141), while a List value passes through as a JSON array.
+      // Map<String, Object>, while a List value passes through as a JSON array.
       p.put(prefix, new com.fasterxml.jackson.databind.ObjectMapper().convertValue(node,
           java.util.List.class));
     } else if (node.isBoolean()) {

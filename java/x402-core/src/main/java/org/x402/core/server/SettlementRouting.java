@@ -4,7 +4,7 @@ import java.util.Objects;
 
 /**
  * Where a settle (and its pending retry, and a settle-on-cancel) goes: {@code verifiedBy}, else the
- * pin, else the build facilitator (plan Roles §1b). Settle never moves to another facilitator.
+ * pin, else the build facilitator. Settle never moves to another facilitator.
  *
  * @param route the option's route
  * @param verifiedBy the facilitator that verified, or {@code null}
@@ -19,7 +19,7 @@ public record SettlementRouting(FacilitatorRoute route, String verifiedBy, Routi
   }
 
   /**
-   * Route by kind with the current snapshot (TS behaviour).
+   * Route by kind with the current snapshot.
    *
    * @return the routing
    */

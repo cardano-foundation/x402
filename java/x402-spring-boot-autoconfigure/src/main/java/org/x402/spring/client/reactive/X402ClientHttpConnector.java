@@ -11,7 +11,8 @@ import reactor.core.publisher.Mono;
 /**
  * Two connectors built from the same settings: the paid exchange (marked by {@link
  * X402ExchangeFilterFunction#PAID_REQUEST} in the Reactor context) goes through the one that never
- * follows redirects, everything else through the configured one (decision 075).
+ * follows redirects, everything else through the configured one, so {@code PAYMENT-SIGNATURE}
+ * never reaches a redirect target.
  */
 public final class X402ClientHttpConnector implements ClientHttpConnector {
 

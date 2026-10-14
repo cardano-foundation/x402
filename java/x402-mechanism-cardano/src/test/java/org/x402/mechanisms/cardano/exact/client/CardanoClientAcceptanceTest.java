@@ -20,6 +20,7 @@ import org.x402.core.types.PaymentPayload;
 import org.x402.core.types.PaymentRequirements;
 import org.x402.core.types.ResourceInfo;
 import org.x402.core.types.VerifyResponse;
+import org.x402.mechanisms.cardano.PlutusEncoding;
 import org.x402.mechanisms.cardano.CardanoAddresses;
 import org.x402.mechanisms.cardano.CardanoNetworks;
 import org.x402.mechanisms.cardano.CardanoTransactionDecoder;
@@ -38,9 +39,9 @@ import org.x402.mechanisms.cardano.testing.TxBuilder;
 import org.x402.mechanisms.cardano.testing.Vectors;
 
 /**
- * Java-built payloads for the default, script and masumi methods pass the WP7 facilitator's
- * verify (TS rules 1–9 plus method checks) against a chain stub holding the wallet's UTxOs; the
- * lock datum equals the TS-built one byte for byte; nothing is ever broadcast.
+ * Java-built payloads for the default, script and masumi methods pass the Java facilitator's
+ * verify (rules 1–9 plus method checks) against a chain stub holding the wallet's UTxOs; the
+ * lock datum equals the one the TypeScript SDK builds, byte for byte; nothing is ever broadcast.
  */
 class CardanoClientAcceptanceTest {
 
@@ -197,7 +198,7 @@ class CardanoClientAcceptanceTest {
             BigInteger.valueOf(4310),
             MasumiBuyerInput.NONE);
 
-    assertThat(HexFormat.of().formatHex(lock.datum().toCbor())).isEqualTo(datum.get("datumHex").asText());
+    assertThat(HexFormat.of().formatHex(PlutusEncoding.encode(lock.datum()))).isEqualTo(datum.get("datumHex").asText());
     assertThat(lock.lockedLovelace()).isEqualTo(new BigInteger(req.amount()).add(lock.collateralLovelace()));
   }
 

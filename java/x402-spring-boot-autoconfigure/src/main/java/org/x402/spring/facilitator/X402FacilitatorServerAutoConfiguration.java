@@ -14,6 +14,8 @@ import org.springframework.boot.autoconfigure.condition.ConditionalOnWebApplicat
 import org.springframework.boot.context.properties.EnableConfigurationProperties;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
+import org.springframework.core.Ordered;
+import org.springframework.core.annotation.Order;
 import org.x402.core.FacilitatorExtension;
 import org.x402.core.PendingSettlementStore;
 import org.x402.core.facilitator.InMemoryPendingSettlementStore;
@@ -32,12 +34,12 @@ import org.x402.spring.autoconfigure.X402AutoConfiguration;
 import org.x402.spring.cardano.X402CardanoNetworkBeans;
 
 /**
- * The Spring facilitator server (WP12, beyond parity): an {@link X402Facilitator} built from
- * {@code x402.facilitator-server.*}, the framework-free {@link FacilitatorHttpHandler}, HTTP
+ * The Spring facilitator server (beyond parity with other SDKs): an {@link X402Facilitator} built
+ * from {@code x402.facilitator-server.*}, the framework-free {@link FacilitatorHttpHandler}, HTTP
  * endpoints on WebMvc or WebFlux, and a {@link LocalFacilitatorClient} for {@code
- * x402.local-facilitator=true}. Every bean backs off for your own (plan §3a). Independent of
- * {@code x402.enabled}; no built-in authentication (use Spring Security, and exempt the base path
- * from CSRF).
+ * x402.local-facilitator=true}. Every bean backs off for your own. Independent of {@code
+ * x402.enabled}; no built-in authentication (use Spring Security, and exempt the base path from
+ * CSRF).
  */
 @AutoConfiguration(before = X402AutoConfiguration.class)
 @ConditionalOnProperty(prefix = "x402.facilitator-server", name = "enabled", havingValue = "true")
@@ -58,23 +60,10 @@ public class X402FacilitatorServerAutoConfiguration {
   @Bean
   @ConditionalOnMissingBean
   X402Facilitator x402Facilitator(ObjectProvider<X402FacilitatorCustomizer> customizers,
-      ObjectProvider<FacilitatorExtension> extensions,
-      ObjectProvider<CardanoFacilitatorSchemes> cardano) {
+      ObjectProvider<FacilitatorExtension> extensions) {
     X402Facilitator facilitator = new X402Facilitator();
     customizers.orderedStream().forEach(c -> c.customize(facilitator));
     extensions.orderedStream().forEach(facilitator::registerExtension);
-    CardanoFacilitatorSchemes schemes = cardano.getIfAvailable();
-    if (schemes != null) {
-      List<SupportedKind> claimed = facilitator.getSupported().kinds();
-      for (String network : schemes.networks()) {
-        ExactCardanoFacilitatorScheme scheme = schemes.forNetwork(network);
-        boolean taken = claimed.stream().anyMatch(k -> scheme.scheme().equals(k.scheme())
-            && Networks.matchesPattern(k.network(), network));
-        if (!taken) {
-          facilitator.register(network, scheme);
-        }
-      }
-    }
     return facilitator;
   }
 
@@ -123,6 +112,26 @@ public class X402FacilitatorServerAutoConfiguration {
           deployment.getIfAvailable(), clock.getIfAvailable(Clock::systemUTC), networkBeans,
           backend);
     }
+
+    /**
+     * Registers the configured Cardano networks last, so a scheme a user customizer registered
+     * for the same scheme and network takes precedence.
+     */
+    @Bean
+    @Order(Ordered.LOWEST_PRECEDENCE)
+    X402FacilitatorCustomizer x402CardanoFacilitatorDefaults(CardanoFacilitatorSchemes schemes) {
+      return facilitator -> {
+        List<SupportedKind> claimed = facilitator.getSupported().kinds();
+        for (String network : schemes.networks()) {
+          ExactCardanoFacilitatorScheme scheme = schemes.forNetwork(network);
+          boolean taken = claimed.stream().anyMatch(k -> scheme.scheme().equals(k.scheme())
+              && Networks.matchesPattern(k.network(), network));
+          if (!taken) {
+            facilitator.register(network, scheme);
+          }
+        }
+      };
+    }
   }
 
   /** The {@code x402-facilitator} health component. */
@@ -150,6 +159,7 @@ public class X402FacilitatorServerAutoConfiguration {
   static class MvcEndpoints {
 
     @Bean
+    @ConditionalOnMissingBean(name = "x402FacilitatorRoutes")
     org.springframework.web.servlet.function.RouterFunction<
         org.springframework.web.servlet.function.ServerResponse> x402FacilitatorRoutes(
         FacilitatorHttpHandler handler) {
@@ -166,6 +176,7 @@ public class X402FacilitatorServerAutoConfiguration {
   static class WebFluxEndpoints {
 
     @Bean
+    @ConditionalOnMissingBean(name = "x402FacilitatorRoutes")
     org.springframework.web.reactive.function.server.RouterFunction<
         org.springframework.web.reactive.function.server.ServerResponse> x402FacilitatorRoutes(
         FacilitatorHttpHandler handler) {

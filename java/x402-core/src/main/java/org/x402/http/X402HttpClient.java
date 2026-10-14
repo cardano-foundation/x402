@@ -31,7 +31,8 @@ import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionException;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.Executor;
-import java.util.concurrent.ForkJoinPool;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
 import java.util.concurrent.Flow;
 import javax.net.ssl.SSLContext;
 import javax.net.ssl.SSLParameters;
@@ -44,17 +45,17 @@ import org.x402.core.types.PaymentRequired;
 import org.x402.core.types.SettleResponse;
 
 /**
- * A {@code java.net.http.HttpClient} that pays x402 402 responses (TS {@code wrapFetchWithPayment}
- * + {@code x402HTTPClient}). {@link #wrap} keeps the caller's client type and settings: every
- * method delegates, and {@code send}/{@code sendAsync} add: on 402, decode {@code
- * PAYMENT-REQUIRED}, select and sign with the {@link X402Client}, retry once with {@code
- * PAYMENT-SIGNATURE} (and once more if a payment-response hook recovers).
+ * A {@code java.net.http.HttpClient} that pays x402 402 responses.
+ * {@link #wrap} keeps the caller's client type and settings: every method delegates, and
+ * {@code send}/{@code sendAsync} add: on 402, decode {@code PAYMENT-REQUIRED}, select and sign
+ * with the {@link X402Client}, retry once with {@code PAYMENT-SIGNATURE} (and once more if a
+ * payment-response hook recovers).
  *
  * <ul>
- *   <li><b>Hosts.</b> Without a {@link HostPolicy} any host is paid (wrapping is a deliberate act,
- *       as with TS {@code wrapFetch}). With one, a 402 from an off-list host, or whose {@code
- *       resource.url} is off-list, is returned unpaid and nothing is signed. The delegate must then
- *       have {@code followRedirects() == NEVER}: this client follows redirects itself (like {@code
+ *   <li><b>Hosts.</b> Without a {@link HostPolicy} any host is paid (wrapping is a deliberate act).
+ *       With one, a 402 from an off-list host, or whose {@code resource.url} is off-list, is
+ *       returned unpaid and nothing is signed. The delegate must then have
+ *       {@code followRedirects() == NEVER}: this client follows redirects itself (like {@code
  *       Redirect.NORMAL}, at most 5 hops) and never forwards a signed request to an off-list host
  *       (the redirect response is returned instead). The paid retry is sent straight to the URI
  *       that answered 402 (checked against the policy), never back to an earlier host of the
@@ -65,13 +66,17 @@ import org.x402.core.types.SettleResponse;
  *       limit, or one that was not fully recorded, returns the 402 unpaid with a warning, decided
  *       before anything is signed.
  *   <li><b>Timeout.</b> Requests without their own timeout get {@link #DEFAULT_REQUEST_TIMEOUT}
- *       (240 s), above the 210 s worst server path (two verifies at 15 s, two settles at 90 s).
+ *       (240 s), above a typical paid request: a verify and up to two settle calls at the
+ *       resource server's default facilitator timeouts (15 s and 90 s). Flows that settle more
+ *       often, or longer facilitator timeouts, need a longer request timeout; the resource server
+ *       warns about such routes at startup.
  *   <li><b>Errors.</b> A 402 without {@code PAYMENT-REQUIRED} is returned unchanged. A malformed
  *       header, a refused selection or a request already carrying {@code PAYMENT-SIGNATURE}
- *       throws {@link X402ClientException}, as TS throws.
+ *       throws {@link X402ClientException}.
  * </ul>
  *
- * <p>{@code sendAsync} runs the blocking flow on the delegate's executor, or the common pool.
+ * <p>{@code sendAsync} runs the blocking flow on the client's own daemon threads, never on the
+ * delegate's executor; closing or shutting down the client stops them.
  */
 public final class X402HttpClient extends HttpClient implements AutoCloseable {
 
@@ -88,6 +93,16 @@ public final class X402HttpClient extends HttpClient implements AutoCloseable {
   private final X402Client client;
   private final HostPolicy hostPolicy;
   private final long maxReplayBody;
+  /**
+   * Runs {@link #sendAsync}'s blocking flow. Not the delegate's executor: a blocking send there
+   * occupies a thread the delegate needs to complete the exchange (a single-thread executor
+   * deadlocks). Threads are created on demand and are daemons.
+   */
+  private final ExecutorService async = Executors.newCachedThreadPool(task -> {
+    Thread thread = new Thread(task, "x402-http-async");
+    thread.setDaemon(true);
+    return thread;
+  });
   private final Duration defaultTimeout;
 
   private X402HttpClient(Builder b) {
@@ -280,22 +295,26 @@ public final class X402HttpClient extends HttpClient implements AutoCloseable {
   }
 
   // JDK 21 added HttpClient.close/shutdown/shutdownNow/awaitTermination/isTerminated. This module
-  // targets Java 17, so they are declared here without @Override and reach the delegate by
-  // reflection; on JDK 21+ they override the base methods at runtime, before 21 they do nothing.
+  // targets Java 17, so the methods below (except close, which AutoCloseable declares) carry no
+  // @Override and reach the delegate by reflection; on JDK 21+ they override the base methods at
+  // runtime, before 21 they only stop this wrapper's own threads.
 
   /** Closes the delegate (JDK 21+); a no-op on older runtimes. */
   @Override
   public void close() {
+    async.shutdown();
     invokeLifecycle("close");
   }
 
   /** Starts an orderly shutdown of the delegate (JDK 21+); a no-op on older runtimes. */
   public void shutdown() {
+    async.shutdown();
     invokeLifecycle("shutdown");
   }
 
   /** Shuts the delegate down immediately (JDK 21+); a no-op on older runtimes. */
   public void shutdownNow() {
+    async.shutdownNow();
     invokeLifecycle("shutdownNow");
   }
 
@@ -356,7 +375,6 @@ public final class X402HttpClient extends HttpClient implements AutoCloseable {
   @Override
   public <T> CompletableFuture<HttpResponse<T>> sendAsync(
       HttpRequest request, BodyHandler<T> handler) {
-    Executor executor = delegate.executor().orElse(ForkJoinPool.commonPool());
     return CompletableFuture.supplyAsync(() -> {
       try {
         return send(request, handler);
@@ -366,7 +384,7 @@ public final class X402HttpClient extends HttpClient implements AutoCloseable {
         Thread.currentThread().interrupt();
         throw new CompletionException(e);
       }
-    }, executor);
+    }, async);
   }
 
   @Override
@@ -413,7 +431,7 @@ public final class X402HttpClient extends HttpClient implements AutoCloseable {
     String resourceUrl = required.resource() == null ? null : required.resource().url();
     URI resourceUri = resourceUrl == null ? null : parseUri(resourceUrl);
     if (hostPolicy != null && (resourceUri == null || !hostPolicy.allows(resourceUri))) {
-      // Plan §2: the resource host must also be on the list; a missing one fails closed.
+      // The resource host must also be on the list; a missing one fails closed.
       LOG.log(System.Logger.Level.DEBUG, () -> "[x402] resource.url " + resourceUrl
           + " is missing or not in the host policy; returned unpaid");
       return unpaid.toResponse(handler);
@@ -429,8 +447,8 @@ public final class X402HttpClient extends HttpClient implements AutoCloseable {
       throw new X402ClientException("Payment already attempted");
     }
     // With a HostPolicy the paid retry goes to the policy-checked URI that answered 402 (the last
-    // request of the redirect chain), never back to an unchecked first host (decision 095).
-    // Without one, TS behaviour: the original request is retried.
+    // request of the redirect chain), never back to an unchecked first host.
+    // Without one, the original request is retried.
     HttpRequest base = hostPolicy != null ? unpaid.last() : first;
     boolean withBody = hostPolicy != null ? unpaid.lastHasBody()
         : first.bodyPublisher().isPresent();

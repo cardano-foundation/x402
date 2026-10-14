@@ -14,7 +14,7 @@ import org.x402.core.types.VerifyResponse;
 /**
  * A resource server's facilitator in the same process: calls an {@link X402Facilitator} directly
  * and answers exactly what an {@code HttpFacilitatorClient} would get from a {@link
- * FacilitatorHttpHandler} serving that facilitator (decision 131).
+ * FacilitatorHttpHandler} serving that facilitator.
  *
  * <ul>
  *   <li>A {@link SettleAbortedException} becomes the wire abort result {@code {success:false,
@@ -25,7 +25,7 @@ import org.x402.core.types.VerifyResponse;
  *   <li>The server-internal {@code extensionResponses} side channel is dropped, as on the wire.
  * </ul>
  *
- * <p>Its identifier is the reserved {@value #IDENTIFIER} (decision 098); register it with {@code
+ * <p>Its identifier is the reserved {@value #IDENTIFIER}; register it with {@code
  * X402ResourceServer.Builder.localFacilitator(...)}.
  */
 public final class LocalFacilitatorClient implements InProcessFacilitatorClient {

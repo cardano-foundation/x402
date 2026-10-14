@@ -16,9 +16,8 @@ import org.junit.jupiter.api.TestFactory;
 import org.x402.core.json.X402Json;
 
 /**
- * TS {@code parseRoutePattern} (:1373-1402), {@code normalizePath} (:1410-1434) and {@code
- * normalizeDecodedPath}, checked against the vectors exported from TS ({@code
- * vectors/route-patterns.json}).
+ * Route pattern parsing and path normalization, checked against the vectors exported from the
+ * TypeScript SDK ({@code vectors/route-patterns.json}).
  */
 class RoutePatternParityTest {
 

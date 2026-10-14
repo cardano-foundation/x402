@@ -23,7 +23,7 @@ import org.x402.core.types.PaymentRequirements;
 import org.x402.core.types.VerifyResponse;
 
 /**
- * Plan Roles §1b verify failover: one hop, transport failures only, identical kind only; settle
+ * Verify failover: one hop, transport failures only, identical kind only; settle
  * follows the verifier and never fails over.
  */
 class VerifyFailoverTest {

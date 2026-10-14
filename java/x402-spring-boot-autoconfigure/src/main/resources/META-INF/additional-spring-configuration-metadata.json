@@ -80,7 +80,7 @@
     {
       "name": "x402.routes.*.path",
       "type": "java.lang.String",
-      "description": "x402 route pattern (TS syntax: *, :param, [param]; {var} is rejected) protecting matching requests without an annotation, e.g. \"GET /report/*\"."
+      "description": "x402 route pattern (syntax: *, :param, [param]; {var} is rejected) protecting matching requests without an annotation, e.g. \"GET /report/*\"."
     },
     {
       "name": "x402.routes.*.description",
@@ -206,6 +206,11 @@
       "name": "x402.client.spend-controls.allowed-assets[].max-amount-per-payment",
       "type": "java.lang.String",
       "description": "Cap in atomic units."
+    },
+    {
+      "name": "x402.client.cardano.mnemonic",
+      "type": "java.lang.String",
+      "description": "Default wallet mnemonic for every Cardano network the client pays on; a network's own mnemonic overrides it."
     },
     {
       "name": "x402.client.cardano.networks[].network",

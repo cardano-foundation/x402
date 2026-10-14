@@ -39,7 +39,7 @@ import org.x402.core.types.SettleResponse;
 import org.x402.core.types.SupportedResponse;
 import org.x402.core.types.VerifyResponse;
 
-/** TS {@code HTTPFacilitatorClient} ({@code httpFacilitatorClient.ts}) over java.net.http. */
+/** The HTTP facilitator client over java.net.http. */
 class HttpFacilitatorClientTest {
 
   private final WireMockServer wm = new WireMockServer(options().dynamicPort());

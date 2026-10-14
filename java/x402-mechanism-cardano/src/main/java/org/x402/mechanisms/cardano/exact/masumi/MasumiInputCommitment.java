@@ -6,7 +6,7 @@ import java.util.List;
 import java.util.Map;
 
 /**
- * The Masumi request commitment (TS {@code MasumiInputCommitment}).
+ * The Masumi request commitment.
  *
  * @param version literal {@code "1"}
  * @param algorithm literal {@code "sha256"}
@@ -21,7 +21,7 @@ public record MasumiInputCommitment(String version, String algorithm, List<Masum
   }
 
   /**
-   * The JSON form, in TS field order.
+   * The JSON form, in wire field order.
    *
    * @return the map
    */

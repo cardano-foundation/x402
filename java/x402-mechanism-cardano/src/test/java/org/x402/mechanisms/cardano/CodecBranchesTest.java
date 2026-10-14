@@ -1,5 +1,10 @@
 package org.x402.mechanisms.cardano;
 
+import com.bloxbean.cardano.client.plutus.spec.BigIntPlutusData;
+import com.bloxbean.cardano.client.plutus.spec.BytesPlutusData;
+import com.bloxbean.cardano.client.plutus.spec.ListPlutusData;
+import com.bloxbean.cardano.client.plutus.spec.MapPlutusData;
+import com.bloxbean.cardano.client.plutus.spec.PlutusData;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
@@ -20,7 +25,6 @@ import org.x402.mechanisms.cardano.testing.TxBuilder;
 
 /**
  * CBOR, Plutus data, JCS, addresses, policies and the transaction decoder on malformed input.
- * Added after the implementation for branch coverage; not red-first.
  */
 class CodecBranchesTest {
 
@@ -60,23 +64,23 @@ class CodecBranchesTest {
 
   @Test
   void plutusDataRoundTripsInTheAikenConvention() {
-    PlutusData big = new PlutusData.IntData(BigInteger.TWO.pow(70));
-    PlutusData negBig = new PlutusData.IntData(BigInteger.TWO.pow(70).negate());
-    PlutusData longBytes = new PlutusData.BytesData(new byte[100]);
-    PlutusData map = new PlutusData.MapData(List.of(Map.entry(PlutusData.IntData.of(1), PlutusData.BytesData.ofHex("ab"))));
-    PlutusData constr7 = PlutusData.Constr.of(7, PlutusData.IntData.of(-3));
-    PlutusData constr200 = PlutusData.Constr.of(200);
-    PlutusData all =
-        new PlutusData.ListData(
-            List.of(big, negBig, longBytes, map, new PlutusData.MapData(List.of()), constr7, constr200, new PlutusData.ListData(List.of())));
-    byte[] encoded = all.toCbor();
-    assertThat(PlutusData.fromCbor(encoded)).isEqualTo(all);
-    assertThat(HEX.formatHex(constr200.toCbor())).isEqualTo("d8668218c880");
-    assertThat(longBytes.toString()).startsWith("BytesData[");
-    assertThat(longBytes.hashCode()).isEqualTo(new PlutusData.BytesData(new byte[100]).hashCode());
+    PlutusData big = BigIntPlutusData.of(BigInteger.TWO.pow(70));
+    PlutusData negBig = BigIntPlutusData.of(BigInteger.TWO.pow(70).negate());
+    PlutusData longBytes = BytesPlutusData.of(new byte[100]);
+    MapPlutusData map = new MapPlutusData();
+    map.put(BigIntPlutusData.of(1), PlutusEncoding.bytes("ab"));
+    PlutusData constr7 = PlutusEncoding.constr(7, BigIntPlutusData.of(-3));
+    PlutusData constr200 = PlutusEncoding.constr(200);
+    PlutusData all = PlutusEncoding.list(
+        List.of(big, negBig, longBytes, map, new MapPlutusData(), constr7, constr200, new ListPlutusData()));
+    byte[] encoded = PlutusEncoding.encode(all);
+    assertThat(PlutusEncoding.decode(encoded)).isEqualTo(all);
+    PlutusEncoding.check(encoded);
+    assertThat(HEX.formatHex(PlutusEncoding.encode(constr200))).isEqualTo("d8668218c880");
     assertThat(longBytes).isNotEqualTo(big);
     for (String bad : List.of("d9010080", "c201", "d8668101", "d87901", "f6", "6161", "d86682616101")) {
-      assertThatThrownBy(() -> PlutusData.fromCbor(HEX.parseHex(bad))).as(bad).isInstanceOf(IllegalArgumentException.class);
+      assertThatThrownBy(() -> PlutusEncoding.decode(HEX.parseHex(bad))).as(bad).isInstanceOf(IllegalArgumentException.class);
+      assertThatThrownBy(() -> PlutusEncoding.check(HEX.parseHex(bad))).as(bad).isInstanceOf(IllegalArgumentException.class);
     }
   }
 

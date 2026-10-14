@@ -24,7 +24,7 @@ import org.x402.core.types.PaymentRequirements;
 import org.x402.core.types.SupportedKind;
 import org.x402.core.types.VerifyResponse;
 
-/** TS {@code x402ResourceServer} multi-facilitator rules, plus the Java no-settle-loop rule. */
+/** Multi-facilitator routing rules, including that settle never loops over facilitators. */
 class MultiFacilitatorRoutingTest {
 
   private static X402ResourceServer server(FacilitatorClient... clients) {

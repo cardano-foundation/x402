@@ -31,10 +31,10 @@ import org.x402.mechanisms.cardano.testing.TxBuilder;
 import org.x402.mechanisms.cardano.testing.Vectors;
 
 /**
- * The second WP7 review's findings on decision 013 (decisions 125-127), written before the fixes:
+ * Replay-guard amendments, written before the fixes:
  * the spec's client paid retry after a pending outcome still verifies; a failing claim store
  * fails public verify closed; submitted and settled claims are retained until the transaction's
- * TTL plus grace (a divergence from TS's eviction rule); evidence with a {@code null} status is
+ * TTL plus grace; evidence with a {@code null} status is
  * unknown.
  */
 class ReplayGuardAmendmentTest {
@@ -159,7 +159,7 @@ class ReplayGuardAmendmentTest {
     Payment p = Payment.of("01-default-happy");
     var store = new InMemorySettlementClaimStore(16, FIXED);
     var s = scheme(FakeChain.fromFixtures("01-default-happy"), store, false);
-    store.claimSettlement(new SettlementClaim(p.hash(), "other", null));
+    store.claimSettlement(new SettlementClaim(p.hash(), "other", null, null));
     assertThat(store.claimState(p.hash())).contains(SettlementClaimState.IN_FLIGHT);
     assertThat(verify(s, p).invalidReason()).isEqualTo("duplicate_settlement");
     store.markRejected(p.hash(), "other");
@@ -230,7 +230,7 @@ class ReplayGuardAmendmentTest {
     assertThat(settle(s, p).errorReason()).isEqualTo("duplicate_settlement");
 
     storeClock.millis = p.ttlMs() + 120_000;
-    assertThat(store.claimSettlement(new SettlementClaim(other.hash(), "o", null))).isEqualTo(SettlementClaimResult.FRESH);
+    assertThat(store.claimSettlement(new SettlementClaim(other.hash(), "o", null, null))).isEqualTo(SettlementClaimResult.FRESH);
     assertThat(store.claimState(p.hash())).isEmpty();
   }
 
@@ -264,17 +264,17 @@ class ReplayGuardAmendmentTest {
     assertThat(store.claimSettlement(new SettlementClaim("b", "o", null, 5_000L)))
         .isEqualTo(SettlementClaimResult.CAPACITY_EXCEEDED);
     clock.millis = 5_000;
-    assertThat(store.claimSettlement(new SettlementClaim("b", "o", null))).isEqualTo(SettlementClaimResult.FRESH);
+    assertThat(store.claimSettlement(new SettlementClaim("b", "o", null, null))).isEqualTo(SettlementClaimResult.FRESH);
     assertThat(store.markSettled("a", "o")).isFalse(); // evicted: never re-created as settled
 
     // Without a known expiry a broadcast claim is never evicted; a rejected one always is.
     store.markSubmitted("b", "o");
     clock.millis = Long.MAX_VALUE;
-    assertThat(store.claimSettlement(new SettlementClaim("c", "o", null))).isEqualTo(SettlementClaimResult.CAPACITY_EXCEEDED);
+    assertThat(store.claimSettlement(new SettlementClaim("c", "o", null, null))).isEqualTo(SettlementClaimResult.CAPACITY_EXCEEDED);
     var rejected = new InMemorySettlementClaimStore(1, clock);
     rejected.claimSettlement(new SettlementClaim("r", "o", null, Long.MAX_VALUE));
     rejected.markRejected("r", "o");
-    assertThat(rejected.claimSettlement(new SettlementClaim("s", "o", null))).isEqualTo(SettlementClaimResult.FRESH);
+    assertThat(rejected.claimSettlement(new SettlementClaim("s", "o", null, null))).isEqualTo(SettlementClaimResult.FRESH);
   }
 
   @Test

@@ -10,7 +10,7 @@ import org.x402.core.server.ResourceServerExtension;
 import org.x402.http.HttpRequestContext;
 
 /**
- * The {@code bazaar} resource-server extension (TS {@code bazaarResourceServerExtension}). Per
+ * The {@code bazaar} resource-server extension. Per
  * request it narrows the declared method enum to the actual method and, for parameterized routes,
  * adds the {@code routeTemplate} catalog key and the concrete {@code pathParams}.
  */

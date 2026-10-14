@@ -3,7 +3,7 @@ package org.x402.extensions.bazaar;
 import java.util.Map;
 import java.util.Objects;
 
-/** Configuration of an MCP tool discovery declaration (TS {@code DeclareMcpDiscoveryExtensionConfig}). */
+/** Configuration of an MCP tool discovery declaration. */
 public final class McpDiscoveryConfig {
 
   private final String toolName;

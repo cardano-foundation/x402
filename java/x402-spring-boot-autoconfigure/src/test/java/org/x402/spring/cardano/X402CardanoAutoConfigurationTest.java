@@ -34,7 +34,7 @@ import org.x402.spring.X402ResourceServerCustomizer;
 import org.x402.spring.autoconfigure.X402AutoConfiguration;
 import org.x402.spring.offer.X402Offers;
 
-/** WP13: Cardano from YAML alone on the resource-server side (plan Roles §1a rules 6–9). */
+/** Cardano from YAML alone on the resource-server side. */
 @ExtendWith(OutputCaptureExtension.class)
 class X402CardanoAutoConfigurationTest {
 

@@ -7,7 +7,7 @@ server:
 
 x402:
   facilitators:
-    # examples/java/facilitator, started locally. Any x402 facilitator that lists Cardano works.
+    # examples/java/facilitator/spring-boot, started locally. Any x402 facilitator that lists Cardano works.
     - url: "${FACILITATOR_URL:http://127.0.0.1:8402/x402}"
       headers:
         # The example facilitator protects /verify and /settle with HTTP Basic (Spring Security).

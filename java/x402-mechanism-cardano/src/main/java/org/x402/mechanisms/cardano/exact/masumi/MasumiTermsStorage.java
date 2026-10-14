@@ -3,7 +3,7 @@ package org.x402.mechanisms.cardano.exact.masumi;
 import java.util.function.UnaryOperator;
 
 /**
- * Storage of issued Masumi quotes keyed by {@code termsDigest} (TS {@code MasumiTermsStorage}).
+ * Storage of issued Masumi quotes keyed by {@code termsDigest}.
  * The resource server binds each digest to the first transaction that claims it.
  */
 public interface MasumiTermsStorage {

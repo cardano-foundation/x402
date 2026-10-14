@@ -15,7 +15,7 @@ import org.x402.core.utils.Amounts;
 
 /**
  * A server scheme for the starter tests: {@code $x} and {@code x USDM} become x × 10⁶ {@code USDM};
- * any other ticker is refused (as TS refuses {@code "1.5 ADA"}). Transfer methods: {@code default}
+ * any other ticker is refused (for example {@code "1.5 ADA"}). Transfer methods: {@code default}
  * (authorization) and {@code prepaid} (upfront).
  */
 public final class TestServerScheme implements SchemeNetworkServer {

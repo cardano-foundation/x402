@@ -6,7 +6,7 @@ import java.util.List;
 import java.util.Map;
 
 /**
- * A protected route (TS {@code RouteConfig}) plus the Java-only {@code failover} flag.
+ * A protected route plus the {@code failover} flag.
  *
  * @param accepts the payment options, in the provider's order of preference
  * @param resource the resource URL, or {@code null} for the request URL
@@ -19,8 +19,7 @@ import java.util.Map;
  * @param unpaidResponseBody the unpaid 402 body for non-browser clients
  * @param settlementFailedResponseBody the 402 body after a failed settlement
  * @param extensions extension declarations, e.g. {@code bazaar}
- * @param failover whether unpinned options may fail over verify to another facilitator (plan
- *     Roles §1b)
+ * @param failover whether unpinned options may fail over verify to another facilitator
  */
 public record RouteConfig(
     List<PaymentOption> accepts,

@@ -1,8 +1,8 @@
 package org.x402.core;
 
 /**
- * A facilitator before-settle hook aborted (TS throws {@code Settlement aborted: <reason>},
- * {@code x402Facilitator.ts:415-419}). The HTTP handler maps it to a 200 abort body.
+ * A facilitator before-settle hook aborted (its message is {@code Settlement
+ * aborted: <reason>}). The HTTP handler maps it to a 200 abort body.
  */
 public class SettleAbortedException extends RuntimeException {
 

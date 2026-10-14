@@ -26,7 +26,7 @@ import org.x402.http.X402Headers;
 import org.x402.spring.client.TransportRedirects;
 
 /**
- * A {@link ClientHttpRequestFactory} decorator that pays x402 402s (plan Roles §2). It sits below
+ * A {@link ClientHttpRequestFactory} decorator that pays x402 402s. It sits below
  * every interceptor: the paid retry re-sends the request as the interceptors prepared it, plus
  * {@code PAYMENT-SIGNATURE}; interceptors do not run again (a step that signs all headers cannot
  * cover {@code PAYMENT-SIGNATURE}). Only hosts allowed by the {@link HostPolicy} can trigger a
@@ -37,7 +37,10 @@ public final class X402ClientHttpRequestFactory implements ClientHttpRequestFact
 
   private static final Log LOG = LogFactory.getLog(X402ClientHttpRequestFactory.class);
 
-  /** How the paid transport is checked before signing (decision 143). */
+  /** The default {@code x402.client.max-replay-body}: 1 MB. */
+  static final long DEFAULT_MAX_REPLAY_BODY = 1024L * 1024L;
+
+  /** How the paid transport is checked before signing. */
   enum Check {
     /** The caller asserts a non-redirecting paid transport (static {@code wrap}). */
     TRUSTED,
@@ -53,10 +56,12 @@ public final class X402ClientHttpRequestFactory implements ClientHttpRequestFact
   private final HostPolicy hostPolicy;
   private final Check check;
   private final TransportRedirects.Safety safety;
+  private final long maxReplayBody;
 
   private X402ClientHttpRequestFactory(ClientHttpRequestFactory delegate,
       ClientHttpRequestFactory paidDelegate, X402Client client, HostPolicy hostPolicy,
-      Check check) {
+      Check check, long maxReplayBody) {
+    this.maxReplayBody = maxReplayBody;
     this.delegate = Objects.requireNonNull(delegate, "delegate");
     this.paidDelegate = Objects.requireNonNull(paidDelegate, "paidDelegate");
     this.client = Objects.requireNonNull(client, "client");
@@ -68,11 +73,12 @@ public final class X402ClientHttpRequestFactory implements ClientHttpRequestFact
 
   static ClientHttpRequestFactory checked(ClientHttpRequestFactory factory,
       ClientHttpRequestFactory paidFactory, X402Client client, HostPolicy hostPolicy,
-      Check check) {
+      Check check, long maxReplayBody) {
     if (factory instanceof X402ClientHttpRequestFactory) {
       return factory;
     }
-    return new X402ClientHttpRequestFactory(factory, paidFactory, client, hostPolicy, check);
+    return new X402ClientHttpRequestFactory(factory, paidFactory, client, hostPolicy, check,
+        maxReplayBody);
   }
 
   /**
@@ -123,7 +129,7 @@ public final class X402ClientHttpRequestFactory implements ClientHttpRequestFact
    */
   public static ClientHttpRequestFactory wrap(ClientHttpRequestFactory factory,
       ClientHttpRequestFactory paidFactory, X402Client client, HostPolicy hostPolicy) {
-    return checked(factory, paidFactory, client, hostPolicy, Check.TRUSTED);
+    return checked(factory, paidFactory, client, hostPolicy, Check.TRUSTED, DEFAULT_MAX_REPLAY_BODY);
   }
 
   /**
@@ -153,16 +159,27 @@ public final class X402ClientHttpRequestFactory implements ClientHttpRequestFact
     return hostPolicy;
   }
 
+  /**
+   * A request to a host outside {@code x402.client.hosts} can never be paid, so it goes to the
+   * transport unchanged and its body is streamed; others are buffered to be re-sent with payment.
+   */
   @Override
-  public ClientHttpRequest createRequest(URI uri, HttpMethod httpMethod) {
+  public ClientHttpRequest createRequest(URI uri, HttpMethod httpMethod) throws IOException {
+    if (!hostPolicy.allows(uri)) {
+      return delegate.createRequest(uri, httpMethod);
+    }
     return new PayingRequest(uri, httpMethod);
   }
 
-  /** Buffers the body, sends, and pays a 402 once. */
+  /**
+   * Buffers the body, sends, and pays a 402 once. A body larger than {@code maxReplayBody} cannot
+   * be re-sent: it switches to a plain transport request and its answer is returned unpaid.
+   */
   private final class PayingRequest extends AbstractClientHttpRequest {
     private final URI uri;
     private final HttpMethod method;
     private final ByteArrayOutputStream body = new ByteArrayOutputStream(256);
+    private ClientHttpRequest streamed;
 
     PayingRequest(URI uri, HttpMethod method) {
       this.uri = uri;
@@ -181,11 +198,35 @@ public final class X402ClientHttpRequestFactory implements ClientHttpRequestFact
 
     @Override
     protected OutputStream getBodyInternal(HttpHeaders headers) {
-      return body;
+      return new OutputStream() {
+        @Override
+        public void write(int b) throws IOException {
+          write(new byte[] {(byte) b}, 0, 1);
+        }
+
+        @Override
+        public void write(byte[] bytes, int off, int len) throws IOException {
+          if (streamed == null && body.size() + (long) len > maxReplayBody) {
+            streamed = delegate.createRequest(uri, method);
+            streamed.getHeaders().putAll(headers);
+            body.writeTo(streamed.getBody());
+          }
+          if (streamed != null) {
+            streamed.getBody().write(bytes, off, len);
+          } else {
+            body.write(bytes, off, len);
+          }
+        }
+      };
     }
 
     @Override
     protected ClientHttpResponse executeInternal(HttpHeaders headers) throws IOException {
+      if (streamed != null) {
+        LOG.debug("x402: request body to " + uri.getHost() + " exceeds x402.client.max-replay-body;"
+            + " sent without payment");
+        return streamed.execute();
+      }
       byte[] bytes = body.toByteArray();
       ClientHttpResponse first = send(headers, bytes, null);
       if (first.getStatusCode().value() != 402) {

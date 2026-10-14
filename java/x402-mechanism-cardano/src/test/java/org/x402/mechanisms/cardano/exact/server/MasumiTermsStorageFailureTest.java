@@ -21,7 +21,7 @@ import org.x402.mechanisms.cardano.exact.masumi.MasumiTermsUpdateResult;
 import org.x402.mechanisms.cardano.testing.Vectors;
 
 /**
- * Decision 122 (security divergence from TS, review finding 4): when the terms storage fails
+ * Fail-closed binding: when the terms storage fails
  * while binding a verified Masumi payment, the binding fails closed with an abort, so the
  * protected handler never runs on unbound terms. Core swallows after-verify hook exceptions, so
  * a thrown error would otherwise let the request proceed.

@@ -1,10 +1,9 @@
 package org.x402.spring.cardano;
 
-import java.util.ArrayList;
-import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import org.x402.mechanisms.cardano.exact.masumi.MasumiDeployment;
+import org.x402.spring.properties.RawProperties;
 
 /**
  * Restores JSON shapes from Spring's binding of {@code Map<String, Object>} values: lists arrive
@@ -14,36 +13,10 @@ final class JsonShapes {
 
   private JsonShapes() {}
 
-  /** Maps keyed by consecutive indices become lists, recursively. */
-  static Object restore(Object value) {
-    if (value instanceof Map<?, ?> map) {
-      boolean indexed = !map.isEmpty();
-      for (int i = 0; i < map.size() && indexed; i++) {
-        indexed = map.containsKey(String.valueOf(i));
-      }
-      if (indexed) {
-        List<Object> list = new ArrayList<>();
-        for (int i = 0; i < map.size(); i++) {
-          list.add(restore(map.get(String.valueOf(i))));
-        }
-        return list;
-      }
-      Map<String, Object> out = new LinkedHashMap<>();
-      map.forEach((k, v) -> out.put(String.valueOf(k), restore(v)));
-      return out;
-    }
-    if (value instanceof List<?> list) {
-      List<Object> out = new ArrayList<>();
-      list.forEach(v -> out.add(restore(v)));
-      return out;
-    }
-    return value;
-  }
-
   /** A deployment declared in {@code extra.deployment}, or {@code null}. */
   @SuppressWarnings("unchecked")
   static MasumiDeployment deployment(Object raw) {
-    Object restored = restore(raw);
+    Object restored = RawProperties.restoreLists(raw);
     if (!(restored instanceof Map<?, ?> map)) {
       throw new IllegalArgumentException("extra.deployment must be an object {requiredAdmins, "
           + "adminVkeys, cooldownPeriod}; got " + raw);

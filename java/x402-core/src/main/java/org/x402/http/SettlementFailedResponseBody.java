@@ -2,7 +2,7 @@ package org.x402.http;
 
 import org.x402.core.types.SettleResponse;
 
-/** The body of a 402 after a failed settlement (TS {@code SettlementFailedResponseBody}). */
+/** The body of a 402 after a failed settlement. */
 @FunctionalInterface
 public interface SettlementFailedResponseBody {
 

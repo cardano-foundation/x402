@@ -13,11 +13,11 @@ import org.x402.mechanisms.cardano.signer.MnemonicClientCardanoSigner;
 import org.x402.spring.X402ConfigurationException;
 import org.x402.spring.cardano.NetworkBeans;
 import org.x402.spring.cardano.X402CardanoNetworkBeans;
-import org.x402.spring.properties.X402Properties;
+import org.x402.spring.cardano.X402CardanoProperties;
 
 /**
- * The buyer's Cardano wallets, one per {@code x402.client.cardano.networks[]} entry (TS: one
- * signer per network, each with its own provider). A signer bean wins over the mnemonic.
+ * The buyer's Cardano wallets, one per {@code x402.client.cardano.networks[]} entry: one
+ * signer per network, each with its own chain provider. A signer bean wins over the mnemonic.
  */
 public final class X402CardanoClients {
 
@@ -32,32 +32,33 @@ public final class X402CardanoClients {
    * @param signerBean a plain signer bean, if any
    * @throws X402ConfigurationException for an incomplete entry
    */
-  public X402CardanoClients(X402Properties.ClientCardano cardano,
+  public X402CardanoClients(X402CardanoProperties.ClientCardano cardano,
       ObjectProvider<X402CardanoNetworkBeans> networkBeans,
       ObjectProvider<ClientCardanoSigner> signerBean) {
-    List<X402Properties.CardanoNetwork> entries = cardano == null ? List.of() : cardano.networks();
+    List<X402CardanoProperties.CardanoNetwork> entries = cardano == null ? List.of() : cardano.networks();
     for (int i = 0; i < entries.size(); i++) {
-      X402Properties.CardanoNetwork entry = entries.get(i);
+      X402CardanoProperties.CardanoNetwork entry = entries.get(i);
       String where = "x402.client.cardano.networks[" + i + "]";
       String network = entry == null ? null : entry.network();
       if (!CardanoNetworks.isCardanoNetwork(network)) {
         throw new X402ConfigurationException(where + ".network: " + network
             + " is not a Cardano network (cardano:mainnet, cardano:preprod, cardano:preview)");
       }
-      X402Properties.Blockfrost bf = entry.blockfrost();
-      String projectId = bf == null ? null : bf.projectId();
-      String baseUrl = bf == null || bf.baseUrl() == null || bf.baseUrl().isBlank() ? null
-          : bf.baseUrl();
-      if ((projectId == null || projectId.isBlank()) && baseUrl == null) {
-        throw new X402ConfigurationException(where + ".blockfrost.project-id is required (or "
-            + "set blockfrost.base-url for a self-hosted endpoint)");
-      }
-      BlockfrostChainBackend.Config config = BlockfrostChainBackend.Config.builder()
-          .network(network).projectId(projectId).baseUrl(baseUrl).build();
-      blockfrost.put(network, config);
       ClientCardanoSigner signer = NetworkBeans.resolve(network, entries.size(), networkBeans,
           b -> b.clientSigner(network), signerBean, "ClientCardanoSigner");
       if (signer == null) {
+        // Only the mnemonic signer reads the chain itself; a supplied signer brings its own.
+        X402CardanoProperties.Blockfrost bf = entry.blockfrost();
+        String projectId = bf == null ? null : bf.projectId();
+        String baseUrl = bf == null || bf.baseUrl() == null || bf.baseUrl().isBlank() ? null
+            : bf.baseUrl();
+        if ((projectId == null || projectId.isBlank()) && baseUrl == null) {
+          throw new X402ConfigurationException(where + ".blockfrost.project-id is required (or "
+              + "set blockfrost.base-url for a self-hosted endpoint)");
+        }
+        BlockfrostChainBackend.Config config = BlockfrostChainBackend.Config.builder()
+            .network(network).projectId(projectId).baseUrl(baseUrl).build();
+        blockfrost.put(network, config);
         String mnemonic = entry.mnemonic() != null && !entry.mnemonic().isBlank()
             ? entry.mnemonic() : cardano.mnemonic();
         if (mnemonic == null || mnemonic.isBlank()) {

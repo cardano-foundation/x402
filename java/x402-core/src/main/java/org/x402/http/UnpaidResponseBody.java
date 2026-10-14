@@ -1,6 +1,6 @@
 package org.x402.http;
 
-/** The body of an unpaid 402 for non-browser clients (TS {@code UnpaidResponseBody}). */
+/** The body of an unpaid 402 for non-browser clients. */
 @FunctionalInterface
 public interface UnpaidResponseBody {
 

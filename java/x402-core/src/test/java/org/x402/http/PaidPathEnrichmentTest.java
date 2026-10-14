@@ -18,9 +18,9 @@ import org.x402.core.FakeServerScheme;
 import org.x402.core.types.PaymentPayload;
 
 /**
- * Decision 049/038: on a paid request, every 402 built for it hands the paid payload to scheme
- * enrichment (TS schemes read it from the {@code PAYMENT-SIGNATURE} header in the transport
- * context), so a quote issuer can re-serve the quote the payment names.
+ * On a paid request, every 402 built for it hands the paid payload to scheme
+ * enrichment (the same payload the {@code PAYMENT-SIGNATURE} header carries), so a quote issuer
+ * can re-serve the quote the payment names.
  */
 class PaidPathEnrichmentTest {
 

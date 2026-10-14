@@ -2,7 +2,7 @@ package org.x402.mechanisms.cardano;
 
 import java.util.regex.Pattern;
 
-/** Scheme constants, asset units and wire-form patterns (TS {@code constants.ts}, {@code limits.ts}). */
+/** Scheme constants, asset units and wire-form patterns. */
 public final class CardanoConstants {
 
   /** The exact scheme. */

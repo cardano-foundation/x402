@@ -1,5 +1,6 @@
 package org.x402.mechanisms.cardano.exact.facilitator;
 
+import com.bloxbean.cardano.client.api.model.ProtocolParams;
 import java.math.BigInteger;
 import java.security.SecureRandom;
 import java.util.ArrayList;
@@ -26,7 +27,6 @@ import org.x402.mechanisms.cardano.CardanoTransactionDecoder;
 import org.x402.mechanisms.cardano.CardanoUtils;
 import org.x402.mechanisms.cardano.DecodedCardanoTransaction;
 import org.x402.mechanisms.cardano.chain.CardanoChainBackend;
-import org.x402.mechanisms.cardano.chain.ProtocolParameters;
 import org.x402.mechanisms.cardano.chain.SettlementEvidence;
 import org.x402.mechanisms.cardano.chain.SubmissionResult;
 import org.x402.mechanisms.cardano.chain.UtxoSnapshot;
@@ -36,28 +36,31 @@ import org.x402.mechanisms.cardano.exact.masumi.MasumiVerifier;
 import org.x402.mechanisms.cardano.exact.script.ScriptAddresses;
 
 /**
- * Cardano facilitator for the {@code exact} scheme, a line-by-line port of TS {@code
- * exact/facilitator/scheme.ts} (2.28.0). It enforces the spec's facilitator verification rules
- * 1–9 plus the Masumi and script checks before accepting a payment, then broadcasts the client's
- * signed transaction and waits, bounded, for the evidence the selected {@code
- * confirmationPolicy} requires. Below it the answer is {@code settlement_pending} with the
- * transaction id; the retry resumes observing the same transaction, never broadcasting it again
- * while its claim is retained.
+ * Cardano facilitator for the {@code exact} scheme. It enforces the spec's
+ * facilitator verification rules 1–9 plus the Masumi and script checks before accepting a
+ * payment, then broadcasts the client's signed transaction and waits, bounded, for the evidence
+ * the selected {@code confirmationPolicy} requires. Below it the answer is {@code
+ * settlement_pending} with the transaction id; the retry resumes observing the same
+ * transaction, never broadcasting it again while its claim is retained.
  *
- * <p><b>Security divergence from TS (decision 013):</b> TS's verify accepts ledger evidence of
- * the transaction as validity and its settle resumes any submitted claim to success, so a landed
- * payment can be replayed. Here public verify always enforces the TTL window and unspent inputs
- * and refuses any transaction the claim store knows, and a transaction is reported settled
- * exactly once.
+ * <p><b>Replay protection:</b> ledger evidence of a transaction is never accepted as validity, so a
+ * landed payment cannot be replayed. Public verify enforces the TTL window and unspent inputs for
+ * any
+ * transaction this facilitator has not broadcast, refuses one that is in flight, rejected or
+ * settled, and re-checks a submitted one (the retry after a pending answer) as settle's resume
+ * does; a transaction is reported settled exactly once.
  *
  * <p>The duplicate-settlement guard is keyed by the canonical transaction id. The default store
- * is process-local and bounded (decision 006); several replicas need a shared {@link
+ * is process-local and bounded; several replicas need a shared {@link
  * SettlementClaimStore}. With a {@code null} signer the facilitator runs provider-only.
  */
 public class ExactCardanoFacilitatorScheme implements SchemeNetworkFacilitator {
 
   private static final long VALIDITY_CLOSE_GRACE_MS = 120_000L;
   private static final SecureRandom RANDOM = new SecureRandom();
+  private static final String STORE_UNAVAILABLE = "settlement store unavailable";
+  private static final String NO_USABLE_TTL =
+      "a transaction without a usable TTL cannot be settled: its claim could never expire";
 
   private final CardanoChainBackend backend;
   private final CardanoFacilitatorSigner signer;
@@ -143,7 +146,20 @@ public class ExactCardanoFacilitatorScheme implements SchemeNetworkFacilitator {
    * @return the verdict
    */
   public final VerifyResponse verify(PaymentPayload payload, PaymentRequirements requirements) {
-    // Decisions 013/125: the claim store's state decides which verification applies; ledger
+    // An overriding verifyPayment or a backend may throw; verify answers a verdict either way.
+    VerifyResponse verdict;
+    try {
+      verdict = verifyByClaimState(payload, requirements);
+    } catch (RuntimeException e) {
+      return invalid(CardanoErrors.INVALID_PAYLOAD + "_verification_error", message(e), "");
+    }
+    return verdict != null
+        ? verdict
+        : invalid(CardanoErrors.INVALID_PAYLOAD + "_verification_error", "verification returned no result", "");
+  }
+
+  private VerifyResponse verifyByClaimState(PaymentPayload payload, PaymentRequirements requirements) {
+    // The claim store's state decides which verification applies; ledger
     // evidence alone never does.
     String txHash;
     try {
@@ -172,10 +188,12 @@ public class ExactCardanoFacilitatorScheme implements SchemeNetworkFacilitator {
 
   /**
    * Verification rules 1-9 and the method checks for a payment that has not been broadcast. It
-   * never accepts ledger evidence as validity: the TTL window and unspent inputs always apply
-   * (decision 013). Public verify and settle both run it, so an override tightens both alike;
-   * the public entry points are final (decision 121). To adjust policy, prefer wrapping the
-   * scheme (plan §3a level 6) or a facilitator hook over subclassing.
+   * never accepts ledger evidence as validity: the TTL window and unspent inputs always apply.
+   * Public verify and settle run it for every transaction this facilitator has not broadcast, so
+   * an override tightens both. A transaction already broadcast (a retry after a pending answer)
+   * is re-checked by a fixed internal verification instead, which an override does not change.
+   * The public entry points are final; to adjust policy, prefer wrapping the scheme or a
+   * facilitator hook over subclassing.
    *
    * @param payload the payload
    * @param requirements the requirements
@@ -189,17 +207,22 @@ public class ExactCardanoFacilitatorScheme implements SchemeNetworkFacilitator {
    * Verification of a transaction this facilitator already broadcast: the pre-broadcast
    * preconditions (unspent inputs, unexpired TTL, phase-1, dry-run) are skipped; recipient,
    * asset, amount and method checks still run. Internal to settle's resume of its own retained
-   * claim (decisions 013, 121).
+   * claim.
    */
   private VerifyResponse verifyBroadcast(PaymentPayload payload, PaymentRequirements requirements) {
     return runVerification(payload, requirements, true);
   }
 
   private boolean canAuthenticateEvidence() {
-    return backend.supportsTransactionEvidence();
+    try {
+      return backend.supportsTransactionEvidence();
+    } catch (RuntimeException e) {
+      // A capability that cannot be read is not offered.
+      return false;
+    }
   }
 
-  /** A custom backend's {@code null} evidence or status means "not known" (decisions 123, 127). */
+  /** A custom backend's {@code null} evidence or status means "not known". */
   private SettlementEvidence readEvidence(String txHash, String network) {
     SettlementEvidence evidence = backend.getTransactionEvidence(txHash, network);
     return evidence == null || evidence.status() == null ? SettlementEvidence.unknown() : evidence;
@@ -313,11 +336,16 @@ public class ExactCardanoFacilitatorScheme implements SchemeNetworkFacilitator {
       return invalid(CardanoErrors.TRANSACTION_PHASE2_INVALID, null, "");
     }
 
-    // Decision 013 (security divergence from TS, which also accepts any ledger evidence here):
+    // Ledger evidence alone is never accepted here:
     // only settle's resume of its own retained claim may skip the pre-broadcast checks.
     boolean acceptedByLedger = alreadyBroadcast;
 
-    // Rule 7: TTL bounds through the network's slot configuration.
+    // Rule 7: TTL bounds through the network's slot configuration. A TTL is required: rule 7's
+    // upper bound cannot hold without one, and a claim on a transaction without one could never
+    // expire. A transaction already broadcast is judged by the ledger instead.
+    if (!acceptedByLedger && decoded.ttlSlot() == null) {
+      return invalid(CardanoErrors.TTL_TOO_FAR, "transaction has no TTL; maxTimeoutSeconds bounds it", "");
+    }
     if (decoded.ttlSlot() != null || decoded.validityStartSlot() != null) {
       BigInteger currentSlot;
       try {
@@ -373,9 +401,13 @@ public class ExactCardanoFacilitatorScheme implements SchemeNetworkFacilitator {
       return invalid(CardanoErrors.NONCE_NOT_ON_CHAIN, "could not resolve the owner of the nonce UTXO", "");
     }
 
-    ProtocolParameters protocolParameters;
+    ProtocolParams protocolParameters;
     try {
       protocolParameters = backend.getProtocolParameters(requirements.network());
+      if (protocolParameters != null) {
+        // Read every value used below now, so a malformed answer is a lookup failure.
+        CardanoUtils.requireComplete(protocolParameters);
+      }
     } catch (RuntimeException e) {
       return invalid(CardanoErrors.CHAIN_LOOKUP_FAILED, message(e), payer);
     }
@@ -412,7 +444,7 @@ public class ExactCardanoFacilitatorScheme implements SchemeNetworkFacilitator {
       if (available.compareTo(requestedAmount) < 0) {
         continue;
       }
-      BigInteger coinsPerUtxoByte = protocolParameters == null ? null : protocolParameters.coinsPerUtxoByte();
+      BigInteger coinsPerUtxoByte = protocolParameters == null ? null : CardanoUtils.coinsPerUtxoByte(protocolParameters);
       if (coinsPerUtxoByte != null) {
         BigInteger minUtxo = CardanoUtils.minUtxoLovelace(output.serializedSize(), coinsPerUtxoByte);
         if (output.coin().compareTo(minUtxo) < 0) {
@@ -490,7 +522,7 @@ public class ExactCardanoFacilitatorScheme implements SchemeNetworkFacilitator {
               payer, coinsPerUtxoByte, options.registryValidator(), payload.resource(), options.deploymentValidator()));
     }
     if (CardanoConstants.METHOD_SCRIPT.equals(method)) {
-      if (!truthy(extra.get("scriptHash")) && !truthy(extra.get("script"))) {
+      if (!ScriptAddresses.truthy(extra.get("scriptHash")) && !ScriptAddresses.truthy(extra.get("script"))) {
         return new MasumiVerifier.Check(false, CardanoErrors.SCRIPT_ADDRESS_MISMATCH, null);
       }
       if (!ScriptAddresses.scriptAddressMatches(extra, requirements.payTo())) {
@@ -501,15 +533,11 @@ public class ExactCardanoFacilitatorScheme implements SchemeNetworkFacilitator {
     return new MasumiVerifier.Check(false, CardanoErrors.UNSUPPORTED_SCHEME, null);
   }
 
-  private static boolean truthy(Object value) {
-    return value != null && !Boolean.FALSE.equals(value) && !"".equals(value);
-  }
-
   private Phase1Checks.Result checkPhase1(
       String transaction,
       DecodedCardanoTransaction decoded,
       List<UtxoSnapshot> inputs,
-      ProtocolParameters protocolParameters,
+      ProtocolParams protocolParameters,
       String network) {
     boolean fullValidator = backend.supportsPhase1Validation();
     if (!decoded.balanceChangingOperations().isEmpty()) {
@@ -531,6 +559,10 @@ public class ExactCardanoFacilitatorScheme implements SchemeNetworkFacilitator {
       if (!fee.ok()) {
         return fee;
       }
+    }
+    Phase1Checks.Result witnessed = Phase1Checks.checkWitnessCoverage(decoded, inputs, fullValidator);
+    if (!witnessed.ok()) {
+      return witnessed;
     }
     if (fullValidator) {
       try {
@@ -561,6 +593,10 @@ public class ExactCardanoFacilitatorScheme implements SchemeNetworkFacilitator {
    * @return success, pending or failure
    */
   public final SettleResponse settle(PaymentPayload payload, PaymentRequirements requirements) {
+    if (payload == null || requirements == null) {
+      return fail(CardanoErrors.INVALID_PAYLOAD, null, "payload and requirements are required",
+          requirements == null ? null : requirements.network());
+    }
     String network = payload.accepted() == null ? requirements.network() : payload.accepted().network();
 
     Resolved resolved;
@@ -583,15 +619,41 @@ public class ExactCardanoFacilitatorScheme implements SchemeNetworkFacilitator {
     resolved = new Resolved(cardanoPayload, decoded, required);
     String txHash = decoded.txHash();
 
+    SettlementClaimStore store = options.settlementStore();
+    // A fresh claim must be able to expire. Only a transaction the store already holds (one
+    // broadcast before a TTL was required) may proceed without one, and then only to resume.
+    Long retainUntil = retainUntilMs(decoded, requirements.network());
+    if (retainUntil == null) {
+      Optional<SettlementClaimState> known;
+      try {
+        known = store.claimState(txHash);
+      } catch (RuntimeException e) {
+        return fail(CardanoErrors.SETTLEMENT_FAILED, txHash, STORE_UNAVAILABLE, network);
+      }
+      if (known == null || known.isEmpty()) {
+        return fail(CardanoErrors.TTL_TOO_FAR, txHash, NO_USABLE_TTL, network);
+      }
+    }
+    String termsDigest;
+    try {
+      termsDigest = masumiTermsDigest(requirements);
+    } catch (RuntimeException e) {
+      return fail(CardanoErrors.SETTLEMENT_FAILED, txHash, message(e), network);
+    }
+
     // Claim the transaction id and the optional Masumi terms digest atomically, before any
     // chain lookup, so two concurrent calls cannot both reach the node.
     String ownerToken = newOwnerToken();
-    SettlementClaimResult claim =
-        options
-            .settlementStore()
-            .claimSettlement(
-                new SettlementClaim(
-                    txHash, ownerToken, masumiTermsDigest(requirements), retainUntilMs(decoded, requirements.network())));
+    SettlementClaimResult claim;
+    try {
+      claim = store.claimSettlement(new SettlementClaim(txHash, ownerToken, termsDigest, retainUntil));
+    } catch (RuntimeException e) {
+      claim = null;
+    }
+    if (claim == null) {
+      quietly(() -> store.releaseClaim(txHash, ownerToken));
+      return fail(CardanoErrors.SETTLEMENT_FAILED, txHash, STORE_UNAVAILABLE, network);
+    }
     switch (claim) {
       case CAPACITY_EXCEEDED:
         return fail(CardanoErrors.SETTLEMENT_FAILED, txHash, "the Cardano settlement store is at capacity", network);
@@ -611,20 +673,49 @@ public class ExactCardanoFacilitatorScheme implements SchemeNetworkFacilitator {
       case SUBMITTED:
         return settledOnce(resume(payload, requirements, resolved, network), txHash, ownerToken, network);
       default:
+        if (retainUntil == null) {
+          // The record vanished between the check above and the claim.
+          quietly(() -> store.releaseClaim(txHash, ownerToken));
+          return fail(CardanoErrors.TTL_TOO_FAR, txHash, NO_USABLE_TTL, network);
+        }
         return settledOnce(
             settleFresh(payload, requirements, resolved, ownerToken, network), txHash, ownerToken, network);
     }
   }
 
-  /** Decision 013: exactly one success per transaction; every later answer is a duplicate. */
+  /**
+   * Exactly one success per transaction; every later answer is a duplicate. Success is reported
+   * only once the store recorded it: if it cannot, the answer is pending and a retry resumes.
+   */
   private SettleResponse settledOnce(SettleResponse response, String txHash, String ownerToken, String network) {
-    if (response.success() && !options.settlementStore().markSettled(txHash, ownerToken)) {
+    if (!response.success()) {
+      return response;
+    }
+    boolean recorded;
+    try {
+      recorded = options.settlementStore().markSettled(txHash, ownerToken);
+    } catch (RuntimeException e) {
+      Map<String, Object> extra = response.extra() == null ? new LinkedHashMap<>() : new LinkedHashMap<>(response.extra());
+      return pendingResponse(txHash, network, response.payer(), extra,
+          "the settlement store could not record the outcome; retry to resume");
+    }
+    if (!recorded) {
       return fail(CardanoErrors.DUPLICATE_SETTLEMENT, txHash, "this transaction was already settled", network);
     }
     return response;
   }
 
-  /** The TTL's POSIX time plus the validity grace, or {@code null} when unknown (decision 126). */
+  /** Runs a store write whose failure must not change the answer; reports whether it ran. */
+  private static boolean quietly(Runnable storeWrite) {
+    try {
+      storeWrite.run();
+      return true;
+    } catch (RuntimeException e) {
+      return false;
+    }
+  }
+
+  /** The TTL's POSIX time plus the validity grace, or {@code null} when unknown. */
   private static Long retainUntilMs(DecodedCardanoTransaction decoded, String network) {
     if (decoded.ttlSlot() == null) {
       return null;
@@ -667,16 +758,29 @@ public class ExactCardanoFacilitatorScheme implements SchemeNetworkFacilitator {
           network);
     }
     SettlementEvidence evidence = awaitEvidence(txHash, requirements.network(), resolved.required());
+    if (evidence.status() != SettlementEvidence.Status.UNKNOWN) {
+      // The ledger shows it now: keep the record like any submitted one.
+      quietly(() -> options.settlementStore().markSubmissionObserved(txHash));
+    }
     return evidenceResponse(evidence, network, resolved, payer, true);
   }
 
   private SettleResponse settleFresh(
       PaymentPayload payload, PaymentRequirements requirements, Resolved resolved, String ownerToken, String network) {
     String txHash = resolved.decoded().txHash();
+    SettlementClaimStore store = options.settlementStore();
     // Dispatched through `this` so a subclass that tightens verify() also governs settlement.
-    VerifyResponse verifyResult = verifyPayment(payload, requirements);
+    VerifyResponse verifyResult;
+    try {
+      verifyResult = verifyPayment(payload, requirements);
+    } catch (RuntimeException e) {
+      verifyResult = invalid(CardanoErrors.INVALID_PAYLOAD + "_verification_error", message(e), "");
+    }
+    if (verifyResult == null) {
+      verifyResult = invalid(CardanoErrors.INVALID_PAYLOAD + "_verification_error", "verification returned no result", "");
+    }
     if (!verifyResult.isValid()) {
-      options.settlementStore().releaseClaim(txHash, ownerToken);
+      quietly(() -> store.releaseClaim(txHash, ownerToken));
       return fail(
           verifyResult.invalidReason() == null ? "verification_failed" : verifyResult.invalidReason(),
           txHash,
@@ -686,45 +790,93 @@ public class ExactCardanoFacilitatorScheme implements SchemeNetworkFacilitator {
     String payer = verifyResult.payer() == null ? "" : verifyResult.payer();
     int required = resolved.required();
 
-    SettlementEvidence.Status submissionStatus;
+    // Only the network call is guarded: store and consistency errors must never reach the
+    // submit-failure classifier, which could turn a broadcast transaction into a rejection.
+    SubmissionResult submission = null;
+    RuntimeException submitError = null;
     try {
-      SubmissionResult submission =
-          backend.submitTransaction(resolved.payload().transaction(), requirements.network());
-      if (submission.txHash() == null || !submission.txHash().equalsIgnoreCase(txHash)) {
-        throw new IllegalStateException(
-            "submitter returned transaction " + submission.txHash() + ", expected " + txHash);
-      }
-      submissionStatus = submission.status();
-      options.settlementStore().markSubmitted(txHash, ownerToken);
-    } catch (RuntimeException cause) {
-      // A throw does not prove the transaction never reached the network: ask the ledger.
-      boolean landed = false;
-      if (canAuthenticateEvidence()) {
-        try {
-          landed = readEvidence(txHash, requirements.network()).status() != SettlementEvidence.Status.UNKNOWN;
-        } catch (RuntimeException e) {
-          landed = true;
-        }
-      }
-      if (landed) {
-        options.settlementStore().markSubmitted(txHash, ownerToken);
-        SettlementEvidence evidence = awaitEvidence(txHash, requirements.network(), required);
-        return evidenceResponse(evidence, network, resolved, payer, false);
-      }
-      boolean definitive = backend.isDefinitiveSubmissionRejection(cause);
-      if (definitive) {
-        options.settlementStore().markRejected(txHash, ownerToken);
-      } else {
-        // Unknown does not prove absence: keep the claim so a retry never rebroadcasts.
-        options.settlementStore().markSubmitted(txHash, ownerToken);
-      }
-      return fail(
-          definitive ? CardanoErrors.SETTLEMENT_DEFINITIVELY_REJECTED : CardanoErrors.SETTLEMENT_FAILED,
-          txHash,
-          describeErrorChain(cause),
-          network);
+      submission = backend.submitTransaction(resolved.payload().transaction(), requirements.network());
+    } catch (RuntimeException e) {
+      submitError = e;
+    }
+    if (submitError == null && (submission == null || submission.txHash() == null
+        || !submission.txHash().equalsIgnoreCase(txHash))) {
+      String returned = submission == null ? null : submission.txHash();
+      return submissionFailed(new IllegalStateException(
+          "submitter returned transaction " + returned + ", expected " + txHash),
+          false, resolved, payer, ownerToken, requirements, network);
+    }
+    if (submitError != null) {
+      return submissionFailed(submitError, true, resolved, payer, ownerToken, requirements, network);
     }
 
+    boolean marked = quietly(() -> store.markSubmitted(txHash, ownerToken));
+    SettleResponse response = broadcastResponse(submission.status(), resolved, payer, requirements, network);
+    if (!marked && !response.success()) {
+      // Try once more so a retry resumes instead of finding the claim still in flight.
+      quietly(() -> store.markSubmitted(txHash, ownerToken));
+    }
+    return response;
+  }
+
+  /**
+   * A submission that failed, or returned the wrong transaction. A failure does not prove the
+   * transaction never reached the network, so the ledger is asked first; the claim is kept
+   * either way so a retry never rebroadcasts. Store write failures never change the answer.
+   */
+  private SettleResponse submissionFailed(RuntimeException cause, boolean classify, Resolved resolved, String payer,
+      String ownerToken, PaymentRequirements requirements, String network) {
+    String txHash = resolved.decoded().txHash();
+    SettlementClaimStore store = options.settlementStore();
+    SettlementEvidence.Status seen = SettlementEvidence.Status.UNKNOWN;
+    boolean lookupFailed = false;
+    if (canAuthenticateEvidence()) {
+      try {
+        seen = readEvidence(txHash, requirements.network()).status();
+      } catch (RuntimeException e) {
+        lookupFailed = true;
+      }
+    }
+    if (seen != SettlementEvidence.Status.UNKNOWN || lookupFailed) {
+      if (lookupFailed) {
+        quietly(() -> store.markSubmissionUnconfirmed(txHash, ownerToken));
+      } else {
+        quietly(() -> store.markSubmitted(txHash, ownerToken));
+      }
+      SettlementEvidence evidence = awaitEvidence(txHash, requirements.network(), resolved.required());
+      if (lookupFailed && evidence.status() != SettlementEvidence.Status.UNKNOWN) {
+        // The ledger shows it after all: keep the record like any submitted one.
+        quietly(() -> store.markSubmissionObserved(txHash));
+      }
+      return evidenceResponse(evidence, network, resolved, payer, false);
+    }
+    boolean definitive = false;
+    if (classify) {
+      try {
+        definitive = backend.isDefinitiveSubmissionRejection(cause);
+      } catch (RuntimeException e) {
+        definitive = false;
+      }
+    }
+    if (definitive) {
+      quietly(() -> store.markRejected(txHash, ownerToken));
+    } else {
+      // Unknown does not prove absence: keep the claim, but let the store drop it under
+      // pressure, since no success was reported for it.
+      quietly(() -> store.markSubmissionUnconfirmed(txHash, ownerToken));
+    }
+    return fail(
+        definitive ? CardanoErrors.SETTLEMENT_DEFINITIVELY_REJECTED : CardanoErrors.SETTLEMENT_FAILED,
+        txHash,
+        describeErrorChain(cause),
+        network);
+  }
+
+  /** The outcome of an accepted submission, from the policy's evidence. */
+  private SettleResponse broadcastResponse(SettlementEvidence.Status submissionStatus, Resolved resolved,
+      String payer, PaymentRequirements requirements, String network) {
+    String txHash = resolved.decoded().txHash();
+    int required = resolved.required();
     SettlementEvidence evidence;
     if (options.acceptMempool() && required == CardanoConstants.MIN_L1_CONFIRMATIONS) {
       // The node's acceptance is exactly the evidence a -1 policy describes.
@@ -834,7 +986,7 @@ public class ExactCardanoFacilitatorScheme implements SchemeNetworkFacilitator {
   /**
    * Polls evidence until the threshold is met or the confirmation timeout elapses. Elapsed time
    * is the larger of the clock's progress and the time slept, so a fixed test clock cannot make
-   * the loop spin (decision 047).
+   * the loop spin.
    */
   private SettlementEvidence awaitEvidence(String txHash, String network, int required) {
     SettlementEvidence latest = new SettlementEvidence(SettlementEvidence.Status.UNKNOWN, CardanoConstants.MIN_L1_CONFIRMATIONS - 1);

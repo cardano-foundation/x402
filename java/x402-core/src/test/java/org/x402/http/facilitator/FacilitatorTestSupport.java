@@ -164,7 +164,7 @@ final class FacilitatorTestSupport {
       return out;
     }
 
-    /** The request body the TS client sent for verify (identical for settle). */
+    /** The request body the TypeScript client sent for verify (identical for settle). */
     static String requestBody(String name) {
       return get(name).get("request").get("body").asText();
     }
@@ -189,10 +189,10 @@ final class FacilitatorTestSupport {
   }
 
   /**
-   * A Java port of TS {@code settleResponseSchema} ({@code httpFacilitatorClient.ts:165-193}):
-   * {@code success} boolean, {@code transaction} string, {@code network} string; {@code
-   * errorReason}, {@code errorMessage}, {@code payer}, {@code amount} string or nullish; {@code
-   * extensions}, {@code extra} a record or nullish. Other fields are stripped, not rejected.
+   * A strict check of the settle response shape: {@code success} boolean, {@code transaction}
+   * string, {@code network} string; {@code errorReason}, {@code errorMessage}, {@code payer},
+   * {@code amount} string or nullish; {@code extensions}, {@code extra} a record or nullish.
+   * Other fields are stripped, not rejected.
    */
   static boolean passesTsSettleResponseSchema(JsonNode node) {
     if (node == null || !node.isObject()) {

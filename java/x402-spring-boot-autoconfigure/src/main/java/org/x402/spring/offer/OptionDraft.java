@@ -42,7 +42,7 @@ public final class OptionDraft {
 
   /**
    * The {@code extra} declared on the account and the option (plus contributions), without the
-   * {@code price.extra} layer; a value here beats one from {@code price.extra} (plan §1a rule 3).
+   * {@code price.extra} layer; a value here beats one from {@code price.extra}.
    *
    * @return an unmodifiable copy
    */

@@ -1,6 +1,6 @@
 package org.x402.core.server;
 
-/** Facilitator identifier normalization (plan Roles §1b; TS/Python strip trailing slashes). */
+/** Facilitator identifier normalization (trailing slashes are ignored). */
 final class Identifiers {
 
   /** The identifier reserved for the in-process facilitator. */

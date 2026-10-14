@@ -3,8 +3,7 @@ package org.x402.mechanisms.cardano.exact.masumi;
 import org.x402.core.types.PaymentRequirements;
 
 /**
- * One issued Masumi 402, keyed by the signed {@code termsDigest} (TS {@code MasumiTerms} of
- * {@code storage.ts}).
+ * One issued Masumi 402, keyed by the signed {@code termsDigest}.
  *
  * @param termsDigest the digest
  * @param requirements the requirements exactly as served

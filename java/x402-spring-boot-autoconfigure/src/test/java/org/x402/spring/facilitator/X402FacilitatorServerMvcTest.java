@@ -30,7 +30,7 @@ import org.x402.mechanisms.cardano.exact.facilitator.CardanoFacilitatorSigner;
 import org.x402.spring.TestHttp;
 import org.x402.spring.X402ServerLifecycle;
 
-/** WP12: the facilitator server on WebMvc answers the normative wire table. */
+/** The facilitator server on WebMvc answers the normative wire table. */
 @SpringBootTest(classes = X402FacilitatorServerMvcTest.App.class,
     webEnvironment = SpringBootTest.WebEnvironment.RANDOM_PORT,
     properties = {

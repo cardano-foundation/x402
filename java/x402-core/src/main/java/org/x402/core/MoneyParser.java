@@ -2,7 +2,7 @@ package org.x402.core;
 
 import org.x402.core.types.AssetAmount;
 
-/** Custom conversion of a decimal money amount on a network (TS {@code MoneyParser}). */
+/** Custom conversion of a decimal money amount on a network. */
 @FunctionalInterface
 public interface MoneyParser {
 

@@ -21,8 +21,8 @@ import org.x402.mechanisms.cardano.testing.StubWallet;
 import org.x402.mechanisms.cardano.testing.TxBuilder;
 
 /**
- * A forged or hostile Masumi 402 is refused before the wallet is touched (TS {@code
- * signer.ts:576-640}): the wallet provider sees zero calls. The collateral ceiling needs the live
+ * A forged or hostile Masumi 402 is refused before the wallet is touched: the wallet provider sees
+ * zero calls. The collateral ceiling needs the live
  * protocol parameters and is refused before any UTxO query.
  */
 class MasumiClientGuardsTest {

@@ -26,11 +26,11 @@ import org.springframework.util.LinkedCaseInsensitiveMap;
 import org.x402.http.X402Headers;
 
 /**
- * Buffers a paid handler's whole response until settlement decides its fate (plan rule 6, review
- * finding 1). Status, headers, cookies, content type, encoding, body, {@code sendError} and
- * {@code sendRedirect} are all held here; the real response only carries what outer filters set.
- * {@link #release()} replays everything; on a failed settle or a facilitator error nothing of the
- * handler's response (not even a {@code Location} or a token header) reaches the client.
+ * Buffers a paid handler's whole response until settlement decides its fate. Status, headers,
+ * cookies, content type, encoding, body, {@code sendError} and {@code sendRedirect} are all held
+ * here; the real response only carries what outer filters set. {@link #release()} replays
+ * everything; on a failed settle or a facilitator error nothing of the handler's response (not even
+ * a {@code Location} or a token header) reaches the client.
  */
 final class BufferingResponse extends HttpServletResponseWrapper {
 

@@ -20,7 +20,7 @@ import org.x402.spring.X402ConfigurationException;
 import org.x402.spring.annotation.X402Payment;
 import org.x402.spring.web.servlet.ServletHandlerMethodSource;
 
-/** The stack-neutral handler → offer registry (WP5 OfferRegistry rules). */
+/** The stack-neutral handler → offer registry. */
 class OfferRegistryTest {
 
   @X402Payment("weather")

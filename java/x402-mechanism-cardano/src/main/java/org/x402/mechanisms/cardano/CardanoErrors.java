@@ -1,6 +1,6 @@
 package org.x402.mechanisms.cardano;
 
-/** Error codes produced by the Cardano mechanism, identical to TS {@code constants.ts}. */
+/** Error codes produced by the Cardano mechanism. */
 public final class CardanoErrors {
 
   /** The scheme or transfer method is not supported. */
@@ -56,7 +56,7 @@ public final class CardanoErrors {
   /** A paid retry altered the Masumi requirements it was issued. */
   public static final String MASUMI_TERMS_MISMATCH = "masumi_terms_mismatch";
 
-  /** Java only (decision 122): the terms storage failed while binding; the request is refused. */
+  /** Java only: the terms storage failed while binding; the request is refused. */
   public static final String MASUMI_TERMS_STORAGE_UNAVAILABLE = "masumi_terms_storage_unavailable";
   /** Broadcast, awaiting the required evidence (non-terminal). */
   public static final String SETTLEMENT_PENDING = "settlement_pending";
@@ -84,9 +84,6 @@ public final class CardanoErrors {
   /** The payTo output is below the protocol min-UTxO. */
   public static final String MIN_UTXO_INSUFFICIENT =
       "invalid_exact_cardano_payload_min_utxo_insufficient";
-  /** Masumi contract mismatch (kept for parity; not produced by verify). */
-  public static final String MASUMI_CONTRACT_MISMATCH =
-      "invalid_exact_cardano_payload_masumi_contract_mismatch";
   /** The Masumi escrow output has no inline datum. */
   public static final String MASUMI_DATUM_MISSING =
       "invalid_exact_cardano_payload_masumi_datum_missing";

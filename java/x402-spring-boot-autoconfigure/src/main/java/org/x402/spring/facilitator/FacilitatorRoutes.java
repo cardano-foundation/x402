@@ -5,7 +5,7 @@ import org.springframework.http.HttpStatusCode;
 import org.springframework.http.MediaType;
 import org.x402.http.facilitator.FacilitatorHttpHandler;
 import org.x402.http.facilitator.FacilitatorHttpResponse;
-import org.x402.spring.web.reactive.X402WebFilter;
+import org.x402.spring.web.reactive.BlockingCalls;
 
 /**
  * Thin router functions over {@link FacilitatorHttpHandler}: the three endpoint paths under the
@@ -45,7 +45,7 @@ final class FacilitatorRoutes {
     return org.springframework.web.reactive.function.server.RouterFunctions.route(
         request -> paths.contains(request.requestPath().pathWithinApplication().value()),
         request -> request.bodyToMono(byte[].class).defaultIfEmpty(new byte[0])
-            .flatMap(body -> X402WebFilter.offload(() -> handler.handle(
+            .flatMap(body -> BlockingCalls.offload(() -> handler.handle(
                 request.method().name(), request.requestPath().pathWithinApplication().value(),
                 body)))
             .flatMap(response -> org.springframework.web.reactive.function.server.ServerResponse

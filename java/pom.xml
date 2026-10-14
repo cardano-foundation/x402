@@ -12,7 +12,6 @@
   <name>x402 Java SDK (v2)</name>
   <description>x402 protocol v2 for Java: core, mechanisms, extensions and Spring Boot starter.</description>
 
-  <!-- Frozen in WP1: later packages change only their own module's pom. -->
   <modules>
     <module>x402-core</module>
     <module>x402-mechanism-cardano</module>
@@ -160,6 +159,8 @@
             <propertyExpansion>config_loc=${x402.config.dir}</propertyExpansion>
             <consoleOutput>true</consoleOutput>
             <failsOnError>true</failsOnError>
+            <!-- The rules report at warning severity; fail on them, or the check never fails. -->
+            <violationSeverity>warning</violationSeverity>
             <linkXRef>false</linkXRef>
             <includeTestSourceDirectory>false</includeTestSourceDirectory>
           </configuration>

@@ -8,6 +8,7 @@ import java.util.Locale;
 import java.util.Map;
 import org.x402.core.types.PaymentRequirements;
 import org.x402.core.types.ResourceInfo;
+import org.x402.mechanisms.cardano.CardanoAddresses;
 import org.x402.mechanisms.cardano.CardanoConstants;
 import org.x402.mechanisms.cardano.CardanoErrors;
 import org.x402.mechanisms.cardano.CardanoNetworks;
@@ -15,7 +16,7 @@ import org.x402.mechanisms.cardano.DecodedCardanoTransaction;
 import org.x402.mechanisms.cardano.exact.masumi.MasumiDatum.AddressCredentials;
 
 /**
- * Masumi verification (TS {@code exact/masumi/verify.ts}): the seller authorization a client
+ * Masumi verification: the seller authorization a client
  * checks before paying, and the escrow lock a facilitator checks before settling.
  */
 public final class MasumiVerifier {
@@ -241,10 +242,10 @@ public final class MasumiVerifier {
   }
 
   private static String unsupportedAddressForm(AddressCredentials c) {
-    if (c.payment().isScript()) {
+    if (CardanoAddresses.isScript(c.payment())) {
       return "script payment credential";
     }
-    if (c.stake() != null && c.stake().isScript()) {
+    if (c.stake() != null && CardanoAddresses.isScript(c.stake())) {
       return "script stake credential";
     }
     if (c.pointer() != null) {
@@ -378,10 +379,10 @@ public final class MasumiVerifier {
     }
 
     AddressCredentials payer = MasumiDatum.addressCredentials(context.payer());
-    if (!view.buyer().payment().hash().equals(payer.payment().hash())) {
+    if (!CardanoAddresses.hashHex(view.buyer().payment()).equals(CardanoAddresses.hashHex(payer.payment()))) {
       return Check.fail(CardanoErrors.MASUMI_DATUM_MISMATCH, "buyer does not control the nonce input");
     }
-    if (!decoded.vkeyHashes().contains(view.buyer().payment().hash())) {
+    if (!decoded.vkeyHashes().contains(CardanoAddresses.hashHex(view.buyer().payment()))) {
       return Check.fail(CardanoErrors.MASUMI_DATUM_MISMATCH, "no witness for the buyer credential");
     }
     if (!MasumiDatum.sameCredentials(view.seller(), MasumiDatum.addressCredentials(terms.sellerAddress()))) {

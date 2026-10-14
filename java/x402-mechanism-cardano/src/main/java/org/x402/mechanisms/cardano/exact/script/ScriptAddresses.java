@@ -1,6 +1,15 @@
 package org.x402.mechanisms.cardano.exact.script;
 
-import com.bloxbean.cardano.client.crypto.Blake2bUtil;
+import com.bloxbean.cardano.client.plutus.spec.BytesPlutusData;
+import com.bloxbean.cardano.client.plutus.spec.PlutusData;
+import co.nstant.in.cbor.CborException;
+import co.nstant.in.cbor.model.ByteString;
+import com.bloxbean.cardano.client.common.cbor.CborSerializationUtil;
+import com.bloxbean.cardano.client.exception.CborSerializationException;
+import com.bloxbean.cardano.client.plutus.spec.PlutusScript;
+import com.bloxbean.cardano.client.plutus.spec.PlutusV1Script;
+import com.bloxbean.cardano.client.plutus.spec.PlutusV2Script;
+import com.bloxbean.cardano.client.plutus.spec.PlutusV3Script;
 import java.math.BigDecimal;
 import java.math.BigInteger;
 import java.nio.charset.StandardCharsets;
@@ -12,11 +21,11 @@ import java.util.regex.Pattern;
 import org.x402.mechanisms.cardano.CardanoAddresses;
 import org.x402.mechanisms.cardano.CardanoConstants;
 import org.x402.mechanisms.cardano.Cbor;
-import org.x402.mechanisms.cardano.PlutusData;
+import org.x402.mechanisms.cardano.PlutusEncoding;
 
 /**
  * Reconstructs the script credential a {@code script} extra declares and checks it against
- * {@code payTo} (TS {@code exact/facilitator/scriptAddress.ts}), with TS's error messages.
+ * {@code payTo}.
  */
 public final class ScriptAddresses {
 
@@ -55,7 +64,7 @@ public final class ScriptAddresses {
    *
    * @param extra the extra block
    * @return lowercase hex script hash
-   * @throws IllegalArgumentException with TS's messages when neither is usable
+   * @throws IllegalArgumentException when neither is usable
    */
   public static String deriveScriptHashHex(Map<String, ?> extra) {
     Object script = extra.get("script");
@@ -97,49 +106,50 @@ public final class ScriptAddresses {
   }
 
   /**
-   * The ledger script hash: blake2b-224 of the language tag and the script bytes (one CBOR
-   * byte-string wrapper around the flat program).
+   * The ledger script hash: blake2b-224 of the language tag followed by the script bytes, which
+   * are the flat program inside one CBOR byte string (the ledger hashes that wrapper too).
    *
    * @param type {@code plutusV1}, {@code plutusV2} or {@code plutusV3}
    * @param scriptBytes the script bytes
    * @return the 28-byte hash
    */
   public static byte[] scriptHash(String type, byte[] scriptBytes) {
-    int tag;
+    // The library's cborHex is the script bytes wrapped in one more CBOR byte string.
+    String cborHex;
+    try {
+      cborHex = HexFormat.of().formatHex(CborSerializationUtil.serialize(new ByteString(scriptBytes)));
+    } catch (CborException e) {
+      throw new IllegalArgumentException("Cardano script bytes cannot be encoded", e);
+    }
+    PlutusScript script;
     switch (type) {
       case "plutusV1":
-        tag = 1;
+        script = PlutusV1Script.builder().cborHex(cborHex).build();
         break;
       case "plutusV2":
-        tag = 2;
+        script = PlutusV2Script.builder().cborHex(cborHex).build();
         break;
       case "plutusV3":
-        tag = 3;
+        script = PlutusV3Script.builder().cborHex(cborHex).build();
         break;
       default:
         throw new IllegalArgumentException("Unsupported Cardano script type: " + type);
     }
-    byte[] input = new byte[scriptBytes.length + 1];
-    input[0] = (byte) tag;
-    System.arraycopy(scriptBytes, 0, input, 1, scriptBytes.length);
-    return Blake2bUtil.blake2bHash224(input);
+    try {
+      return script.getScriptHash();
+    } catch (CborSerializationException e) {
+      throw new IllegalArgumentException("Cardano script cannot be hashed", e);
+    }
   }
 
   /**
-   * Strips one CBOR byte-string wrapper (TS {@code unwrapCborByteString}).
+   * JavaScript truthiness, which {@code extra.script} and {@code extra.scriptHash} follow:
+   * {@code null}, {@code false}, {@code ""}, {@code 0} and {@code NaN} are false.
    *
-   * @param wrapped the wrapped bytes
-   * @return the content
+   * @param value the value
+   * @return whether it is truthy
    */
-  public static byte[] unwrapCborByteString(byte[] wrapped) {
-    Cbor.Item item = Cbor.decode(wrapped);
-    if (item.major() != Cbor.Major.BYTES) {
-      throw new IllegalArgumentException("Expected a CBOR byte string");
-    }
-    return item.bytes();
-  }
-
-  private static boolean truthy(Object value) {
+  public static boolean truthy(Object value) {
     if (value == null || Boolean.FALSE.equals(value)) {
       return false;
     }
@@ -227,7 +237,7 @@ public final class ScriptAddresses {
     }
   }
 
-  /** The decimal text of an integer parameter, validated the way TS validates it. */
+  /** The decimal text of an integer parameter (a safe integer or canonical decimal text). */
   private static String integerText(Object value) {
     if (value instanceof Number n) {
       BigDecimal decimal = n instanceof BigInteger bi ? new BigDecimal(bi) : new BigDecimal(n.toString());
@@ -253,14 +263,14 @@ public final class ScriptAddresses {
     Object value = m.get("value");
     switch (typeOf(param)) {
       case "bytes":
-        return PlutusData.BytesData.ofHex((String) value);
+        return PlutusEncoding.bytes((String) value);
       case "string":
-        return new PlutusData.BytesData(((String) value).getBytes(StandardCharsets.UTF_8));
+        return BytesPlutusData.of(((String) value).getBytes(StandardCharsets.UTF_8));
       case "bigint":
       case "integer":
-        return new PlutusData.IntData(new BigInteger(integerText(value)));
+        return PlutusEncoding.integer(new BigInteger(integerText(value)));
       default: // boolean (other types were refused by parameterInputBytes)
-        return PlutusData.Constr.of(Boolean.TRUE.equals(value) ? 1 : 0);
+        return PlutusEncoding.constr(Boolean.TRUE.equals(value) ? 1 : 0);
     }
   }
 }

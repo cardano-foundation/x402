@@ -20,7 +20,7 @@ import org.x402.spring.X402ConfigurationException;
 import org.x402.spring.X402DynamicPayTo;
 import org.x402.spring.X402DynamicPrice;
 
-/** Plan Roles §1a rules 1–5 and 8: offers + accounts + defaults → core routes. */
+/** Offers + accounts + defaults → core routes. */
 class OfferResolutionTest {
 
   private static final String F = "https://facilitator.example";

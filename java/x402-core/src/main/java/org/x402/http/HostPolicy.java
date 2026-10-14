@@ -7,7 +7,7 @@ import java.util.List;
 import java.util.Locale;
 
 /**
- * Which hosts may trigger an automatic payment (plan Roles §2, a Java safeguard shared with the
+ * Which hosts may trigger an automatic payment (a Java safeguard shared with the
  * Spring {@code x402.client.hosts} allowlist). Entries are exact hosts ({@code api.example.com})
  * or subdomain wildcards ({@code *.example.com}, which does not match the apex). Matching is
  * case-insensitive on the host only; ports are ignored. An empty policy allows nothing.

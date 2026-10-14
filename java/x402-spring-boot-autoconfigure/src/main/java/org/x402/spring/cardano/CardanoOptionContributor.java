@@ -13,7 +13,7 @@ import org.x402.spring.offer.OptionDraft;
 import org.x402.spring.offer.X402OptionContributor;
 
 /**
- * Plan Roles §1a rule 6 for Cardano options. Every decision keys on the option's merged {@code
+ * The Cardano option contributor. Every decision keys on the option's merged {@code
  * extra}: the confirmation policy from {@code cardano.l1-confirmations}, the Masumi deployment and
  * the derived escrow {@code pay-to}, the escrow and network-tag checks of plain receivers.
  */
@@ -59,7 +59,7 @@ public final class CardanoOptionContributor implements X402OptionContributor {
       Map<String, Object> declared) {
     X402CardanoProperties.Cardano block = plan.block(option.accountName());
     boolean accountDepth = block != null && block.l1Confirmations() != null;
-    // option/account extra > account cardano.l1-confirmations > price.extra (plan §1a rule 3)
+    // option/account extra > account cardano.l1-confirmations > price.extra
     if (declared.containsKey(POLICY) || (extra.containsKey(POLICY) && !accountDepth)) {
       Integer l1 = JsonShapes.l1Confirmations(extra.get(POLICY));
       if (l1 == null || l1 < CardanoConstants.MIN_L1_CONFIRMATIONS

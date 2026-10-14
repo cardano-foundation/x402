@@ -1,5 +1,10 @@
 package org.x402.mechanisms.cardano.chain;
 
+import com.bloxbean.cardano.client.api.ProtocolParamsSupplier;
+import com.bloxbean.cardano.client.api.UtxoSupplier;
+import com.bloxbean.cardano.client.api.common.OrderEnum;
+import com.bloxbean.cardano.client.api.model.ProtocolParams;
+import com.bloxbean.cardano.client.api.model.Utxo;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.node.ObjectNode;
 import java.io.IOException;
@@ -13,23 +18,29 @@ import java.time.Clock;
 import java.time.Duration;
 import java.util.Base64;
 import java.util.HexFormat;
+import java.util.ArrayList;
 import java.util.LinkedHashMap;
+import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.Objects;
+import java.util.Optional;
 import org.x402.core.json.X402Json;
 import org.x402.mechanisms.cardano.CardanoAddresses;
 import org.x402.mechanisms.cardano.CardanoNetworks;
 import org.x402.mechanisms.cardano.CardanoUtils;
 
 /**
- * {@link CardanoChainBackend} over the Blockfrost REST API, mirroring TS {@code
- * toFacilitatorCardanoSigner} with a Blockfrost provider ({@code signer.ts:862-1196}), including
+ * {@link CardanoChainBackend} over the Blockfrost REST API, including
  * the transaction-evidence read that lets the facilitator advertise and settle {@code
- * l1Confirmations} above 0. One instance serves one network. It also serves a buyer wallet
- * ({@link CardanoWalletProvider}). Thread-safe.
+ * l1Confirmations} above 0. One instance serves one network. It also serves a buyer wallet as a
+ * cardano-client-lib {@link UtxoSupplier} and {@link ProtocolParamsSupplier}; unlike that
+ * library's own suppliers, a failed read throws instead of answering an empty or short list.
+ * Requests go through this class' own HTTP client so each one honours {@code requestTimeout}.
+ * Thread-safe.
  */
-public final class BlockfrostChainBackend implements CardanoChainBackend, CardanoWalletProvider {
+public final class BlockfrostChainBackend
+    implements CardanoChainBackend, UtxoSupplier, ProtocolParamsSupplier {
 
   private static final long PROTOCOL_PARAMETERS_CACHE_MS = 10 * 60_000L;
   private static final int MAX_ADDRESS_PAGES = 50;
@@ -38,7 +49,7 @@ public final class BlockfrostChainBackend implements CardanoChainBackend, Cardan
   private final String baseUrl;
   private final HttpClient http;
   private final Object cacheLock = new Object();
-  private ProtocolParameters cachedParameters;
+  private ProtocolParams cachedParameters;
   private long cachedAt;
 
   /**
@@ -47,11 +58,10 @@ public final class BlockfrostChainBackend implements CardanoChainBackend, Cardan
    * @param network the x402 Cardano network this backend serves
    * @param baseUrl Blockfrost base URL, e.g. {@code https://cardano-preprod.blockfrost.io/api/v0}
    * @param projectId Blockfrost project id, or {@code null} for a self-hosted instance
-   * @param requestTimeout deadline per request (1 ms – 120 s, default 10 s, TS {@code
-   *     requestTimeoutMs})
+   * @param requestTimeout deadline per request (1 ms – 120 s, default 10 s)
    * @param awaitConfirmation whether {@code submitTransaction} waits (up to the request timeout)
-   *     for inclusion before answering, TS default {@code true}
-   * @param confirmationPoll poll interval of that wait (Evolution default 5 s)
+   *     for inclusion before answering (default {@code true})
+   * @param confirmationPoll poll interval of that wait (default 5 s)
    * @param clock the clock for the current slot and the parameter cache
    */
   public record Config(
@@ -81,7 +91,7 @@ public final class BlockfrostChainBackend implements CardanoChainBackend, Cardan
     }
 
     /**
-     * A builder with the TS defaults.
+     * A builder with the default timeout, confirmation wait and poll interval.
      *
      * @return the builder
      */
@@ -202,6 +212,15 @@ public final class BlockfrostChainBackend implements CardanoChainBackend, Cardan
   }
 
   /**
+   * The network this backend serves.
+   *
+   * @return the x402 network
+   */
+  public String network() {
+    return config.network();
+  }
+
+  /**
    * Blockfrost's public URL for a network.
    *
    * @param network the x402 network
@@ -228,32 +247,52 @@ public final class BlockfrostChainBackend implements CardanoChainBackend, Cardan
     if (utxos == null) {
       return UtxoSnapshot.spent(null);
     }
+    if (!utxos.path("outputs").isArray()) {
+      throw new ChainLookupException("Blockfrost returned a malformed transaction output list");
+    }
     JsonNode output = null;
     for (JsonNode o : utxos.path("outputs")) {
-      if (o.path("output_index").isIntegralNumber()
-          && o.get("output_index").bigIntegerValue().equals(parsed.index())) {
+      if (!o.path("output_index").isIntegralNumber()) {
+        throw new ChainLookupException("Blockfrost returned an output without an index");
+      }
+      if (o.get("output_index").bigIntegerValue().equals(parsed.index())) {
         output = o;
         break;
       }
     }
-    if (output == null || !output.path("address").isTextual()) {
+    if (output == null) {
       return UtxoSnapshot.spent(null);
+    }
+    if (!output.path("address").isTextual()) {
+      throw new ChainLookupException("Blockfrost returned an output without an address");
     }
     String address = output.get("address").asText();
     String keyHash = CardanoAddresses.paymentKeyHash(address);
     boolean spent;
     JsonNode consumed = output.get("consumed_by_tx");
     if (consumed != null) {
-      spent = consumed.isTextual() && !consumed.asText().isEmpty();
+      // null: unspent; otherwise the spending transaction's id.
+      if (!consumed.isNull() && !(consumed.isTextual() && consumed.asText().matches("[0-9a-fA-F]{64}"))) {
+        throw new ChainLookupException("Blockfrost returned a malformed consumed_by_tx");
+      }
+      spent = !consumed.isNull();
     } else {
       spent = !inAddressUtxos(address, parsed);
     }
     if (spent) {
       return new UtxoSnapshot(false, address, null, null, keyHash);
     }
+    Value value = value(output.path("amount"));
+    return new UtxoSnapshot(true, address, value.coin(), value.assets(), keyHash);
+  }
+
+  /** Lovelace and native assets ({@code policy.assetName}, lowercase) of a Blockfrost amount list. */
+  private record Value(BigInteger coin, Map<String, BigInteger> assets) {}
+
+  private static Value value(JsonNode amounts) {
     BigInteger coin = BigInteger.ZERO;
     Map<String, BigInteger> assets = new LinkedHashMap<>();
-    for (JsonNode amount : output.path("amount")) {
+    for (JsonNode amount : amounts) {
       String unit = amount.path("unit").asText();
       BigInteger quantity = new BigInteger(amount.path("quantity").asText());
       if ("lovelace".equals(unit)) {
@@ -264,62 +303,129 @@ public final class BlockfrostChainBackend implements CardanoChainBackend, Cardan
             quantity);
       }
     }
-    return new UtxoSnapshot(true, address, coin, assets, keyHash);
+    return new Value(coin, assets);
   }
 
+  /**
+   * The unspent outputs at an address, in Blockfrost's order, at most {@value #MAX_ADDRESS_PAGES}
+   * pages of 100.
+   *
+   * @param address the address
+   * @return the UTxOs (empty when the address has none)
+   * @throws ChainLookupException when a page cannot be read
+   */
   @Override
-  public java.util.List<WalletUtxo> getAddressUtxos(String address, String network) {
-    assertNetwork(network);
-    java.util.List<WalletUtxo> result = new java.util.ArrayList<>();
-    for (int page = 1; page <= MAX_ADDRESS_PAGES; page++) {
-      JsonNode list = get("/addresses/" + address + "/utxos?count=100&page=" + page);
-      if (list == null || !list.isArray() || list.isEmpty()) {
-        break;
-      }
-      for (JsonNode u : list) {
-        BigInteger coin = BigInteger.ZERO;
-        Map<String, BigInteger> assets = new LinkedHashMap<>();
-        for (JsonNode amount : u.path("amount")) {
-          String unit = amount.path("unit").asText();
-          BigInteger quantity = new BigInteger(amount.path("quantity").asText());
-          if ("lovelace".equals(unit)) {
-            coin = quantity;
-          } else if (unit.length() >= 56) {
-            assets.put(
-                unit.substring(0, 56).toLowerCase(Locale.ROOT) + "." + unit.substring(56).toLowerCase(Locale.ROOT),
-                quantity);
-          }
-        }
-        result.add(
-            new WalletUtxo(
-                u.path("tx_hash").asText().toLowerCase(Locale.ROOT),
-                u.path("output_index").asLong(),
-                u.path("address").asText(address),
-                coin,
-                assets,
-                u.hasNonNull("reference_script_hash")));
-      }
-      if (list.size() < 100) {
+  public List<Utxo> getAll(String address) {
+    List<Utxo> result = new ArrayList<>();
+    for (int page = 0; page < MAX_ADDRESS_PAGES; page++) {
+      List<Utxo> items = getPage(address, 100, page, OrderEnum.asc);
+      result.addAll(items);
+      if (items.size() < 100) {
         break;
       }
     }
     return result;
   }
 
+  /**
+   * One page of an address' unspent outputs.
+   *
+   * @param address the address
+   * @param nrOfItems the page size (Blockfrost allows 1–100)
+   * @param page the page, from 0
+   * @param order the order
+   * @return the page (empty past the end)
+   * @throws ChainLookupException when the page cannot be read
+   */
+  @Override
+  public List<Utxo> getPage(String address, Integer nrOfItems, Integer page, OrderEnum order) {
+    int count = nrOfItems == null ? 100 : nrOfItems;
+    int from = page == null ? 0 : page;
+    String sort = order == OrderEnum.desc ? "desc" : "asc";
+    JsonNode list = get("/addresses/" + address + "/utxos?count=" + count + "&page=" + (from + 1)
+        + "&order=" + sort);
+    List<Utxo> items = new ArrayList<>();
+    if (list == null) {
+      // Blockfrost answers 404 for an address without UTxOs, or past its last page.
+      return items;
+    }
+    if (!list.isArray()) {
+      throw new ChainLookupException("Blockfrost returned a malformed UTxO page");
+    }
+    for (JsonNode u : list) {
+      items.add(toUtxo(u, address));
+    }
+    return items;
+  }
+
+  /**
+   * An unspent output by reference, with its lovelace and native assets only (no datum or
+   * reference-script fields). Unlike the library's own suppliers it answers empty for a spent
+   * output.
+   *
+   * @param txHash the transaction id
+   * @param outputIndex the output index
+   * @return the output, or empty when it does not exist or is spent
+   * @throws ChainLookupException when the read fails
+   */
+  @Override
+  public Optional<Utxo> getTxOutput(String txHash, int outputIndex) {
+    UtxoSnapshot snapshot = getUtxo(txHash + "#" + outputIndex, config.network());
+    if (!snapshot.exists()) {
+      return Optional.empty();
+    }
+    List<com.bloxbean.cardano.client.api.model.Amount> amounts = new ArrayList<>();
+    amounts.add(new com.bloxbean.cardano.client.api.model.Amount("lovelace", snapshot.coin()));
+    snapshot.assets().forEach((unit, quantity) -> amounts.add(
+        new com.bloxbean.cardano.client.api.model.Amount(unit.replace(".", ""), quantity)));
+    return Optional.of(Utxo.builder().txHash(txHash.toLowerCase(Locale.ROOT)).outputIndex(outputIndex)
+        .address(snapshot.address()).amount(amounts).build());
+  }
+
+  private static Utxo toUtxo(JsonNode u, String address) {
+    Utxo utxo;
+    try {
+      utxo = X402Json.mapper().treeToValue(u, Utxo.class);
+    } catch (IOException | IllegalArgumentException e) {
+      throw new ChainLookupException("Blockfrost returned a malformed UTxO", e);
+    }
+    if (utxo.getTxHash() == null || utxo.getAmount() == null) {
+      throw new ChainLookupException("Blockfrost returned a malformed UTxO");
+    }
+    utxo.setTxHash(utxo.getTxHash().toLowerCase(Locale.ROOT));
+    if (utxo.getAddress() == null) {
+      utxo.setAddress(address);
+    }
+    return utxo;
+  }
+
   private boolean inAddressUtxos(String address, CardanoUtils.UtxoRef ref) {
     for (int page = 1; page <= MAX_ADDRESS_PAGES; page++) {
       JsonNode list = get("/addresses/" + address + "/utxos?count=100&page=" + page);
-      if (list == null || !list.isArray() || list.isEmpty()) {
+      if (list != null && !list.isArray()) {
+        throw new ChainLookupException("Blockfrost returned a malformed UTxO page");
+      }
+      if (list == null || list.isEmpty()) {
+        // Blockfrost answers 404 for an address without UTxOs.
         return false;
       }
       for (JsonNode u : list) {
+        if (!u.path("output_index").isIntegralNumber()) {
+          throw new ChainLookupException("Blockfrost returned a UTxO without an output index");
+        }
         if (ref.txHash().equalsIgnoreCase(u.path("tx_hash").asText())
             && u.path("output_index").bigIntegerValue().equals(ref.index())) {
           return true;
         }
       }
+      if (list.size() < 100) {
+        return false;
+      }
     }
-    return false;
+    // Pages left unread: the output may still be there, so this is not a "spent" answer.
+    throw new ChainLookupException(
+        "address holds more than " + MAX_ADDRESS_PAGES * 100 + " UTxOs; cannot tell whether "
+            + ref.txHash() + "#" + ref.index() + " is unspent");
   }
 
   @Override
@@ -329,8 +435,20 @@ public final class BlockfrostChainBackend implements CardanoChainBackend, Cardan
   }
 
   @Override
-  public ProtocolParameters getProtocolParameters(String network) {
+  public ProtocolParams getProtocolParameters(String network) {
     assertNetwork(network);
+    return getProtocolParams();
+  }
+
+  /**
+   * Live protocol parameters of this backend's network, cached for ten minutes. The cached
+   * instance is shared; callers must not modify it.
+   *
+   * @return the parameters
+   * @throws ChainLookupException when they cannot be read or lack the fee and min-UTxO values
+   */
+  @Override
+  public ProtocolParams getProtocolParams() {
     synchronized (cacheLock) {
       long now = config.clock().millis();
       if (cachedParameters == null || now - cachedAt > PROTOCOL_PARAMETERS_CACHE_MS) {
@@ -338,11 +456,13 @@ public final class BlockfrostChainBackend implements CardanoChainBackend, Cardan
         if (params == null) {
           throw new ChainLookupException("Blockfrost returned no protocol parameters");
         }
-        cachedParameters =
-            new ProtocolParameters(
-                new BigInteger(params.path("coins_per_utxo_size").asText()),
-                new BigInteger(params.path("min_fee_a").asText()),
-                new BigInteger(params.path("min_fee_b").asText()));
+        ProtocolParams parsed;
+        try {
+          parsed = CardanoUtils.requireComplete(X402Json.mapper().treeToValue(params, ProtocolParams.class));
+        } catch (IOException | IllegalArgumentException e) {
+          throw new ChainLookupException("Blockfrost returned malformed protocol parameters", e);
+        }
+        cachedParameters = parsed;
         cachedAt = now;
       }
       return cachedParameters;
@@ -374,14 +494,6 @@ public final class BlockfrostChainBackend implements CardanoChainBackend, Cardan
           awaitInclusion(txHash) ? SettlementEvidence.Status.CONFIRMED : SettlementEvidence.Status.MEMPOOL);
     } catch (RuntimeException e) {
       return new SubmissionResult(txHash, SettlementEvidence.Status.MEMPOOL);
-    }
-  }
-
-  @Override
-  public void waitForConfirmation(String txHash, String network) {
-    assertNetwork(network);
-    if (!awaitInclusion(txHash)) {
-      throw new ChainLookupException("Cardano provider awaitTx timed out after " + config.requestTimeout().toMillis() + "ms");
     }
   }
 
@@ -455,17 +567,36 @@ public final class BlockfrostChainBackend implements CardanoChainBackend, Cardan
       // Not on chain; Blockfrost cannot read the mempool.
       return SettlementEvidence.unknown();
     }
-    if (tx.has("valid_contract") && tx.get("valid_contract").isBoolean() && !tx.get("valid_contract").asBoolean()) {
+    if (!tx.isObject() || !tx.path("hash").isTextual()
+        || !tx.get("hash").asText().matches("[0-9a-fA-F]{64}")
+        || !tx.get("hash").asText().equalsIgnoreCase(txHash)) {
+      // Inclusion evidence only counts for the transaction that was asked about.
+      throw new ChainLookupException("Blockfrost returned evidence for another transaction");
+    }
+    JsonNode validContract = tx.get("valid_contract");
+    if (validContract != null && !validContract.isNull() && !validContract.isBoolean()) {
+      throw new ChainLookupException("Blockfrost returned a malformed valid_contract");
+    }
+    if (validContract != null && validContract.isBoolean() && !validContract.asBoolean()) {
       return SettlementEvidence.unknown();
     }
-    JsonNode tip = get("/blocks/latest");
     JsonNode txHeight = tx.get("block_height");
-    JsonNode tipHeight = tip == null ? null : tip.get("height");
-    if (txHeight == null || !txHeight.isNumber() || tipHeight == null || !tipHeight.isNumber()) {
-      return new SettlementEvidence(SettlementEvidence.Status.CONFIRMED, 0);
+    if (!isHeight(txHeight)) {
+      throw new ChainLookupException("Blockfrost returned a transaction without a block height");
     }
-    long depth = Math.max(0, tipHeight.asLong() - txHeight.asLong());
-    return new SettlementEvidence(SettlementEvidence.Status.CONFIRMED, (int) Math.min(depth, Integer.MAX_VALUE));
+    JsonNode tip = get("/blocks/latest");
+    JsonNode tipHeight = tip == null ? null : tip.get("height");
+    if (!isHeight(tipHeight)) {
+      throw new ChainLookupException("Blockfrost returned no readable chain tip");
+    }
+    BigInteger depth = tipHeight.bigIntegerValue().subtract(txHeight.bigIntegerValue()).max(BigInteger.ZERO);
+    return new SettlementEvidence(SettlementEvidence.Status.CONFIRMED,
+        depth.min(BigInteger.valueOf(Integer.MAX_VALUE)).intValueExact());
+  }
+
+  /** A block height: a non-negative integer that fits a long. */
+  private static boolean isHeight(JsonNode node) {
+    return node != null && node.isIntegralNumber() && node.canConvertToLong() && node.asLong() >= 0;
   }
 
   private HttpRequest.Builder request(String path) {

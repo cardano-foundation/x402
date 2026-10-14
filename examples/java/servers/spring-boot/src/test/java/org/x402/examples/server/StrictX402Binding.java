@@ -82,11 +82,13 @@ final class StrictX402Binding {
         ? resolve(s, placeholders) : value;
 
     X402Properties x402 = binder(sources, n -> isUnder(n, "x402")
-            && !isCardanoAccountBlock(n) && !isUnder(n, "x402.facilitator-server"),
+            && !isCardanoAccountBlock(n) && !isUnder(n, "x402.client.cardano")
+            && !isUnder(n, "x402.facilitator-server"),
         resolver, conversion)
         .bindOrCreate("x402", Bindable.of(X402Properties.class), strict());
     X402CardanoProperties cardano = binder(sources,
-        n -> isCardanoAccountBlock(n) || isAccountNetwork(n), resolver, conversion)
+        n -> isCardanoAccountBlock(n) || isAccountNetwork(n) || isUnder(n, "x402.client.cardano"),
+        resolver, conversion)
         .bindOrCreate("x402", Bindable.of(X402CardanoProperties.class), strict());
     X402FacilitatorServerProperties facilitator = binder(sources,
         n -> isUnder(n, "x402.facilitator-server"), resolver, conversion)

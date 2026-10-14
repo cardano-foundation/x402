@@ -7,9 +7,9 @@ import java.util.List;
 import java.util.Map;
 
 /**
- * The default {@link RouteResolver}: TS route patterns in declaration order (TS {@code
- * getRouteConfig}). The raw path is normalized and matched first; when it fails and a different
- * decoded path is known, the decoded path is tried (TS :1256-1263).
+ * The default {@link RouteResolver}: route patterns in declaration order. The raw path is
+ * normalized and matched first; when it fails and a different decoded path is known, the decoded
+ * path is tried.
  */
 public final class PatternRouteResolver implements RouteResolver {
 
@@ -30,7 +30,7 @@ public final class PatternRouteResolver implements RouteResolver {
   }
 
   /**
-   * One route for every request (TS {@code RoutesConfig} given a single {@code RouteConfig}).
+   * One route for every request.
    *
    * @param config the route
    * @return the resolver, keyed {@code *}

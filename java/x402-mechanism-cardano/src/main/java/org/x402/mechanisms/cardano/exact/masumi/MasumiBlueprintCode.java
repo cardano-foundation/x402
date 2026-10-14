@@ -2,7 +2,7 @@ package org.x402.mechanisms.cardano.exact.masumi;
 
 /**
  * The canonical, un-applied Masumi {@code vested_pay.vested_pay.spend} validator (Plutus V3),
- * copied verbatim from TS {@code exact/masumi/blueprintCode.ts} (masumi-payment-service commit
+ * copied verbatim from the Masumi payment service (commit
  * {@code d74b2c319228bcbef36632de37875c388dcee7ce}, {@code smart-contracts/payment-v2/plutus.json}).
  */
 final class MasumiBlueprintCode {

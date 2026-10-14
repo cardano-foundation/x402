@@ -5,8 +5,8 @@ import java.util.Objects;
 import org.x402.core.types.Price;
 
 /**
- * One resolved payment option of a protected resource (TS {@code ResourceConfig}), plus the
- * Java-only facilitator pin.
+ * One resolved payment option of a protected resource, plus the
+ * optional facilitator pin.
  *
  * @param scheme the scheme, e.g. {@code exact}
  * @param network the CAIP-2 network
@@ -25,7 +25,7 @@ public record ResourceConfig(
     Map<String, Object> extra,
     String facilitator) {
 
-  /** The TS default payment timeout. */
+  /** The payment timeout used when none is configured, in seconds. */
   public static final int DEFAULT_MAX_TIMEOUT_SECONDS = 300;
 
   /** Validates. */
@@ -64,6 +64,17 @@ public record ResourceConfig(
    * @return {@link #maxTimeoutSeconds()} or 300
    */
   public int effectiveMaxTimeoutSeconds() {
+    return effectiveMaxTimeoutSeconds(maxTimeoutSeconds);
+  }
+
+  /**
+   * The rule for an unset timeout: absent or {@code 0} means {@link
+   * #DEFAULT_MAX_TIMEOUT_SECONDS}.
+   *
+   * @param maxTimeoutSeconds the configured timeout, or {@code null}
+   * @return the timeout in effect
+   */
+  public static int effectiveMaxTimeoutSeconds(Integer maxTimeoutSeconds) {
     return maxTimeoutSeconds == null || maxTimeoutSeconds == 0
         ? DEFAULT_MAX_TIMEOUT_SECONDS : maxTimeoutSeconds;
   }

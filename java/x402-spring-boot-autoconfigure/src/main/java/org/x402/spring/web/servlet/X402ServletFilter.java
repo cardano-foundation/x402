@@ -8,7 +8,6 @@ import jakarta.servlet.ServletResponse;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletResponse;
 import java.io.IOException;
-import java.nio.charset.StandardCharsets;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.atomic.AtomicBoolean;
@@ -21,10 +20,8 @@ import org.springframework.web.servlet.HandlerMapping;
 import org.springframework.web.util.UrlPathHelper;
 import org.springframework.web.util.WebUtils;
 import org.x402.core.FacilitatorResponseException;
-import org.x402.core.json.X402Json;
 import org.x402.core.server.CancelOptions;
 import org.x402.core.server.ServerHooks.CancellationReason;
-import org.x402.core.types.SettleResponse;
 import org.x402.http.HttpProcessResult;
 import org.x402.http.HttpRequestContext;
 import org.x402.http.HttpResponseInstructions;
@@ -33,10 +30,11 @@ import org.x402.http.PaywallConfig;
 import org.x402.http.ProcessSettleResult;
 import org.x402.http.X402HttpResourceServer;
 import org.x402.spring.offer.OfferRegistry;
+import org.x402.spring.web.PaidResponses;
 import org.x402.spring.offer.OfferRouteResolver;
 
 /**
- * The WebMvc adapter (WP5): selects the offer through Spring's own handler lookup, runs the WP4
+ * The WebMvc adapter: selects the offer through Spring's own handler lookup, runs the
  * adapter contract documented on {@link X402HttpResourceServer}, buffers the paid handler's
  * response and settles exactly once, on the final dispatch (async requests included).
  */
@@ -104,7 +102,7 @@ public final class X402ServletFilter extends OncePerRequestFilter {
       }
       return;
     }
-    if (existing != null || CorsUtils.isPreFlightRequest(request)) {
+    if (existing != null || CorsUtils.isPreFlightRequest(request) || !registry.get().hasOffers()) {
       chain.doFilter(request, response);
       return;
     }
@@ -183,16 +181,11 @@ public final class X402ServletFilter extends OncePerRequestFilter {
   }
 
   private void handlerThrew(PaidRequest paid, Throwable error) {
-    SettleResponse cancel = paid.verified.cancellationDispatcher().cancel(
-        new CancelOptions(CancellationReason.HANDLER_THREW, error, null));
     HttpServletResponse real = (HttpServletResponse) paid.wrapper.getResponse();
-    if (!real.isCommitted()) {
-      Map<String, String> headers = server.get().createFailurePathSettlementHeaders(cancel,
-          paid.verified.beforeHandlerSettlement(), paid.verified.paymentPayload(),
-          real.getHeader("Cache-Control"));
-      if (headers != null) {
-        headers.forEach(real::setHeader);
-      }
+    Map<String, String> headers = PaidResponses.cancel(server.get(), paid.verified,
+        CancellationReason.HANDLER_THREW, error, null, real.getHeader("Cache-Control"));
+    if (headers != null && !real.isCommitted()) {
+      headers.forEach(real::setHeader);
     }
   }
 
@@ -202,11 +195,8 @@ public final class X402ServletFilter extends OncePerRequestFilter {
     X402HttpResourceServer http = server.get();
     int status = wrapper.getStatus();
     if (status >= 400) {
-      SettleResponse cancel = paid.verified.cancellationDispatcher().cancel(
-          new CancelOptions(CancellationReason.HANDLER_FAILED, null, status));
-      Map<String, String> headers = http.createFailurePathSettlementHeaders(cancel,
-          paid.verified.beforeHandlerSettlement(), paid.verified.paymentPayload(),
-          wrapper.getHeader("Cache-Control"));
+      Map<String, String> headers = PaidResponses.cancel(http, paid.verified,
+          CancellationReason.HANDLER_FAILED, null, status, wrapper.getHeader("Cache-Control"));
       if (headers != null) {
         headers.forEach(wrapper::setHeader);
       }
@@ -235,10 +225,7 @@ public final class X402ServletFilter extends OncePerRequestFilter {
       throws IOException {
     response.setStatus(instructions.status());
     instructions.headers().forEach(response::setHeader);
-    byte[] bytes = instructions.html() || instructions.body() instanceof String
-        ? String.valueOf(instructions.body()).getBytes(StandardCharsets.UTF_8)
-        : X402Json.write(instructions.body() == null ? Map.of() : instructions.body())
-            .getBytes(StandardCharsets.UTF_8);
+    byte[] bytes = PaidResponses.body(instructions);
     response.setContentLength(bytes.length);
     response.getOutputStream().write(bytes);
     response.flushBuffer();
@@ -246,7 +233,7 @@ public final class X402ServletFilter extends OncePerRequestFilter {
 
   static void writeJson(HttpServletResponse response, int status, Map<String, ?> body)
       throws IOException {
-    byte[] bytes = X402Json.write(body).getBytes(StandardCharsets.UTF_8);
+    byte[] bytes = PaidResponses.json(body);
     response.setStatus(status);
     response.setContentType("application/json");
     response.setContentLength(bytes.length);

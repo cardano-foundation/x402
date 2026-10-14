@@ -6,7 +6,7 @@ import java.util.Map;
 import java.util.Objects;
 
 /**
- * An exact amount of one asset in atomic units (TS {@code AssetAmount}).
+ * An exact amount of one asset in atomic units.
  *
  * @param asset the asset identifier
  * @param amount the amount in atomic units

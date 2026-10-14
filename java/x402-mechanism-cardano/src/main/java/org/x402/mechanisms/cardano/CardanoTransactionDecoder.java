@@ -12,7 +12,7 @@ import java.util.Locale;
 import java.util.Map;
 
 /**
- * Decodes a base64 signed Cardano transaction (TS {@code decodeCardanoTransaction}). Everything
+ * Decodes a base64 signed Cardano transaction. Everything
  * is read from the wire bytes: the transaction id hashes the body's exact bytes, output sizes and
  * inline datums are the bytes the ledger sees. Nothing is re-encoded.
  */
@@ -70,7 +70,7 @@ public final class CardanoTransactionDecoder {
     byte[] raw = transactionBytes(transactionBase64);
     Cbor.Item tx = Cbor.decode(raw);
     if (tx.major() != Cbor.Major.ARRAY || tx.items().size() != 4) {
-      // Evolution (TS) decodes only the 4-element [body, witnessSet, isValid, auxiliaryData].
+      // Only the 4-element [body, witnessSet, isValid, auxiliaryData] form is accepted.
       throw new IllegalArgumentException("transaction must be a 4-element array");
     }
     Cbor.Item body = tx.items().get(0);
@@ -78,7 +78,7 @@ public final class CardanoTransactionDecoder {
     if (body.major() != Cbor.Major.MAP || witnessSet.major() != Cbor.Major.MAP) {
       throw new IllegalArgumentException("transaction body and witness set must be maps");
     }
-    // Decision 120: Evolution keeps the last duplicate entry; refuse rather than guess.
+    // Readers disagree on which duplicate entry wins; refuse rather than guess.
     body.requireUniqueKeys("transaction body");
     witnessSet.requireUniqueKeys("witness set");
     Cbor.Item flag = tx.items().get(2);
@@ -214,6 +214,9 @@ public final class CardanoTransactionDecoder {
       if (multiAsset.major() != Cbor.Major.MAP) {
         throw new IllegalArgumentException("multi-asset must be a map");
       }
+      // Duplicate policy ids or asset names would collapse to one value here but not for
+      // every reader, so the amount checked could differ from the one paid.
+      multiAsset.requireUniqueKeys("multi-asset map");
       for (Map.Entry<Cbor.Item, Cbor.Item> policy : multiAsset.entries()) {
         if (policy.getKey().major() != Cbor.Major.BYTES
             || policy.getKey().bytes().length != 28
@@ -221,6 +224,7 @@ public final class CardanoTransactionDecoder {
           throw new IllegalArgumentException("invalid policy entry");
         }
         String policyHex = HEX.formatHex(policy.getKey().bytes());
+        policy.getValue().requireUniqueKeys("asset map");
         for (Map.Entry<Cbor.Item, Cbor.Item> asset : policy.getValue().entries()) {
           if (asset.getKey().major() != Cbor.Major.BYTES || asset.getKey().bytes().length > 32) {
             throw new IllegalArgumentException("invalid asset name");
@@ -248,12 +252,12 @@ public final class CardanoTransactionDecoder {
       if (kind.equals(BigInteger.ONE)) {
         Cbor.Item wrapped = datumOption.items().get(1);
         if (wrapped.major() != Cbor.Major.TAG
-            || wrapped.integer().intValue() != 24
+            || !wrapped.integer().equals(BigInteger.valueOf(24))
             || wrapped.tagged().major() != Cbor.Major.BYTES) {
           throw new IllegalArgumentException("inline datum must be #6.24(bytes)");
         }
         byte[] datumBytes = wrapped.tagged().bytes();
-        PlutusData.fromCbor(datumBytes);
+        PlutusEncoding.check(datumBytes);
         datum = HEX.formatHex(datumBytes);
       }
     }

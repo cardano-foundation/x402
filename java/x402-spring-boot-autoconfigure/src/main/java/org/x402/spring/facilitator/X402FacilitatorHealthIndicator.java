@@ -8,7 +8,7 @@ import org.springframework.boot.actuate.health.Status;
 import org.x402.mechanisms.cardano.chain.CardanoChainBackend;
 
 /**
- * The {@code x402-facilitator} health component (plan §3a): one detail per configured Cardano
+ * The {@code x402-facilitator} health component: one detail per configured Cardano
  * network saying whether its chain backend answers (a protocol-parameter lookup, which the
  * Blockfrost backend caches for ten minutes). {@code DOWN} when any backend fails.
  */

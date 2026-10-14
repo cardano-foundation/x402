@@ -3,8 +3,8 @@ package org.x402.core.hooks;
 import java.util.Objects;
 
 /**
- * Result types returned by x402 hooks. They mirror the TS union returns ({@code void | {abort} |
- * {skip} | {recovered}}) as small sealed hierarchies.
+ * Result types returned by x402 hooks. Each hook kind returns a small sealed hierarchy of outcomes
+ * such as continue, abort, skip the handler or recovered.
  */
 public final class HookResults {
 
@@ -220,7 +220,7 @@ public final class HookResults {
   }
 
   /**
-   * What to answer when an after-verify hook skips the handler (TS {@code SkipHandlerDirective}).
+   * What to answer when an after-verify hook skips the handler.
    *
    * @param contentType optional content type
    * @param body optional body, serialized as JSON unless it is a string

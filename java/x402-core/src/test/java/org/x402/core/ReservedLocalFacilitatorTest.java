@@ -15,7 +15,7 @@ import org.x402.core.types.SettleResponse;
 import org.x402.core.types.SupportedResponse;
 import org.x402.core.types.VerifyResponse;
 
-/** Review finding O4: the identifier {@code local} is reserved for the in-process facilitator. */
+/** The identifier {@code local} is reserved for the in-process facilitator. */
 class ReservedLocalFacilitatorTest {
 
   /** A remote-style client that claims the reserved name. */

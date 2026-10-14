@@ -1,6 +1,6 @@
 package org.x402.core;
 
-/** Gives a facilitator scheme access to registered extensions (TS {@code FacilitatorContext}). */
+/** Gives a facilitator scheme access to registered extensions. */
 @FunctionalInterface
 public interface FacilitatorContext {
 

@@ -12,7 +12,7 @@ import org.x402.core.types.PaymentRequirements;
 import org.x402.mechanisms.cardano.CardanoConstants;
 
 /**
- * Issues a Masumi {@code PaymentRequirements} (TS {@code exact/masumi/issue.ts}): request
+ * Issues a Masumi {@code PaymentRequirements}: request
  * commitment, seller-signed terms, CIP-8 authorization and compatibility identifier. The issuer
  * must store the result and serve it verbatim on the paid retry.
  */
@@ -408,7 +408,7 @@ public final class MasumiIssue {
    *
    * @param input what to issue
    * @return the complete requirements
-   * @throws IllegalArgumentException with TS's messages when the 402 would be unpayable or invalid
+   * @throws IllegalArgumentException when the 402 would be unpayable or invalid
    */
   public static PaymentRequirements issue(Input input) {
     if (input.amount() == null || !CardanoConstants.POSITIVE_CANONICAL_AMOUNT.matcher(input.amount()).matches()) {

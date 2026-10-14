@@ -215,7 +215,7 @@ class ClientFactoryEdgeTest {
     assertThat(built).isInstanceOf(X402ClientHttpRequestFactory.class);
     assertThat(((X402ClientHttpRequestFactory) built).delegate())
         .isInstanceOf(SimpleClientHttpRequestFactory.class);
-    // the transport and its non-redirecting twin for paid requests (decision 075)
+    // the transport and its non-redirecting twin for paid requests
     assertThat(customized.get()).isEqualTo(2);
     assertThat(((X402ClientHttpRequestFactory) built).paidDelegate())
         .isNotSameAs(((X402ClientHttpRequestFactory) built).delegate());

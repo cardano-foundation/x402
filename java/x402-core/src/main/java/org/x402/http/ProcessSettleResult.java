@@ -7,8 +7,7 @@ import org.x402.core.types.PaymentRequirements;
 import org.x402.core.types.SettleResponse;
 
 /**
- * The outcome of {@link X402HttpResourceServer#processSettlement} (TS {@code
- * ProcessSettleResultResponse}).
+ * The outcome of {@link X402HttpResourceServer#processSettlement}.
  */
 public sealed interface ProcessSettleResult
     permits ProcessSettleResult.Success, ProcessSettleResult.Failure {

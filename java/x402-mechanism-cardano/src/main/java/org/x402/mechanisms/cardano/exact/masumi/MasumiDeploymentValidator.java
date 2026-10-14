@@ -1,8 +1,8 @@
 package org.x402.mechanisms.cardano.exact.masumi;
 
 /**
- * Explicitly approves one non-canonical Masumi V2 deployment (TS {@code
- * validateCustomMasumiDeployment}). Choosing a deployment is choosing the escrow's dispute
+ * Explicitly approves one non-canonical Masumi V2 deployment. Choosing a deployment is choosing
+ * the escrow's dispute
  * arbitrators.
  */
 @FunctionalInterface

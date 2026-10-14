@@ -20,8 +20,7 @@ import org.x402.mechanisms.cardano.exact.masumi.MasumiDeployment;
 import org.x402.mechanisms.cardano.exact.masumi.MasumiIssue;
 
 /**
- * Issues seller-signed Masumi quotes for route templates (TS {@code
- * exact/server/masumiIssuer.ts}).
+ * Issues seller-signed Masumi quotes for route templates.
  */
 public final class MasumiQuoteIssuer {
 
@@ -81,7 +80,7 @@ public final class MasumiQuoteIssuer {
    *
    * @param requirements the template
    * @param config the issuer settings
-   * @throws IllegalArgumentException with TS's messages when it cannot be issued as declared
+   * @throws IllegalArgumentException when it cannot be issued as declared
    */
   public static void assertMasumiTemplate(PaymentRequirements requirements, MasumiIssuerConfig config) {
     Map<String, Object> extra = requirements.extra();

@@ -20,13 +20,14 @@ import org.x402.core.FacilitatorContext;
 import org.x402.core.json.X402Json;
 import org.x402.core.types.PaymentPayload;
 import org.x402.core.types.PaymentRequirements;
-import org.x402.mechanisms.cardano.chain.ProtocolParameters;
+import com.bloxbean.cardano.client.api.model.ProtocolParams;
+import org.x402.mechanisms.cardano.testing.Ccl;
 import org.x402.mechanisms.cardano.testing.SnapshotChainBackend;
 import org.x402.mechanisms.cardano.testing.Vectors;
 
 /**
- * Java reaches the same decision, reason, message and payer as TS {@code @x402/cardano} 2.28.0
- * on every fixture exported by {@code java/tools/ts-vectors/export-cardano.ts}, replayed against
+ * Java reaches the same decision, reason, message and payer as the TypeScript SDK
+ * on every fixture exported by {@code java/tools/ts-vectors}, replayed against
  * the fixture's chain snapshot with {@code Clock.fixed(now)}.
  */
 class CardanoFacilitatorVectorsTest {
@@ -73,8 +74,8 @@ class CardanoFacilitatorVectorsTest {
     ObjectNode actual = X402Json.mapper().valueToTree(result);
     ObjectNode expected = fixture.get("expected").deepCopy();
     if ("07c-already-on-ledger".equals(id)) {
-      // Deliberate requirement change (decision 013): TS accepts ledger evidence as validity
-      // (isValid true); Java's public verify keeps the spent-nonce check, so a landed payment
+      // Deliberate requirement change: the fixture expects ledger evidence to count as validity
+      // (isValid true); public verify keeps the spent-nonce check instead, so a landed payment
       // cannot be replayed.
       expected.removeAll();
       expected.put("isValid", false);
@@ -112,7 +113,7 @@ class CardanoFacilitatorVectorsTest {
     var expensive =
         new SnapshotChainBackend(happy.get("chain"))
             .withProtocolParameters(
-                new ProtocolParameters(
+                Ccl.params(
                     BigInteger.valueOf(4310), BigInteger.valueOf(44), BigInteger.valueOf(9_000_000)));
     var scheme = new ExactCardanoFacilitatorScheme(expensive, null, options(happy));
 
@@ -129,7 +130,7 @@ class CardanoFacilitatorVectorsTest {
     var cheap =
         new SnapshotChainBackend(tooExpensive.get("chain"))
             .withProtocolParameters(
-                new ProtocolParameters(
+                Ccl.params(
                     BigInteger.valueOf(4310), BigInteger.valueOf(44), BigInteger.valueOf(155381)));
     var ok =
         new ExactCardanoFacilitatorScheme(cheap, null, options(tooExpensive))

@@ -3,7 +3,7 @@ package org.x402.http;
 import java.util.Map;
 
 /**
- * Finds the route of a request. The default {@link PatternRouteResolver} ports TS route patterns;
+ * Finds the route of a request. The default {@link PatternRouteResolver} matches route patterns;
  * the Spring starter resolves through Spring's own handler mapping.
  */
 public interface RouteResolver {

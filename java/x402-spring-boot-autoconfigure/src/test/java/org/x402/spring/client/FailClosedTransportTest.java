@@ -52,7 +52,7 @@ import org.x402.spring.X402ClientCustomizer;
 import org.x402.spring.client.servlet.X402ClientHttpRequestFactoryDecorator;
 
 /**
- * Fail closed on unverifiable transports (security review 2026-10-12, decision 143): a payment
+ * Fail closed on unverifiable transports: a payment
  * is signed only when the paid request provably cannot follow a redirect. A transport known to
  * follow redirects refuses the payment; an unknown one gets the 402 back unpaid; nothing is
  * signed in either case.

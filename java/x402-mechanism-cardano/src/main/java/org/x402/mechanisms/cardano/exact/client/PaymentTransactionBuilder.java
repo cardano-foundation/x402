@@ -1,5 +1,7 @@
 package org.x402.mechanisms.cardano.exact.client;
 
+import com.bloxbean.cardano.client.api.model.ProtocolParams;
+import com.bloxbean.cardano.client.api.model.Utxo;
 import com.bloxbean.cardano.client.crypto.Blake2bUtil;
 import java.math.BigInteger;
 import java.util.ArrayList;
@@ -13,15 +15,18 @@ import java.util.TreeMap;
 import org.x402.mechanisms.cardano.CardanoAddresses;
 import org.x402.mechanisms.cardano.CardanoUtils;
 import org.x402.mechanisms.cardano.Cbor;
-import org.x402.mechanisms.cardano.chain.ProtocolParameters;
-import org.x402.mechanisms.cardano.chain.WalletUtxo;
 
 /**
- * Builds, balances and signs a single-payment transaction, encoded exactly as Evolution (TS)
- * encodes it (decision 100; port of the Go branch's {@code txbuilder.go}): {@code [body,
- * witnessSet, true, null]}, body keys ascending, inputs as a sorted tag-258 set, outputs without
+ * Builds, balances and signs a single-payment transaction in a canonical encoding (one a
+ * canonical re-encoder reproduces byte for byte, so the transaction id survives it):
+ * {@code [body, witnessSet, true, null]}, body keys ascending, inputs as a sorted tag-258 set, outputs without
  * datum in the legacy array form and with an inline datum in the map form, one vkey witness in a
  * tag-258 set. The body carries only inputs, outputs, fee and TTL.
+ *
+ * <p>The encoding is written here rather than by cardano-client-lib's {@code Transaction}: that
+ * library re-encodes an inline datum canonically (definite, key-sorted maps; chunked bignums),
+ * which would change a server-supplied script datum the facilitator compares byte for byte. Wallet
+ * records ({@code Utxo}, {@code ProtocolParams}) and signing come from cardano-client-lib.
  */
 public final class PaymentTransactionBuilder {
 
@@ -70,7 +75,7 @@ public final class PaymentTransactionBuilder {
    * @param parameters live protocol parameters
    */
   public record Spec(
-      List<WalletUtxo> utxos, String changeAddress, Payment payment, BigInteger ttlSlot, ProtocolParameters parameters) {
+      List<Utxo> utxos, String changeAddress, Payment payment, BigInteger ttlSlot, ProtocolParams parameters) {
     /** Copies the UTxOs. */
     public Spec {
       utxos = List.copyOf(utxos);
@@ -137,7 +142,7 @@ public final class PaymentTransactionBuilder {
     Output payment = spec.payment().output();
     for (int i = 0; ; i++) {
       BigInteger minimum =
-          CardanoUtils.minUtxoLovelace(encodeOutput(payment).length, spec.parameters().coinsPerUtxoByte());
+          CardanoUtils.minUtxoLovelace(encodeOutput(payment).length, CardanoUtils.coinsPerUtxoByte(spec.parameters()));
       if (payment.coin().compareTo(minimum) >= 0) {
         break;
       }
@@ -148,11 +153,11 @@ public final class PaymentTransactionBuilder {
       payment = new Output(payment.address(), minimum, payment.assets(), payment.datum());
     }
 
-    List<WalletUtxo> selected = new ArrayList<>(List.of(spec.utxos().get(0)));
-    List<WalletUtxo> candidates = new ArrayList<>(spec.utxos().subList(1, spec.utxos().size()));
-    candidates.removeIf(WalletUtxo::hasReferenceScript);
+    List<Utxo> selected = new ArrayList<>(List.of(spec.utxos().get(0)));
+    List<Utxo> candidates = new ArrayList<>(spec.utxos().subList(1, spec.utxos().size()));
+    candidates.removeIf(u -> u.getReferenceScriptHash() != null);
     candidates.sort(
-        Comparator.comparing((WalletUtxo u) -> !u.assets().isEmpty()).thenComparing(WalletUtxo::coin, Comparator.reverseOrder()));
+        Comparator.comparing((Utxo u) -> !CardanoUtils.assets(u).isEmpty()).thenComparing(CardanoUtils::lovelace, Comparator.reverseOrder()));
     while (true) {
       Attempt attempt = balance(spec, payment, selected, signer, false);
       if (attempt.built != null) {
@@ -161,7 +166,8 @@ public final class PaymentTransactionBuilder {
       Value shortfall = attempt.shortfall;
       int next = -1;
       for (int i = 0; i < candidates.size(); i++) {
-        if (shortfall.assets.isEmpty() || shortfall.assets.keySet().stream().anyMatch(candidates.get(i).assets()::containsKey)) {
+        Map<String, BigInteger> offered = CardanoUtils.assets(candidates.get(i));
+        if (shortfall.assets.isEmpty() || shortfall.assets.keySet().stream().anyMatch(offered::containsKey)) {
           next = i;
           break;
         }
@@ -187,10 +193,10 @@ public final class PaymentTransactionBuilder {
 
   private record Attempt(Built built, Value shortfall) {}
 
-  private static Attempt balance(Spec spec, Output payment, List<WalletUtxo> inputs, BodySigner signer, boolean noChange) {
+  private static Attempt balance(Spec spec, Output payment, List<Utxo> inputs, BodySigner signer, boolean noChange) {
     Value in = new Value();
-    for (WalletUtxo u : inputs) {
-      in.add(u.coin(), u.assets());
+    for (Utxo u : inputs) {
+      in.add(CardanoUtils.lovelace(u), CardanoUtils.assets(u));
     }
     Value shortfall = new Value();
     if (in.coin.compareTo(payment.coin()) < 0) {
@@ -214,8 +220,8 @@ public final class PaymentTransactionBuilder {
             changeAssets.put(unit, rest);
           }
         });
-    BigInteger minFeeA = spec.parameters().minFeeCoefficient();
-    BigInteger minFeeB = spec.parameters().minFeeConstant();
+    BigInteger minFeeA = CardanoUtils.minFeeA(spec.parameters());
+    BigInteger minFeeB = CardanoUtils.minFeeB(spec.parameters());
     if (noChange) {
       if (!changeAssets.isEmpty()) {
         return new Attempt(null, new Value());
@@ -239,7 +245,7 @@ public final class PaymentTransactionBuilder {
         return new Attempt(null, s);
       }
       Output change = new Output(spec.changeAddress(), available.subtract(fee), changeAssets, null);
-      BigInteger minChange = CardanoUtils.minUtxoLovelace(encodeOutput(change).length, spec.parameters().coinsPerUtxoByte());
+      BigInteger minChange = CardanoUtils.minUtxoLovelace(encodeOutput(change).length, CardanoUtils.coinsPerUtxoByte(spec.parameters()));
       if (change.coin().compareTo(minChange) < 0) {
         Value s = new Value();
         s.coin = minChange.subtract(change.coin());
@@ -255,20 +261,20 @@ public final class PaymentTransactionBuilder {
     throw new IllegalStateException("transaction fee did not converge");
   }
 
-  private static Built finish(Spec spec, List<WalletUtxo> inputs, byte[][] assembled, BigInteger fee) {
+  private static Built finish(Spec spec, List<Utxo> inputs, byte[][] assembled, BigInteger fee) {
     List<String> refs = new ArrayList<>();
-    for (WalletUtxo u : inputs) {
-      refs.add(u.ref());
+    for (Utxo u : inputs) {
+      refs.add(CardanoUtils.ref(u));
     }
-    return new Built(assembled[0], HEX.formatHex(assembled[1]), fee, spec.utxos().get(0).ref(), refs);
+    return new Built(assembled[0], HEX.formatHex(assembled[1]), fee, CardanoUtils.ref(spec.utxos().get(0)), refs);
   }
 
   /** Returns {txBytes, bodyHash}. */
   private static byte[][] assemble(
-      Spec spec, Output payment, List<WalletUtxo> inputs, Output change, BigInteger fee, BodySigner signer) {
+      Spec spec, Output payment, List<Utxo> inputs, Output change, BigInteger fee, BodySigner signer) {
     List<String> refs = new ArrayList<>();
-    for (WalletUtxo u : inputs) {
-      refs.add(u.ref());
+    for (Utxo u : inputs) {
+      refs.add(CardanoUtils.ref(u));
     }
     List<Output> outputs = new ArrayList<>(List.of(payment));
     if (change != null) {
@@ -281,7 +287,7 @@ public final class PaymentTransactionBuilder {
   }
 
   /**
-   * Encodes a complete signed transaction in Evolution's form.
+   * Encodes a complete signed transaction in that canonical form.
    *
    * @param inputRefs input references {@code txHash#index}
    * @param outputs the outputs in order

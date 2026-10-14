@@ -1,27 +1,30 @@
 package org.x402.mechanisms.cardano.testing;
 
+import com.bloxbean.cardano.client.api.ProtocolParamsSupplier;
+import com.bloxbean.cardano.client.api.UtxoSupplier;
+import com.bloxbean.cardano.client.api.common.OrderEnum;
+import com.bloxbean.cardano.client.api.model.ProtocolParams;
+import com.bloxbean.cardano.client.api.model.Utxo;
 import java.math.BigInteger;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 import java.util.concurrent.atomic.AtomicInteger;
-import org.x402.mechanisms.cardano.chain.CardanoWalletProvider;
-import org.x402.mechanisms.cardano.chain.ProtocolParameters;
+import org.x402.mechanisms.cardano.CardanoUtils;
 import org.x402.mechanisms.cardano.chain.UtxoSnapshot;
-import org.x402.mechanisms.cardano.chain.WalletUtxo;
 
 /** A wallet provider serving fixed UTxOs and counting every call. */
-public final class StubWallet implements CardanoWalletProvider {
+public final class StubWallet implements UtxoSupplier, ProtocolParamsSupplier {
 
   /** UTxOs served for any address. */
-  public final List<WalletUtxo> utxos = new ArrayList<>();
-  /** Calls to {@link #getAddressUtxos}. */
+  public final List<Utxo> utxos = new ArrayList<>();
+  /** Calls to {@link #getAll}. */
   public final AtomicInteger utxoCalls = new AtomicInteger();
-  /** Calls to {@link #getProtocolParameters}. */
+  /** Calls to {@link #getProtocolParams}. */
   public final AtomicInteger parameterCalls = new AtomicInteger();
   /** Served parameters. */
-  public ProtocolParameters parameters =
-      new ProtocolParameters(BigInteger.valueOf(4310), BigInteger.valueOf(44), BigInteger.valueOf(155381));
+  public ProtocolParams parameters = Ccl.PARAMS;
 
   /**
    * Adds a UTxO.
@@ -34,7 +37,7 @@ public final class StubWallet implements CardanoWalletProvider {
    * @return this wallet
    */
   public StubWallet utxo(String txHash, long index, String address, long coin, Map<String, BigInteger> assets) {
-    utxos.add(new WalletUtxo(txHash, index, address, BigInteger.valueOf(coin), assets, false));
+    utxos.add(Ccl.utxo(txHash, index, address, BigInteger.valueOf(coin), assets, false));
     return this;
   }
 
@@ -53,20 +56,32 @@ public final class StubWallet implements CardanoWalletProvider {
    * @param backend the facilitator stub
    */
   public void publishTo(StubBackend backend) {
-    for (WalletUtxo u : utxos) {
-      backend.utxos.put(
-          u.ref(), new UtxoSnapshot(true, u.address(), u.coin(), u.assets(), null));
+    for (Utxo u : utxos) {
+      backend.utxos.put(CardanoUtils.ref(u), new UtxoSnapshot(
+          true, u.getAddress(), CardanoUtils.lovelace(u), CardanoUtils.assets(u), null));
     }
   }
 
   @Override
-  public List<WalletUtxo> getAddressUtxos(String address, String network) {
+  public List<Utxo> getAll(String address) {
     utxoCalls.incrementAndGet();
     return List.copyOf(utxos);
   }
 
   @Override
-  public ProtocolParameters getProtocolParameters(String network) {
+  public List<Utxo> getPage(String address, Integer nrOfItems, Integer page, OrderEnum order) {
+    return page == null || page == 0 ? getAll(address) : List.of();
+  }
+
+  @Override
+  public Optional<Utxo> getTxOutput(String txHash, int outputIndex) {
+    return utxos.stream()
+        .filter(u -> u.getTxHash().equals(txHash) && u.getOutputIndex() == outputIndex)
+        .findFirst();
+  }
+
+  @Override
+  public ProtocolParams getProtocolParams() {
     parameterCalls.incrementAndGet();
     return parameters;
   }

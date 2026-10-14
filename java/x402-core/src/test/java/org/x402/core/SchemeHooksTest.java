@@ -23,7 +23,7 @@ import org.x402.core.types.SettleResponse;
 import org.x402.core.types.SupportedKind;
 import org.x402.core.types.VerifyResponse;
 
-/** Scheme-scoped hooks run after the server-wide hooks, only for their scheme (TS parity). */
+/** Scheme-scoped hooks run after the server-wide hooks, only for their scheme. */
 class SchemeHooksTest {
 
   private final List<String> calls = new CopyOnWriteArrayList<>();

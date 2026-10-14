@@ -4,7 +4,7 @@ import java.util.LinkedHashMap;
 import java.util.Map;
 
 /**
- * The seller-signed terms, a closed object (TS {@code MasumiTerms}).
+ * The seller-signed terms, a closed object.
  *
  * @param version literal {@code "1"}
  * @param paymentType literal {@code Web3CardanoV2}
@@ -46,7 +46,7 @@ public record MasumiTerms(
   }
 
   /**
-   * The JSON form, in TS field order.
+   * The JSON form, in wire field order.
    *
    * @return the map
    */

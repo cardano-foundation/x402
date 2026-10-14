@@ -31,7 +31,7 @@ import org.x402.core.types.PaymentPayload;
 import org.x402.core.types.PaymentRequired;
 import org.x402.core.types.VerifyResponse;
 
-/** TS {@code x402HTTPResourceServer.processHTTPRequest} (:528-755). */
+/** The HTTP resource server's request processing. */
 class HttpResourceServerTest {
 
   private final FakeFacilitatorClient f = new FakeFacilitatorClient("f", supported(kind(PREPROD)));

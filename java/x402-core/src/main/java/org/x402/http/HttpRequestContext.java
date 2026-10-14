@@ -3,14 +3,14 @@ package org.x402.http;
 import java.util.Objects;
 
 /**
- * One protected-route request (TS {@code HTTPRequestContext}).
+ * One protected-route request.
  *
  * @param adapter access to headers and URL
  * @param method the HTTP method
  * @param path the <b>raw</b> (not decoded) path within the application, with the context path
  *     removed and {@code ;} parameters stripped
  * @param decodedPath the decoded form of the same path, or {@code null}; tried second when
- *     matching routes (TS :1256-1263)
+ *     matching routes
  * @param routePattern the matched route's path pattern, set by the HTTP layer
  */
 public record HttpRequestContext(

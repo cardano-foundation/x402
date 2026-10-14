@@ -11,14 +11,14 @@ import org.x402.core.types.SettleResponse;
 import org.x402.core.types.VerifyResponse;
 
 /**
- * Resource-server hook types and their contexts (TS {@code server/x402ResourceServer.ts}). Hooks
+ * Resource-server hook types and their contexts. Hooks
  * run synchronously, in registration order.
  */
 public final class ServerHooks {
 
   private ServerHooks() {}
 
-  /** When a settlement happens relative to the protected handler (TS {@code SettlePhase}). */
+  /** When a settlement happens relative to the protected handler. */
   public enum SettlePhase {
     /** Settled before the handler ran (upfront / escrow flows). */
     BEFORE_HANDLER("before-handler"),
@@ -34,7 +34,7 @@ public final class ServerHooks {
     }
 
     /**
-     * The TS string value.
+     * The string used on the wire.
      *
      * @return the wire name
      */
@@ -43,7 +43,7 @@ public final class ServerHooks {
     }
   }
 
-  /** Why a verified payment was cancelled (TS {@code VerifiedPaymentCancellationReason}). */
+  /** Why a verified payment was cancelled. */
   public enum CancellationReason {
     /** The handler threw. */
     HANDLER_THREW("handler_threw"),
@@ -59,7 +59,7 @@ public final class ServerHooks {
     }
 
     /**
-     * The TS string value.
+     * The string value.
      *
      * @return the wire name
      */
@@ -202,7 +202,10 @@ public final class ServerHooks {
     BeforeResult<VerifyResponse> apply(VerifyContext context);
   }
 
-  /** Runs after a valid verify; may abort or skip the handler. */
+  /**
+   * Runs after every verify, also when the result is invalid ({@code result().isValid()} is
+   * false); may abort or skip the handler.
+   */
   @FunctionalInterface
   public interface AfterVerifyHook {
     /**
@@ -273,7 +276,7 @@ public final class ServerHooks {
   }
 
   /**
-   * Scheme-scoped hooks a server scheme may contribute (TS {@code SchemeServerHooks}). They run
+   * Scheme-scoped hooks a server scheme may contribute. They run
    * only for requirements of that scheme, after the server-wide hooks of the same phase.
    *
    * @param onBeforeVerify optional

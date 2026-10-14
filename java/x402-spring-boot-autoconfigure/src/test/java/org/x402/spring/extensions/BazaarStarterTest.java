@@ -27,7 +27,7 @@ import org.x402.spring.HookRecorder;
 import org.x402.spring.TestHttp;
 import org.x402.spring.annotation.X402Payment;
 
-/** WP9b: {@code x402.routes.*.extensions.bazaar} from YAML appears in {@code PAYMENT-REQUIRED}. */
+/** {@code x402.routes.*.extensions.bazaar} from YAML appears in {@code PAYMENT-REQUIRED}. */
 @SpringBootTest(classes = BazaarStarterTest.App.class,
     webEnvironment = SpringBootTest.WebEnvironment.RANDOM_PORT,
     properties = "spring.main.web-application-type=servlet")

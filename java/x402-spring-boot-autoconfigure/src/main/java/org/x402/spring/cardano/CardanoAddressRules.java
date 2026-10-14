@@ -4,7 +4,7 @@ import java.util.Set;
 import org.x402.mechanisms.cardano.CardanoAddresses;
 import org.x402.mechanisms.cardano.CardanoNetworks;
 
-/** The receiver checks of plan §1a rule 6, shared by startup and the per-request guard. */
+/** The receiver checks, shared by startup and the per-request guard. */
 final class CardanoAddressRules {
 
   private CardanoAddressRules() {}
@@ -32,8 +32,8 @@ final class CardanoAddressRules {
       throw new IllegalArgumentException("pay-to " + payTo + " is not an address on " + network
           + " (address network id " + parsed.networkId() + ")");
     }
-    boolean escrowScript = parsed.payment().isScript()
-        && escrowScripts.contains(parsed.payment().hash());
+    boolean escrowScript = CardanoAddresses.isScript(parsed.payment())
+        && escrowScripts.contains(CardanoAddresses.hashHex(parsed.payment()));
     if (escrows.contains(payTo) || escrowScript) {
       throw new IllegalArgumentException("pay-to " + payTo + " pays into a Masumi escrow script "
           + "on " + network + "; a plain transfer into the escrow script, without a datum, "

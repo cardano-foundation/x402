@@ -13,7 +13,7 @@ import org.x402.core.client.X402Client;
 import org.x402.core.client.X402ClientException;
 import org.x402.core.types.PaymentRequirements;
 
-/** TS spend controls (x402Client.ts:156, :170-192, :858-898): default assets only, $1 cap. */
+/** Spend controls: default assets only, $1 cap. */
 class SpendControlsTest {
 
   private static final String DEFAULT_ASSET_ERROR =

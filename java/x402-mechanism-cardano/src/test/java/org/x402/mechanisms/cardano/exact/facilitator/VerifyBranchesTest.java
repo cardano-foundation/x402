@@ -22,9 +22,8 @@ import org.x402.mechanisms.cardano.testing.StubBackend;
 import org.x402.mechanisms.cardano.testing.TxBuilder;
 
 /**
- * Verification and settlement branches the TS fixtures do not reach, on hand-built signed
- * transactions (TS {@code exact/facilitator/scheme.ts:646-1077}). Added after the implementation
- * for branch coverage; not red-first.
+ * Verification and settlement branches the exported fixtures do not reach, on hand-built signed
+ * transactions.
  */
 class VerifyBranchesTest {
 
@@ -96,7 +95,9 @@ class VerifyBranchesTest {
         .isEqualTo("invalid_exact_cardano_payload_phase2_invalid");
     assertThat(verify(plain().validityStart(backend.slot + 10).build()).invalidReason())
         .isEqualTo("invalid_exact_cardano_payload_not_yet_valid");
-    assertThat(verify(plain().ttl(null).validityStart(backend.slot - 10).build()).isValid()).isTrue();
+    // A TTL is required (spec rule 7 bounds it); a validity start alone is not enough.
+    assertThat(verify(plain().ttl(null).validityStart(backend.slot - 10).build()).invalidReason())
+        .isEqualTo("invalid_exact_cardano_payload_ttl_too_far");
   }
 
   @Test
@@ -156,7 +157,7 @@ class VerifyBranchesTest {
         new StubBackend() {
           @Override
           public UtxoSnapshot getUtxo(String ref, String network) {
-            // The nonce resolves; the second input answers nothing (TS: undefined → TypeError).
+            // The nonce resolves; the second input answers nothing, so verification fails.
             return ref.startsWith(NONCE_HASH) ? backend.getUtxo(ref, network) : null;
           }
         };
@@ -222,6 +223,7 @@ class VerifyBranchesTest {
             .legacyOutput(PAY_TO, 2_000_000, null)
             .legacyOutput(PAYER, 7_800_000, java.util.HexFormat.of().parseHex(TxBuilder.hash32(0x05)))
             .fee(200_000)
+            .ttl(backend.slot + 300)
             .signWith(TxBuilder.WALLET)
             .build();
     assertThat(verify(tx).isValid()).isTrue();
@@ -304,6 +306,7 @@ class VerifyBranchesTest {
             .output(PAY_TO, 2_000_000, Map.of(), null, false)
             .output(PAYER, 7_790_000, Map.of(), null, false)
             .fee(210_000)
+            .ttl(confirming.slot + 300)
             .signWith(TxBuilder.WALLET);
     SettleResponse confirmed =
         new ExactCardanoFacilitatorScheme(confirming).settle(payload(req, other.build(), NONCE), req);

@@ -14,7 +14,7 @@ import org.x402.spring.offer.OfferRegistry;
 import reactor.core.publisher.Mono;
 
 /**
- * The WebFlux dispatch guard (review finding 3): handles every handler method that belongs to an
+ * The WebFlux dispatch guard: handles every handler method that belongs to an
  * offer, ahead of the request-mapping adapter. When the x402 web filter did not decide that offer
  * for this exchange (e.g. a path rewrite after the filter), the handler is not run and the
  * exchange fails with 500; otherwise the request-mapping adapter runs it as usual.

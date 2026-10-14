@@ -1,5 +1,7 @@
 package org.x402.mechanisms.cardano.exact.client;
 
+import com.bloxbean.cardano.client.api.model.ProtocolParams;
+import com.bloxbean.cardano.client.api.model.Utxo;
 import static com.github.tomakehurst.wiremock.client.WireMock.aResponse;
 import static com.github.tomakehurst.wiremock.client.WireMock.equalTo;
 import static com.github.tomakehurst.wiremock.client.WireMock.get;
@@ -20,16 +22,15 @@ import org.x402.core.types.PaymentRequirements;
 import org.x402.mechanisms.cardano.CardanoTransactionDecoder;
 import org.x402.mechanisms.cardano.DecodedCardanoTransaction;
 import org.x402.mechanisms.cardano.chain.BlockfrostChainBackend;
-import org.x402.mechanisms.cardano.chain.ProtocolParameters;
-import org.x402.mechanisms.cardano.chain.WalletUtxo;
 import org.x402.mechanisms.cardano.signer.ClientCardanoSignerConfig;
 import org.x402.mechanisms.cardano.signer.MnemonicClientCardanoSigner;
 import org.x402.mechanisms.cardano.testing.StubWallet;
+import org.x402.mechanisms.cardano.testing.Ccl;
+import org.x402.mechanisms.cardano.CardanoUtils;
 import org.x402.mechanisms.cardano.testing.TxBuilder;
 
 /**
- * Balancing, coin selection, signer and wallet-provider edges. Added after the implementation
- * for branch coverage; not red-first.
+ * Balancing, coin selection, signer and wallet-provider edges.
  */
 class ClientBranchesTest {
 
@@ -40,16 +41,15 @@ class ClientBranchesTest {
   private static final String PAY_TO = CardanoClientAcceptanceTest.PAY_TO;
   private static final String USDM = CardanoClientAcceptanceTest.USDM;
   private static final String OTHER = TxBuilder.hash28(9) + ".01";
-  private static final ProtocolParameters PARAMS =
-      new ProtocolParameters(BigInteger.valueOf(4310), BigInteger.valueOf(44), BigInteger.valueOf(155381));
+  private static final ProtocolParams PARAMS = Ccl.PARAMS;
   private static final PaymentTransactionBuilder.BodySigner SIGNER =
       hash -> new byte[][] {TxBuilder.WALLET.publicKeyBytes(), new byte[64]};
 
-  private static WalletUtxo utxo(int b, long coin, Map<String, BigInteger> assets) {
-    return new WalletUtxo(TxBuilder.hash32(b), 0, WALLET, BigInteger.valueOf(coin), assets, false);
+  private static Utxo utxo(int b, long coin, Map<String, BigInteger> assets) {
+    return Ccl.utxo(TxBuilder.hash32(b), 0, WALLET, BigInteger.valueOf(coin), assets, false);
   }
 
-  private static PaymentTransactionBuilder.Built build(List<WalletUtxo> utxos, long coin, Map<String, BigInteger> assets, boolean raise) {
+  private static PaymentTransactionBuilder.Built build(List<Utxo> utxos, long coin, Map<String, BigInteger> assets, boolean raise) {
     return PaymentTransactionBuilder.build(
         new PaymentTransactionBuilder.Spec(
             utxos,
@@ -107,7 +107,7 @@ class ClientBranchesTest {
     PaymentRequirements req = new PaymentRequirements("exact", "cardano:preprod", "lovelace", "2000000", PAY_TO, 600, null);
     assertThatThrownBy(() -> scheme.createPaymentPayload(2, req, SchemeNetworkClient.PaymentPayloadContext.EMPTY))
         .hasMessage("Funding wallet has no UTXOs available for the payment");
-    wallet.utxos.add(new WalletUtxo(TxBuilder.hash32(5), 0, WALLET, BigInteger.valueOf(90_000_000), Map.of(), true));
+    wallet.utxos.add(Ccl.utxo(TxBuilder.hash32(5), 0, WALLET, BigInteger.valueOf(90_000_000), Map.of(), true));
     wallet.utxo(TxBuilder.hash32(6), 2, WALLET, 9_000_000, Map.of());
     assertThat(scheme.createPaymentPayload(2, req, SchemeNetworkClient.PaymentPayloadContext.EMPTY).payload())
         .containsEntry("nonce", TxBuilder.hash32(6) + "#2");
@@ -152,13 +152,13 @@ class ClientBranchesTest {
     var backend =
         new BlockfrostChainBackend(BlockfrostChainBackend.Config.builder().network("cardano:preprod").baseUrl(wm.baseUrl()).build());
 
-    List<WalletUtxo> utxos = backend.getAddressUtxos(WALLET, "cardano:preprod");
+    List<Utxo> utxos = backend.getAll(WALLET);
 
     assertThat(utxos).hasSize(100);
-    assertThat(utxos.get(0).ref()).isEqualTo("ab".repeat(32) + "#0");
-    assertThat(utxos.get(0).address()).isEqualTo(WALLET);
-    assertThat(utxos.get(0).assets()).containsEntry(TxBuilder.hash28(1) + ".01", BigInteger.valueOf(3));
-    assertThat(utxos.get(1).hasReferenceScript()).isTrue();
+    assertThat(CardanoUtils.ref(utxos.get(0))).isEqualTo("ab".repeat(32) + "#0");
+    assertThat(utxos.get(0).getAddress()).isEqualTo(WALLET);
+    assertThat(CardanoUtils.assets(utxos.get(0))).containsEntry(TxBuilder.hash28(1) + ".01", BigInteger.valueOf(3));
+    assertThat(utxos.get(1).getReferenceScriptHash() != null).isTrue();
   }
 
   @Test

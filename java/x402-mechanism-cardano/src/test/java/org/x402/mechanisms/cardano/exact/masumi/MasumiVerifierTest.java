@@ -1,5 +1,7 @@
 package org.x402.mechanisms.cardano.exact.masumi;
 
+import com.bloxbean.cardano.client.plutus.spec.BigIntPlutusData;
+import com.bloxbean.cardano.client.plutus.spec.PlutusData;
 import static org.assertj.core.api.Assertions.assertThat;
 
 import java.math.BigInteger;
@@ -14,13 +16,12 @@ import org.x402.core.types.PaymentRequirements;
 import org.x402.core.types.ResourceInfo;
 import org.x402.mechanisms.cardano.CardanoAddresses;
 import org.x402.mechanisms.cardano.DecodedCardanoTransaction;
-import org.x402.mechanisms.cardano.PlutusData;
+import org.x402.mechanisms.cardano.PlutusEncoding;
 import org.x402.mechanisms.cardano.testing.MasumiFixtures;
 import org.x402.mechanisms.cardano.testing.TxBuilder;
 
 /**
- * Every Masumi authorization and lock rule (spec :824-850, TS {@code exact/masumi/verify.ts}) on
- * hand-built locks. Added after the implementation for branch coverage; not red-first.
+ * Every Masumi authorization and lock rule (spec Masumi rules) on hand-built locks.
  */
 class MasumiVerifierTest {
 
@@ -53,12 +54,12 @@ class MasumiVerifierTest {
 
   @Test
   void aWellFormedLockVerifies() {
-    assertThat(lock(datum.toCbor(), 5_000_000, Map.of()).ok()).isTrue();
+    assertThat(lock(PlutusEncoding.encode(datum), 5_000_000, Map.of()).ok()).isTrue();
   }
 
   @Test
   void outputShapeRules() {
-    byte[] d = datum.toCbor();
+    byte[] d = PlutusEncoding.encode(datum);
     PaymentRequirements q = quote;
     DecodedCardanoTransaction none = MasumiFixtures.lock(TxBuilder.walletAddress(), d, 5_000_000, Map.of(), false, 1L, List.of());
     assertFails(
@@ -68,7 +69,7 @@ class MasumiVerifierTest {
     assertFails(lock(q, null, 5_000_000, Map.of(), false, 1L, List.of()), "invalid_exact_cardano_payload_masumi_datum_missing", null);
     assertFails(lock(q, d, 5_000_000, Map.of(), true, 1L, List.of()), "invalid_exact_cardano_payload_masumi_reference_script", null);
     assertFails(
-        lock(PlutusData.Constr.of(0).toCbor(), 5_000_000, Map.of()),
+        lock(PlutusEncoding.encode(PlutusEncoding.constr(0)), 5_000_000, Map.of()),
         "invalid_exact_cardano_payload_masumi_datum_invalid",
         "datum does not match masumi.vested_pay.v2");
     Map<String, Object> bad = new LinkedHashMap<>(q.extra());
@@ -83,48 +84,48 @@ class MasumiVerifierTest {
   @Test
   void datumInvariants() {
     String invalid = "invalid_exact_cardano_payload_masumi_datum_invalid";
-    assertFails(lock(MasumiFixtures.withField(datum, 18, PlutusData.Constr.of(1)), 5_000_000, Map.of()), invalid, "state");
-    assertFails(lock(MasumiFixtures.withField(datum, 11, PlutusData.BytesData.ofHex("00")), 5_000_000, Map.of()), invalid, "result_hash");
-    assertFails(lock(MasumiFixtures.withField(datum, 16, PlutusData.IntData.of(1)), 5_000_000, Map.of()), invalid, "cooldown");
-    assertFails(lock(MasumiFixtures.withField(datum, 5, PlutusData.BytesData.ofHex("00")), 5_000_000, Map.of()), invalid,
+    assertFails(lock(MasumiFixtures.withField(datum, 18, PlutusEncoding.constr(1)), 5_000_000, Map.of()), invalid, "state");
+    assertFails(lock(MasumiFixtures.withField(datum, 11, PlutusEncoding.bytes("00")), 5_000_000, Map.of()), invalid, "result_hash");
+    assertFails(lock(MasumiFixtures.withField(datum, 16, BigIntPlutusData.of(1)), 5_000_000, Map.of()), invalid, "cooldown");
+    assertFails(lock(MasumiFixtures.withField(datum, 5, PlutusEncoding.bytes("00")), 5_000_000, Map.of()), invalid,
         "reference_signature shorter than 16 bytes");
 
     PlutusData scriptBuyer =
-        PlutusData.Constr.of(0, PlutusData.Constr.of(1, PlutusData.BytesData.ofHex(TxBuilder.hash28(7))), PlutusData.Constr.of(1));
+        PlutusEncoding.constr(0, PlutusEncoding.constr(1, PlutusEncoding.bytes(TxBuilder.hash28(7))), PlutusEncoding.constr(1));
     assertFails(lock(MasumiFixtures.withField(datum, 0, scriptBuyer), 5_000_000, Map.of()), invalid,
         "buyer is a script payment credential");
     PlutusData scriptStake =
-        PlutusData.Constr.of(
+        PlutusEncoding.constr(
             0,
-            PlutusData.Constr.of(0, PlutusData.BytesData.ofHex(TxBuilder.hash28(7))),
-            PlutusData.Constr.of(0, PlutusData.Constr.of(0, PlutusData.Constr.of(1, PlutusData.BytesData.ofHex(TxBuilder.hash28(8))))));
+            PlutusEncoding.constr(0, PlutusEncoding.bytes(TxBuilder.hash28(7))),
+            PlutusEncoding.constr(0, PlutusEncoding.constr(0, PlutusEncoding.constr(1, PlutusEncoding.bytes(TxBuilder.hash28(8))))));
     assertFails(lock(MasumiFixtures.withField(datum, 2, scriptStake), 5_000_000, Map.of()), invalid,
         "seller is a script stake credential");
     PlutusData pointer =
-        PlutusData.Constr.of(
+        PlutusEncoding.constr(
             0,
-            PlutusData.Constr.of(0, PlutusData.BytesData.ofHex(TxBuilder.hash28(7))),
-            PlutusData.Constr.of(0, PlutusData.Constr.of(1, PlutusData.IntData.of(1), PlutusData.IntData.of(2), PlutusData.IntData.of(3))));
-    assertFails(lock(MasumiFixtures.withField(datum, 1, PlutusData.Constr.of(0, pointer)), 5_000_000, Map.of()), invalid,
+            PlutusEncoding.constr(0, PlutusEncoding.bytes(TxBuilder.hash28(7))),
+            PlutusEncoding.constr(0, PlutusEncoding.constr(1, BigIntPlutusData.of(1), BigIntPlutusData.of(2), BigIntPlutusData.of(3))));
+    assertFails(lock(MasumiFixtures.withField(datum, 1, PlutusEncoding.constr(0, pointer)), 5_000_000, Map.of()), invalid,
         "buyer_return_address is a pointer stake reference");
 
     // An escrow-equal datum address is a script credential, refused by the form check first.
     String escrowHash = CardanoAddresses.scriptPaymentCredentialHex(quote.payTo());
     PlutusData escrow =
-        PlutusData.Constr.of(0, PlutusData.Constr.of(1, PlutusData.BytesData.ofHex(escrowHash)), PlutusData.Constr.of(1));
-    assertFails(lock(MasumiFixtures.withField(datum, 3, PlutusData.Constr.of(0, escrow)), 5_000_000, Map.of()), invalid,
+        PlutusEncoding.constr(0, PlutusEncoding.constr(1, PlutusEncoding.bytes(escrowHash)), PlutusEncoding.constr(1));
+    assertFails(lock(MasumiFixtures.withField(datum, 3, PlutusEncoding.constr(0, escrow)), 5_000_000, Map.of()), invalid,
         "seller_return_address is a script payment credential");
 
-    PlutusData buyerAddr = ((PlutusData.Constr) datum).fields().get(0);
-    assertFails(lock(MasumiFixtures.withField(datum, 3, PlutusData.Constr.of(0, buyerAddr)), 5_000_000, Map.of()), invalid,
+    PlutusData buyerAddr = PlutusEncoding.fields(datum).get(0);
+    assertFails(lock(MasumiFixtures.withField(datum, 3, PlutusEncoding.constr(0, buyerAddr)), 5_000_000, Map.of()), invalid,
         "buyer and seller payout targets are equal");
-    assertFails(lock(MasumiFixtures.withField(datum, 13, PlutusData.IntData.of(MasumiFixtures.PAY_BY)), 5_000_000, Map.of()),
+    assertFails(lock(MasumiFixtures.withField(datum, 13, BigIntPlutusData.of(MasumiFixtures.PAY_BY)), 5_000_000, Map.of()),
         "invalid_exact_cardano_payload_masumi_deadline", "deadline intervals below the minimum");
   }
 
   @Test
   void deadlineBuyerAndSellerRules() {
-    byte[] d = datum.toCbor();
+    byte[] d = PlutusEncoding.encode(datum);
     String mismatch = "invalid_exact_cardano_payload_masumi_datum_mismatch";
     assertFails(lock(quote, d, 5_000_000, Map.of(), false, null, List.of(MasumiFixtures.BUYER_KEY_HASH)),
         "invalid_exact_cardano_payload_masumi_deadline", "no validity upper bound");
@@ -139,35 +140,35 @@ class MasumiVerifierTest {
             new MasumiVerifier.LockContext(MasumiFixtures.SELLER.sellerAddress(), CPUB, null, null, null)),
         mismatch, "buyer does not control the nonce input");
 
-    PlutusData buyerAddr = ((PlutusData.Constr) datum).fields().get(0);
+    PlutusData buyerAddr = PlutusEncoding.fields(datum).get(0);
     assertFails(lock(MasumiFixtures.withField(datum, 2, buyerAddr), 5_000_000, Map.of()),
         "invalid_exact_cardano_payload_masumi_datum_invalid", "buyer and seller payout targets are equal");
     PlutusData other =
-        PlutusData.Constr.of(0, PlutusData.Constr.of(0, PlutusData.BytesData.ofHex(TxBuilder.hash28(9))), PlutusData.Constr.of(1));
+        PlutusEncoding.constr(0, PlutusEncoding.constr(0, PlutusEncoding.bytes(TxBuilder.hash28(9))), PlutusEncoding.constr(1));
     assertFails(lock(MasumiFixtures.withField(datum, 2, other), 5_000_000, Map.of()), mismatch, "seller");
-    assertFails(lock(MasumiFixtures.withField(datum, 3, PlutusData.Constr.of(0, other)), 5_000_000, Map.of()), mismatch,
+    assertFails(lock(MasumiFixtures.withField(datum, 3, PlutusEncoding.constr(0, other)), 5_000_000, Map.of()), mismatch,
         "seller_return_address");
-    assertFails(lock(MasumiFixtures.withField(datum, 7, PlutusData.BytesData.ofHex("0102030405060708")), 5_000_000, Map.of()),
+    assertFails(lock(MasumiFixtures.withField(datum, 7, PlutusEncoding.bytes("0102030405060708")), 5_000_000, Map.of()),
         mismatch, "buyer_nonce");
-    assertFails(lock(MasumiFixtures.withField(datum, 15, PlutusData.IntData.of(MasumiFixtures.PAY_BY + 36 * 60_000)), 5_000_000, Map.of()),
+    assertFails(lock(MasumiFixtures.withField(datum, 15, BigIntPlutusData.of(MasumiFixtures.PAY_BY + 36 * 60_000)), 5_000_000, Map.of()),
         mismatch, "external_dispute_unlock_time");
   }
 
   @Test
   void valueRules() {
     String collateral = "invalid_exact_cardano_payload_masumi_collateral";
-    assertFails(lock(datum.toCbor(), 5_000_001, Map.of()), collateral, "locked 5000001 lovelace, expected 5000000");
-    assertFails(lock(MasumiFixtures.withField(datum, 9, PlutusData.IntData.of(-1)), 4_999_999, Map.of()), collateral,
+    assertFails(lock(PlutusEncoding.encode(datum), 5_000_001, Map.of()), collateral, "locked 5000001 lovelace, expected 5000000");
+    assertFails(lock(MasumiFixtures.withField(datum, 9, BigIntPlutusData.of(-1)), 4_999_999, Map.of()), collateral,
         "collateral -1 below the floor");
-    assertFails(lock(MasumiFixtures.withField(datum, 9, PlutusData.IntData.of(5)), 5_000_005, Map.of()), collateral,
+    assertFails(lock(MasumiFixtures.withField(datum, 9, BigIntPlutusData.of(5)), 5_000_005, Map.of()), collateral,
         "collateral 5 below the floor");
-    assertFails(lock(datum.toCbor(), 5_000_000, Map.of(TxBuilder.hash28(1) + ".01", BigInteger.ONE)),
+    assertFails(lock(PlutusEncoding.encode(datum), 5_000_000, Map.of(TxBuilder.hash28(1) + ".01", BigInteger.ONE)),
         "invalid_exact_cardano_payload_masumi_asset", "escrow output carries extra native tokens");
 
     PaymentRequirements small = MasumiFixtures.issue(b -> b.amount("1000"));
     PlutusData smallDatum = MasumiDatum.build(MasumiFixtures.lockInput(small, 0));
     assertThat(
-            lock(small, smallDatum.toCbor(), 1000, Map.of(), false, MasumiFixtures.ttlBeforePayBy(), List.of(MasumiFixtures.BUYER_KEY_HASH))
+            lock(small, PlutusEncoding.encode(smallDatum), 1000, Map.of(), false, MasumiFixtures.ttlBeforePayBy(), List.of(MasumiFixtures.BUYER_KEY_HASH))
                 .reason())
         .isEqualTo("invalid_exact_cardano_payload_masumi_min_utxo");
 
@@ -176,9 +177,9 @@ class MasumiVerifierTest {
     long tokenCollateral = 5_000_000;
     PlutusData tokenDatum = MasumiDatum.build(MasumiFixtures.lockInput(token, tokenCollateral));
     List<String> keys = List.of(MasumiFixtures.BUYER_KEY_HASH);
-    assertThat(lock(token, tokenDatum.toCbor(), tokenCollateral, Map.of(usdm, BigInteger.valueOf(7)), false,
+    assertThat(lock(token, PlutusEncoding.encode(tokenDatum), tokenCollateral, Map.of(usdm, BigInteger.valueOf(7)), false,
             MasumiFixtures.ttlBeforePayBy(), keys)).isEqualTo(MasumiVerifier.Check.OK);
-    assertThat(lock(token, tokenDatum.toCbor(), tokenCollateral, Map.of(usdm, BigInteger.valueOf(8)), false,
+    assertThat(lock(token, PlutusEncoding.encode(tokenDatum), tokenCollateral, Map.of(usdm, BigInteger.valueOf(8)), false,
             MasumiFixtures.ttlBeforePayBy(), keys).reason())
         .isEqualTo("invalid_exact_cardano_payload_masumi_asset");
   }

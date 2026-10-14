@@ -6,7 +6,7 @@ import org.x402.core.types.PaymentRequirements;
 import org.x402.core.types.SettleResponse;
 
 /**
- * A settle that already happened for a payment (TS {@code CompletedSettlement}), e.g. the escrow
+ * A settle that already happened for a payment, e.g. the escrow
  * deposit before the handler.
  *
  * @param phase the phase it ran in

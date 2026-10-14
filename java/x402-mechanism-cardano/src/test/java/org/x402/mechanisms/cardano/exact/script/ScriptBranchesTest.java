@@ -1,5 +1,7 @@
 package org.x402.mechanisms.cardano.exact.script;
 
+import com.bloxbean.cardano.client.plutus.spec.BigIntPlutusData;
+import com.bloxbean.cardano.client.plutus.spec.PlutusData;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
@@ -10,11 +12,11 @@ import java.util.List;
 import java.util.Map;
 import org.junit.jupiter.api.Test;
 import org.x402.mechanisms.cardano.CardanoAddresses;
-import org.x402.mechanisms.cardano.PlutusData;
+import org.x402.mechanisms.cardano.PlutusEncoding;
 
 /**
- * Script-hash derivation errors with TS's messages, script datum parsing and malformed flat
- * programs. Added after the implementation for branch coverage; not red-first.
+ * Script-hash derivation errors, script datum parsing and malformed flat
+ * programs.
  */
 class ScriptBranchesTest {
 
@@ -88,8 +90,6 @@ class ScriptBranchesTest {
     assertThat(ScriptAddresses.scriptAddressMatches(Map.of("scriptHash", "ab".repeat(28)), address)).isTrue();
     assertThat(ScriptAddresses.scriptAddressMatches(Map.of("scriptHash", "XX"), address)).isFalse();
     assertThat(ScriptAddresses.scriptAddressMatches(Map.of("scriptHash", "ab".repeat(28)), "garbage")).isFalse();
-    assertThat(ScriptAddresses.unwrapCborByteString(new byte[] {0x42, 1, 2})).containsExactly(1, 2);
-    assertThatThrownBy(() -> ScriptAddresses.unwrapCborByteString(new byte[] {0x01})).hasMessage("Expected a CBOR byte string");
   }
 
   @Test
@@ -99,7 +99,7 @@ class ScriptBranchesTest {
     assertThatThrownBy(() -> FlatApplier.applyParams(new byte[] {1, 0, 0, (byte) 0xf0}, List.of()))
         .hasMessage("malformed flat UPLC program");
     // A CBOR-looking prefix that is not valid CBOR is treated as raw flat.
-    assertThatThrownBy(() -> FlatApplier.applyParams(new byte[] {0x5f}, List.of(PlutusData.IntData.of(1))))
+    assertThatThrownBy(() -> FlatApplier.applyParams(new byte[] {0x5f}, List.of(BigIntPlutusData.of(1))))
         .hasMessage("malformed flat UPLC program");
   }
 

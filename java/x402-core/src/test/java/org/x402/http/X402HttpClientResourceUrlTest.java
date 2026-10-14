@@ -26,9 +26,8 @@ import org.x402.core.types.PaymentRequired;
 import org.x402.core.types.ResourceInfo;
 
 /**
- * Plan §2: with a host policy, the host of {@code PAYMENT-REQUIRED.resource.url} must also be on
- * the list, so a 402 without a resource URL is returned unpaid (parity with the Spring clients,
- * decision 149).
+ * With a host policy, the host of {@code PAYMENT-REQUIRED.resource.url} must also be on
+ * the list, so a 402 without a resource URL is returned unpaid.
  */
 class X402HttpClientResourceUrlTest {
 

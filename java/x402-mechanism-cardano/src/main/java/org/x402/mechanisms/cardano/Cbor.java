@@ -183,7 +183,7 @@ public final class Cbor {
      *
      * @param key the key
      * @return the value, or {@code null}
-     * @throws CborException when the key occurs more than once (decision 120)
+     * @throws CborException when the key occurs more than once
      */
     public Item get(long key) {
       if (entries == null) {
@@ -203,10 +203,10 @@ public final class Cbor {
     }
 
     /**
-     * Fails when two entries of this map have the same key. Integer and text keys compare by
-     * value (so a non-minimal encoding of the same number is a duplicate), other keys by their
-     * wire bytes. Evolution (TS) keeps the last of duplicate entries while a first-match reader
-     * keeps the first, so a keyed map that is read must have unique keys (decision 120).
+     * Fails when two entries of this map have the same key. Integer, text and byte-string keys
+     * compare by value (so a non-minimal number or a chunked byte string equal to a definite one is
+     * a duplicate), other keys by their wire bytes. Readers disagree on duplicate entries (some keep the last, a first-match reader
+     * keeps the first), so a keyed map that is read must have unique keys.
      *
      * @param what the map's name, for the message
      * @return this item
@@ -224,6 +224,8 @@ public final class Cbor {
           identity = "i" + k.integer;
         } else if (k.major == Major.TEXT) {
           identity = "t" + k.text;
+        } else if (k.major == Major.BYTES) {
+          identity = "b" + java.util.HexFormat.of().formatHex(k.bytes());
         } else {
           identity = "r" + java.util.HexFormat.of().formatHex(k.raw());
         }
@@ -239,7 +241,7 @@ public final class Cbor {
      *
      * @param key the key
      * @return the value, or {@code null}
-     * @throws CborException when the key occurs more than once (decision 120)
+     * @throws CborException when the key occurs more than once
      */
     public Item get(String key) {
       if (entries == null) {
@@ -273,7 +275,7 @@ public final class Cbor {
      * @return the array beneath an optional set tag
      */
     public Item untagSet() {
-      return major == Major.TAG && integer.intValue() == 258 ? tagged : this;
+      return major == Major.TAG && integer.equals(BigInteger.valueOf(258)) ? tagged : this;
     }
   }
 

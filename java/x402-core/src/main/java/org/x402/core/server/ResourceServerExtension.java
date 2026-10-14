@@ -16,13 +16,13 @@ import org.x402.core.types.SettleResponse;
 import org.x402.core.types.VerifyResponse;
 
 /**
- * A resource-server extension (TS {@code ResourceServerExtension}, {@code types/extensions.ts}),
+ * A resource-server extension,
  * e.g. bazaar discovery. Every member except {@link #key()} is optional; the defaults do nothing.
  *
  * <p>The lifecycle hooks ({@code on…}) run only for requests whose route declares the extension's
  * key, after the server-wide and scheme hooks of the same phase, and receive that declaration.
- * TS lets {@code enrichPaymentRequiredResponse} edit {@code accepts} in place within an allowlist;
- * the Java wire records are immutable, so an extension only returns its own data.
+ * An extension cannot edit {@code accepts}: the wire records are immutable, so
+ * {@code enrichPaymentRequiredResponse} only returns the extension's own data.
  */
 public interface ResourceServerExtension {
 
@@ -44,7 +44,7 @@ public interface ResourceServerExtension {
   }
 
   /**
-   * Rewrites the route's declaration per request (TS {@code enrichDeclaration}).
+   * Rewrites the route's declaration per request.
    *
    * @param declaration the route's declaration
    * @param transportContext transport data, e.g. the HTTP request context

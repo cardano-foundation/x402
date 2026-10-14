@@ -1,5 +1,9 @@
 package org.x402.spring.properties;
 
+import java.util.ArrayList;
+import java.util.LinkedHashMap;
+import java.util.List;
+import java.util.Map;
 import java.util.function.Predicate;
 import org.springframework.boot.context.properties.source.ConfigurationProperty;
 import org.springframework.boot.context.properties.source.ConfigurationPropertyName;
@@ -44,5 +48,37 @@ public final class RawProperties {
       }
       return false;
     };
+  }
+
+  /**
+   * Undoes the binder's view of YAML lists inside free-form maps: a map whose keys are exactly
+   * {@code "0".."n-1"} becomes a list, recursively; other maps get string keys.
+   *
+   * @param value a bound value
+   * @return the value with its lists restored
+   */
+  public static Object restoreLists(Object value) {
+    if (value instanceof Map<?, ?> map) {
+      boolean indexed = !map.isEmpty();
+      for (int i = 0; i < map.size() && indexed; i++) {
+        indexed = map.containsKey(String.valueOf(i));
+      }
+      if (indexed) {
+        List<Object> list = new ArrayList<>();
+        for (int i = 0; i < map.size(); i++) {
+          list.add(restoreLists(map.get(String.valueOf(i))));
+        }
+        return list;
+      }
+      Map<String, Object> out = new LinkedHashMap<>();
+      map.forEach((k, v) -> out.put(String.valueOf(k), restoreLists(v)));
+      return out;
+    }
+    if (value instanceof List<?> list) {
+      List<Object> out = new ArrayList<>();
+      list.forEach(v -> out.add(restoreLists(v)));
+      return out;
+    }
+    return value;
   }
 }

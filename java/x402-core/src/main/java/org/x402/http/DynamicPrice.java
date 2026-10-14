@@ -2,7 +2,7 @@ package org.x402.http;
 
 import org.x402.core.types.Price;
 
-/** Resolves a price per request (TS {@code DynamicPrice}). */
+/** Resolves a price per request. */
 @FunctionalInterface
 public interface DynamicPrice {
 

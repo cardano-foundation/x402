@@ -6,7 +6,7 @@ import java.util.List;
 import java.util.Map;
 
 /**
- * The body of the {@code PAYMENT-REQUIRED} header (TS {@code PaymentRequired}).
+ * The body of the {@code PAYMENT-REQUIRED} header.
  *
  * @param x402Version the protocol version, 2
  * @param error optional reason the previous payment was refused

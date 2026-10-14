@@ -43,7 +43,7 @@ import org.x402.mechanisms.cardano.exact.server.CardanoSellerSigner;
 import org.yaml.snakeyaml.Yaml;
 
 /**
- * WP11 smoke test (decision 005). It
+ * Smoke test for the example profiles. It
  * <ul>
  *   <li>parses every YAML snippet in the Java READMEs with SnakeYAML and binds the {@code x402}
  *       ones through the real properties classes, failing on unknown keys;</li>
@@ -151,7 +151,7 @@ class ExampleProfilesSmokeTest {
     assertThat(bound.x402().facilitators()).hasSizeGreaterThanOrEqualTo(2);
     assertThat(bound.x402().accounts()).containsKeys("preprod", "preprod-escrow", "mainnet");
     assertThat(bound.x402().routes()).isNotEmpty();
-    assertThat(bound.x402().client().cardano().networks()).isNotEmpty();
+    assertThat(bound.cardano().client().cardano().networks()).isNotEmpty();
     assertThat(bound.cardano().accounts().values())
         .anySatisfy(a -> assertThat(a.cardano()).isNotNull());
     assertThat(bound.facilitatorServer().cardano().networks()).isNotEmpty();

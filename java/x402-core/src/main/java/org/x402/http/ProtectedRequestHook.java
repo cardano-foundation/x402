@@ -3,7 +3,7 @@ package org.x402.http;
 import java.util.Objects;
 
 /**
- * Runs before any payment processing of a protected route (TS {@code ProtectedRequestHook}): it
+ * Runs before any payment processing of a protected route: it
  * may grant access without payment or abort with 403.
  */
 @FunctionalInterface

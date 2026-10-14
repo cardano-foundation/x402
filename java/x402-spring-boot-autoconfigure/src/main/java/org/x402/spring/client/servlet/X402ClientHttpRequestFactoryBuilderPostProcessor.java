@@ -12,7 +12,9 @@ import org.springframework.http.client.ClientHttpRequestFactory;
  * Wraps Boot's {@link ClientHttpRequestFactoryBuilder} bean so every factory it builds for {@code
  * RestClient.Builder} and {@code RestTemplateBuilder} is decorated with x402. The delegate still
  * builds the transport, so Boot's and your HTTP settings (TLS, proxy, timeouts) are kept. Paid
- * requests use a second factory built with the same settings and redirects disabled.
+ * requests use a second factory built with the same settings and redirects disabled, so each
+ * Boot-built client holds two transports (two connection pools): a redirect must never carry
+ * {@code PAYMENT-SIGNATURE} to another host.
  */
 public final class X402ClientHttpRequestFactoryBuilderPostProcessor implements BeanPostProcessor {
 
@@ -52,7 +54,7 @@ public final class X402ClientHttpRequestFactoryBuilderPostProcessor implements B
     public ClientHttpRequestFactory build(ClientHttpRequestFactorySettings settings) {
       ClientHttpRequestFactorySettings base = settings != null ? settings
           : ClientHttpRequestFactorySettings.defaults();
-      // The paid request never follows a redirect (decision 075).
+      // The paid request never follows a redirect.
       return decorator.getObject().decorate(delegate.build(settings),
           delegate.build(base.withRedirects(ClientHttpRequestFactorySettings.Redirects.DONT_FOLLOW)));
     }

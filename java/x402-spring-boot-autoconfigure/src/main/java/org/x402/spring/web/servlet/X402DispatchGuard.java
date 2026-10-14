@@ -13,10 +13,10 @@ import org.springframework.web.servlet.HandlerInterceptor;
 import org.x402.spring.offer.OfferRegistry;
 
 /**
- * Fails closed when Spring dispatches to a paid handler the x402 filter did not decide for (review
- * finding 3): a forward or include, a URL-rewriting filter running after x402, or any other
- * mismatch between the filter's handler lookup and the actual dispatch. The handler is not run;
- * the response is a 500 and the cause is logged.
+ * Fails closed when Spring dispatches to a paid handler the x402 filter did not decide for: a
+ * forward or include, a URL-rewriting filter running after x402, or any other mismatch between the
+ * filter's handler lookup and the actual dispatch. The handler is not run; the response is a 500
+ * and the cause is logged.
  */
 public final class X402DispatchGuard implements HandlerInterceptor {
 

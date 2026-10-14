@@ -1,16 +1,16 @@
 /**
  * Exports the facilitator wire contract as seen by the TS HTTPFacilitatorClient
- * (typescript/packages/core/src/http/httpFacilitatorClient.ts) for java/x402-core (WP12).
+ * (typescript/packages/core/src/http/httpFacilitatorClient.ts) for java/x402-core.
  *
- * A local capture server answers each request with the body the plan's normative wire table
- * (Roles §3; source e2e/facilitators/typescript/index.ts:1039-1131) prescribes. The TS client is
+ * A local capture server answers each request with the body the normative wire table
+ * (source e2e/facilitators/typescript/index.ts) prescribes. The TS client is
  * driven against it for verify, settle and supported, and every case records:
  *   - request: the exact method, path, content type and body bytes the TS client sent
  *   - response: what the capture server answered
  *   - tsOutcome: what the TS client made of it (its parsed result, or the error it threw)
  *
  * The settle abort case serves the Java wire shape and shows that TS settleResponseSchema
- * (:179-180) accepts it; the TS e2e abort body (no transaction, network "unknown") is recorded
+ * accepts it; the TS e2e abort body (no transaction, network "unknown") is recorded
  * as rejected.
  *
  * Run: npm run export:facilitator (from java/tools/ts-vectors).
@@ -138,7 +138,7 @@ const cases: Case[] = [
   {
     name: "settle-abort-ts-e2e-shape",
     operation: "settle",
-    note: "the TS e2e abort body (index.ts:1103-1107); TS settleResponseSchema rejects it",
+    note: "the TS e2e abort body (e2e/facilitators/typescript/index.ts); TS settleResponseSchema rejects it",
     served: {
       status: 200,
       body: json({ success: false, errorReason: "payee_not_allowed", network: "unknown" }),
@@ -232,7 +232,7 @@ server.close();
 
 const doc = {
   generatedFrom: "typescript/packages/core/src/http/httpFacilitatorClient.ts",
-  responsesFrom: "plan Roles §3 wire table; e2e/facilitators/typescript/index.ts:1039-1131",
+  responsesFrom: "the TS e2e facilitator handlers (e2e/facilitators/typescript/index.ts)",
   tsCommit,
   basePath: "/x402",
   cases: out,

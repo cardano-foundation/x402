@@ -23,7 +23,7 @@ import org.x402.core.server.FacilitatorRoute;
 import org.x402.core.types.PaymentPayload;
 
 /**
- * Plan Roles §1b through the HTTP flow: {@code RouteConfig.failover} and {@code
+ * Facilitator routing through the HTTP flow: {@code RouteConfig.failover} and {@code
  * PaymentOption.facilitator} pick the route; {@code PaymentVerified} carries {@code verifiedBy};
  * settle and its pending retry go to that facilitator.
  */

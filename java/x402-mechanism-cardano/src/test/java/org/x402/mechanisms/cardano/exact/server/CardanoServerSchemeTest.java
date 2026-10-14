@@ -31,9 +31,9 @@ import org.x402.mechanisms.cardano.exact.masumi.MasumiVerifier;
 import org.x402.mechanisms.cardano.testing.Vectors;
 
 /**
- * Cardano server scheme parity with TS {@code exact/server/scheme.ts} and {@code masumiIssuer.ts}:
- * {@code parsePrice}, {@code getAssetDecimals} and {@code enhancePaymentRequirements} on the
- * exported vectors, and Masumi quote issuance from a route template.
+ * Cardano server scheme: {@code parsePrice}, {@code getAssetDecimals} and {@code
+ * enhancePaymentRequirements} on vectors exported from the TypeScript SDK, and Masumi quote
+ * issuance from a route template.
  */
 class CardanoServerSchemeTest {
 

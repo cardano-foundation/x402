@@ -17,7 +17,7 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.RegisterExtension;
 import org.x402.mechanisms.cardano.testing.TxBuilder;
 
-/** Blockfrost backend edge cases. Added after the implementation for branch coverage; not red-first. */
+/** Blockfrost backend edge cases. */
 class BlockfrostBranchesTest {
 
   @RegisterExtension
@@ -53,6 +53,18 @@ class BlockfrostBranchesTest {
   }
 
   @Test
+  void anOwnerWithMoreUtxosThanThePageLimitIsALookupFailureNotSpent() {
+    wm.stubFor(get("/txs/" + TX + "/utxos")
+        .willReturn(okJson("{\"outputs\":[{\"output_index\":1,\"address\":\"" + OWNER + "\",\"amount\":[{\"unit\":\"lovelace\",\"quantity\":\"9\"}]}]}")));
+    String other = "{\"tx_hash\":\"" + "00".repeat(32) + "\",\"output_index\":0}";
+    wm.stubFor(get(urlPathEqualTo("/addresses/" + OWNER + "/utxos"))
+        .willReturn(okJson("[" + String.join(",", java.util.Collections.nCopies(100, other)) + "]")));
+
+    assertThatThrownBy(() -> backend().getUtxo(TX + "#1", "cardano:preprod"))
+        .isInstanceOf(ChainLookupException.class);
+  }
+
+  @Test
   void malformedAnswersAndMissingResourcesAreLookupFailures() {
     wm.stubFor(get("/epochs/latest/parameters").willReturn(aResponse().withStatus(404)));
     assertThatThrownBy(() -> backend().getProtocolParameters("cardano:preprod")).hasMessage("Blockfrost returned no protocol parameters");
@@ -60,8 +72,8 @@ class BlockfrostBranchesTest {
     assertThatThrownBy(() -> backend().getTransactionEvidence(TX, "cardano:preprod")).hasMessage("Blockfrost returned malformed JSON");
     wm.stubFor(get("/txs/" + TX).willReturn(okJson("{\"hash\":\"x\"}")));
     wm.stubFor(get("/blocks/latest").willReturn(aResponse().withStatus(404)));
-    assertThat(backend().getTransactionEvidence(TX, "cardano:preprod"))
-        .isEqualTo(new SettlementEvidence(SettlementEvidence.Status.CONFIRMED, 0));
+    assertThatThrownBy(() -> backend().getTransactionEvidence(TX, "cardano:preprod"))
+        .isInstanceOf(ChainLookupException.class);
     assertThatThrownBy(() -> new BlockfrostChainBackend(BlockfrostChainBackend.Config.builder().network("cardano:preprod")
             .baseUrl("http://127.0.0.1:1").requestTimeout(Duration.ofMillis(200)).build()).getTransactionEvidence(TX, "cardano:preprod"))
         .isInstanceOf(ChainLookupException.class);
@@ -76,10 +88,6 @@ class BlockfrostBranchesTest {
     assertThatThrownBy(() -> backend().evaluateTransaction(tx, "cardano:preprod")).hasMessage("Blockfrost evaluation returned no result");
     wm.stubFor(post(urlPathEqualTo("/utils/txs/evaluate/utxos")).willReturn(aResponse().withStatus(500)));
     assertThatThrownBy(() -> backend().evaluateTransaction(tx, "cardano:preprod")).hasMessageStartingWith("Blockfrost evaluateTx failed: 500");
-
-    wm.stubFor(get("/txs/" + TX).willReturn(aResponse().withStatus(404)));
-    assertThatThrownBy(() -> backend().waitForConfirmation(TX, "cardano:preprod"))
-        .hasMessage("Cardano provider awaitTx timed out after 200ms");
 
     String hash = org.x402.mechanisms.cardano.CardanoTransactionDecoder.decode(tx).txHash();
     wm.stubFor(post("/tx/submit").willReturn(okJson("\"" + hash + "\"")));

@@ -20,7 +20,7 @@ import org.x402.core.json.X402Json;
 import org.x402.http.HttpAdapter;
 import org.x402.http.HttpRequestContext;
 
-/** Output equals the vectors exported from TS bazaar (key order included). */
+/** Output equals the vectors exported from the TypeScript SDK (key order included). */
 class BazaarDeclarationTest {
 
   private static final ObjectMapper MAPPER = X402Json.mapper();
@@ -124,6 +124,13 @@ class BazaarDeclarationTest {
         ctx.isNull() ? Map.of("something", "else") : httpContext(ctx);
     Object enriched = new BazaarServerExtension().enrichDeclaration(declaration, context);
     assertSameJson(enriched, vector.get("expected"));
+  }
+
+  @Test
+  void aMissingBodyTypeIsRejectedAsInvalid() {
+    assertThatThrownBy(() -> HttpDiscoveryConfig.create().bodyType(null))
+        .isInstanceOf(IllegalArgumentException.class)
+        .hasMessageContaining("bodyType must be one of");
   }
 
   @Test

@@ -1,6 +1,6 @@
 /**
  * Exports TS @x402/cardano reference behaviour as JSON fixtures for
- * java/x402-mechanism-cardano (WP7).
+ * java/x402-mechanism-cardano.
  *
  * Every facilitator fixture carries the epoch millisecond TS ran at (`now`),
  * the requirements, the payload, a snapshot of the stub chain (UTxOs with
@@ -909,7 +909,7 @@ async function main(): Promise<void> {
     ["bad-policy", requirements(payTo, "1000000", "lovelace", { confirmationPolicy: { l1Confirmations: 1, x: 1 } }), fullAdvert],
     ["no-range", requirements(payTo, "1000000"), { assetTransferMethods: ["default"] }],
     // An array-shaped advertisement is not exported: Java's SupportedKind.extra is a Map, so the
-    // TS "malformed capability block" branch is unreachable there (decision 053).
+    // TS "malformed capability block" branch is unreachable there.
     ["masumi-issued", masumiReq, fullAdvert],
     ["masumi-template-without-issuer", requirements(masumiReq.payTo, "1000000", "lovelace", { assetTransferMethod: "masumi" }), fullAdvert],
     ["non-cardano-kind", requirements(payTo, "1000000"), fullAdvert],

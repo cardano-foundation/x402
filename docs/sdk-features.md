@@ -143,6 +143,8 @@ This page tracks which features are implemented in each SDK (TypeScript, Go, Pyt
 | MCP client (auto-pay tools) | ✅ | ✅ | ✅ | ❌ |
 | Bazaar discovery for MCP tools | ✅ | ✅ | ✅ | ❌ |
 
+Java can build MCP tool declarations (`McpDiscoveryConfig`), but has no MCP server or client to serve them.
+
 ### MCP Client Hooks
 
 | Hook | TypeScript | Go | Python | Java |

@@ -5,8 +5,8 @@ import java.util.List;
 import java.util.Map;
 
 /**
- * Builds {@code bazaar} route declarations (TS {@code declareDiscoveryExtension}). The returned
- * maps keep TS key order, so they serialize to the same JSON.
+ * Builds {@code bazaar} route declarations. The returned
+ * maps keep a fixed key order, so the serialized JSON is stable.
  */
 public final class Bazaar {
 

@@ -11,7 +11,7 @@ import org.x402.mechanisms.cardano.exact.server.ExactCardanoServerScheme;
 
 /**
  * The Cardano server scheme the starter registers. Before every 402 it re-checks the receiver of
- * plain options (plan §1a rule 6), so a {@code pay-to-ref} that resolves to an escrow address or
+ * plain options, so a {@code pay-to-ref} that resolves to an escrow address or
  * to an address on another network is refused (500, logged) instead of advertised.
  */
 public class GuardedCardanoServerScheme extends ExactCardanoServerScheme {

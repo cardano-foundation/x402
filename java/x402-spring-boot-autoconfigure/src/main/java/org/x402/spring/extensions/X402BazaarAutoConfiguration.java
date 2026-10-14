@@ -12,7 +12,7 @@ import org.x402.spring.X402ResourceServerCustomizer;
 import org.x402.spring.autoconfigure.X402AutoConfiguration;
 
 /**
- * Bazaar discovery from YAML (WP9b): registers the bazaar resource-server extension and turns
+ * Bazaar discovery from YAML: registers the bazaar resource-server extension and turns
  * {@code x402.routes.<offer>.extensions.bazaar} into its declaration.
  */
 @AutoConfiguration(after = X402AutoConfiguration.class)

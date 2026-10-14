@@ -6,7 +6,7 @@ import java.util.Map;
 import java.util.function.UnaryOperator;
 
 /**
- * Process-local {@link MasumiTermsStorage} (TS {@code InMemoryMasumiTermsStorage}): bounded,
+ * Process-local {@link MasumiTermsStorage}: bounded,
  * oldest quote evicted first, atomic within one JVM. Only correct for a single instance.
  */
 public final class InMemoryMasumiTermsStorage implements MasumiTermsStorage {

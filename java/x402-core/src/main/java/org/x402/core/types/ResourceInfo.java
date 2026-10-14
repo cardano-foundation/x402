@@ -5,7 +5,7 @@ import com.fasterxml.jackson.annotation.JsonPropertyOrder;
 import java.util.List;
 
 /**
- * Describes the protected resource (TS {@code ResourceInfo}).
+ * Describes the protected resource.
  *
  * @param url the resource URL
  * @param description optional human-readable description

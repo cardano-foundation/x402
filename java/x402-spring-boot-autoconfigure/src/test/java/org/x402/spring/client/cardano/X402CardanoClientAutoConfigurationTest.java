@@ -22,7 +22,7 @@ import org.x402.mechanisms.cardano.signer.MnemonicClientCardanoSigner;
 import org.x402.spring.autoconfigure.X402AutoConfiguration;
 import org.x402.spring.cardano.X402CardanoNetworkBeans;
 
-/** WP13: the Cardano payment client from {@code x402.client.cardano.*}. */
+/** The Cardano payment client from {@code x402.client.cardano.*}. */
 class X402CardanoClientAutoConfigurationTest {
 
   static final String MNEMONIC = "abandon abandon abandon abandon abandon abandon abandon abandon "
@@ -179,4 +179,20 @@ class X402CardanoClientAutoConfigurationTest {
         .withPropertyValues("x402.client.enabled=true")
         .run(ctx -> assertThat(ctx.getBean(X402CardanoClients.class).networks()).isEmpty());
   }
+
+  @Test
+  void aSuppliedSignerNeedsNoBlockfrostSettings() {
+    new ApplicationContextRunner()
+        .withConfiguration(AutoConfigurations.of(X402AutoConfiguration.class,
+            X402CardanoClientAutoConfiguration.class))
+        .withPropertyValues("x402.client.enabled=true",
+            "x402.client.cardano.networks[0].network=" + PREPROD)
+        .withBean(ClientCardanoSigner.class, FixedSigner::new)
+        .run(ctx -> {
+          assertThat(ctx).hasNotFailed();
+          assertThat(ctx.getBean(X402CardanoClients.class).signer(PREPROD))
+              .isInstanceOf(FixedSigner.class);
+        });
+  }
 }
+

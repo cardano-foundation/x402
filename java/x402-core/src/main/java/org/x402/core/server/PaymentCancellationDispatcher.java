@@ -3,7 +3,7 @@ package org.x402.core.server;
 import org.x402.core.types.SettleResponse;
 
 /**
- * Cancels a verified payment whose handler failed (TS {@code PaymentCancellationDispatcher}). Only
+ * Cancels a verified payment whose handler failed. Only
  * the first call dispatches; later calls return the first result.
  */
 @FunctionalInterface

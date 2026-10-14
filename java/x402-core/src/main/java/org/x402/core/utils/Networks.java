@@ -1,13 +1,17 @@
 package org.x402.core.utils;
 
 import java.util.Map;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.regex.Pattern;
 
 /**
- * CAIP-2 network pattern matching, as TS {@code networkMatchesPattern}, {@code
- * findSchemesByNetwork} and {@code findByNetworkAndScheme} ({@code core/src/utils/index.ts}).
+ * CAIP-2 network pattern matching, where {@code *} matches any run of characters.
  */
 public final class Networks {
+
+  /** Patterns come from configuration and facilitator answers; a small cache covers them. */
+  private static final int MAX_CACHED_PATTERNS = 256;
+  private static final Map<String, Pattern> PATTERNS = new ConcurrentHashMap<>();
 
   private Networks() {}
 
@@ -22,6 +26,21 @@ public final class Networks {
     if (pattern == null || network == null) {
       return false;
     }
+    if (pattern.indexOf('*') < 0) {
+      return pattern.equals(network);
+    }
+    Pattern compiled = PATTERNS.get(pattern);
+    if (compiled == null) {
+      compiled = compile(pattern);
+      if (PATTERNS.size() < MAX_CACHED_PATTERNS) {
+        Pattern cached = PATTERNS.putIfAbsent(pattern, compiled);
+        compiled = cached != null ? cached : compiled;
+      }
+    }
+    return compiled.matcher(network).matches();
+  }
+
+  private static Pattern compile(String pattern) {
     StringBuilder regex = new StringBuilder();
     int start = 0;
     int star;
@@ -35,7 +54,7 @@ public final class Networks {
     if (start < pattern.length()) {
       regex.append(Pattern.quote(pattern.substring(start)));
     }
-    return Pattern.compile(regex.toString(), Pattern.DOTALL).matcher(network).matches();
+    return Pattern.compile(regex.toString(), Pattern.DOTALL);
   }
 
   /**

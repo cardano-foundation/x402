@@ -3,9 +3,9 @@ package org.x402.http;
 import java.util.List;
 
 /**
- * Routes cannot be served as configured (TS {@code RouteConfigurationError}); lists every problem.
- * {@link X402HttpResourceServer#isFatalStartupError} treats it as fatal, as TS does. An adapter
- * applying the plan's partial-outage rule checks {@link #onlyAwaitingFacilitators()}.
+ * Routes cannot be served as configured; lists every problem.
+ * {@link X402HttpResourceServer#isFatalStartupError} treats it as fatal. An adapter
+ * applying the partial-outage rule checks {@link #onlyAwaitingFacilitators()}.
  */
 public class RouteConfigurationError extends IllegalArgumentException {
 
@@ -39,7 +39,7 @@ public class RouteConfigurationError extends IllegalArgumentException {
   }
 
   /**
-   * Whether every problem may heal once a failed facilitator answers (plan Roles §1b: start, and
+   * Whether every problem may heal once a failed facilitator answers (the server starts, and
    * answer 503 on the affected routes only).
    *
    * @return {@code true} when all problems are retryable

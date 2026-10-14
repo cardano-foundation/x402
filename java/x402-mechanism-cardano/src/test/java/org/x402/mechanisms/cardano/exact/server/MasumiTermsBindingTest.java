@@ -23,7 +23,7 @@ import org.x402.mechanisms.cardano.exact.masumi.InMemoryMasumiTermsStorage;
 import org.x402.mechanisms.cardano.testing.Vectors;
 
 /**
- * Spec :940-944 terms binding (TS {@code server/scheme.ts:342-400}): the first transaction to
+ * Terms binding: the first transaction to
  * claim a served Masumi quote owns it; a second transaction is a duplicate, altered terms are a
  * mismatch, unknown terms are refused, an identical paid retry is allowed, and two concurrent
  * first claims have exactly one winner.

@@ -18,7 +18,7 @@ import org.x402.core.Fixtures;
 import org.x402.core.types.PaymentRequirements;
 
 /**
- * Review finding O5: the default transport never follows a facilitator redirect, so per-endpoint
+ * The default transport never follows a facilitator redirect, so per-endpoint
  * auth headers cannot reach another host; a 3xx answer is a {@link FacilitatorResponseException}.
  */
 class HttpFacilitatorClientRedirectTest {

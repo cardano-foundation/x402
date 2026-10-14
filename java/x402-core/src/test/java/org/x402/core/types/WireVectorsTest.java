@@ -15,7 +15,10 @@ import org.junit.jupiter.params.provider.MethodSource;
 import org.x402.core.json.X402Json;
 import org.x402.http.HeaderCodec;
 
-/** Byte-level parity with TS {@code JSON.stringify} and the base64 header helpers. */
+/**
+ * Byte-level checks of the JSON encoding and the base64 header helpers against vectors exported
+ * from the TypeScript SDK.
+ */
 class WireVectorsTest {
 
   static JsonNode load(String name) throws IOException {

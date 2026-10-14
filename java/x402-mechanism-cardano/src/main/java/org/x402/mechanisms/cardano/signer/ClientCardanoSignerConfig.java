@@ -1,12 +1,14 @@
 package org.x402.mechanisms.cardano.signer;
 
+import com.bloxbean.cardano.client.api.ProtocolParamsSupplier;
+import com.bloxbean.cardano.client.api.UtxoSupplier;
 import java.math.BigInteger;
 import java.time.Clock;
 import java.util.Map;
 import java.util.Objects;
 import java.util.function.Function;
 import org.x402.mechanisms.cardano.CardanoNetworks;
-import org.x402.mechanisms.cardano.chain.CardanoWalletProvider;
+import org.x402.mechanisms.cardano.chain.BlockfrostChainBackend;
 import org.x402.mechanisms.cardano.exact.client.MasumiBuyerInput;
 import org.x402.mechanisms.cardano.exact.masumi.MasumiConstants;
 import org.x402.mechanisms.cardano.exact.masumi.MasumiDeploymentValidator;
@@ -14,12 +16,14 @@ import org.x402.mechanisms.cardano.exact.masumi.MasumiExtra;
 import org.x402.mechanisms.cardano.exact.masumi.MasumiRegistryValidator;
 
 /**
- * Configuration of the mnemonic-backed client signer (TS {@code ClientCardanoSignerConfig}). One
+ * Configuration of the mnemonic-backed client signer. One
  * signer serves one network with its own provider.
  *
  * @param mnemonic BIP-39 phrase of the funding wallet
  * @param network the x402 Cardano network
- * @param walletProvider chain reads for this network (e.g. a {@code BlockfrostChainBackend})
+ * @param utxoSupplier the wallet's UTxOs on this network (e.g. a {@code BlockfrostChainBackend});
+ *     it must throw when a read fails rather than answer a short list
+ * @param protocolParamsSupplier live protocol parameters of this network
  * @param accountIndex derivation account index
  * @param masumiBuyerInput buyer-side datum input per payment, or {@code null}
  * @param validateMasumiRegistryClaim validates registry claims; without one they are refused
@@ -32,7 +36,8 @@ import org.x402.mechanisms.cardano.exact.masumi.MasumiRegistryValidator;
 public record ClientCardanoSignerConfig(
     String mnemonic,
     String network,
-    CardanoWalletProvider walletProvider,
+    UtxoSupplier utxoSupplier,
+    ProtocolParamsSupplier protocolParamsSupplier,
     int accountIndex,
     Function<MasumiExtra, MasumiBuyerInput> masumiBuyerInput,
     MasumiRegistryValidator validateMasumiRegistryClaim,
@@ -45,9 +50,17 @@ public record ClientCardanoSignerConfig(
   /** Validates and fills defaults. */
   public ClientCardanoSignerConfig {
     Objects.requireNonNull(mnemonic, "mnemonic");
-    Objects.requireNonNull(walletProvider, "walletProvider");
+    Objects.requireNonNull(utxoSupplier, "utxoSupplier");
+    Objects.requireNonNull(protocolParamsSupplier, "protocolParamsSupplier");
     if (!CardanoNetworks.isCardanoNetwork(network)) {
       throw new IllegalArgumentException("Unsupported Cardano network: " + network);
+    }
+    for (Object provider : new Object[] {utxoSupplier, protocolParamsSupplier}) {
+      if (provider instanceof BlockfrostChainBackend backend
+          && !CardanoNetworks.normalize(backend.network()).equals(CardanoNetworks.normalize(network))) {
+        throw new IllegalArgumentException(
+            "Wallet provider serves " + backend.network() + ", not " + network);
+      }
     }
     masumiRequestContent = masumiRequestContent == null ? null : java.util.Collections.unmodifiableMap(new java.util.LinkedHashMap<>(masumiRequestContent));
     masumiMaxCollateralLovelace =
@@ -70,7 +83,8 @@ public record ClientCardanoSignerConfig(
   public static final class Builder {
     private String mnemonic;
     private String network;
-    private CardanoWalletProvider walletProvider;
+    private UtxoSupplier utxoSupplier;
+    private ProtocolParamsSupplier protocolParamsSupplier;
     private int accountIndex;
     private Function<MasumiExtra, MasumiBuyerInput> masumiBuyerInput;
     private MasumiRegistryValidator validateMasumiRegistryClaim;
@@ -105,13 +119,37 @@ public record ClientCardanoSignerConfig(
     }
 
     /**
-     * Sets the wallet provider.
+     * Sets one provider for both the wallet's UTxOs and the protocol parameters.
      *
-     * @param v the provider
+     * @param v the provider, e.g. a {@code BlockfrostChainBackend}
+     * @param <T> a type serving both
      * @return this builder
      */
-    public Builder walletProvider(CardanoWalletProvider v) {
-      walletProvider = v;
+    public <T extends UtxoSupplier & ProtocolParamsSupplier> Builder walletProvider(T v) {
+      utxoSupplier = v;
+      protocolParamsSupplier = v;
+      return this;
+    }
+
+    /**
+     * Sets the wallet's UTxO source.
+     *
+     * @param v the supplier
+     * @return this builder
+     */
+    public Builder utxoSupplier(UtxoSupplier v) {
+      utxoSupplier = v;
+      return this;
+    }
+
+    /**
+     * Sets the protocol-parameter source.
+     *
+     * @param v the supplier
+     * @return this builder
+     */
+    public Builder protocolParamsSupplier(ProtocolParamsSupplier v) {
+      protocolParamsSupplier = v;
       return this;
     }
 
@@ -210,7 +248,7 @@ public record ClientCardanoSignerConfig(
      */
     public ClientCardanoSignerConfig build() {
       return new ClientCardanoSignerConfig(
-          mnemonic, network, walletProvider, accountIndex, masumiBuyerInput, validateMasumiRegistryClaim,
+          mnemonic, network, utxoSupplier, protocolParamsSupplier, accountIndex, masumiBuyerInput, validateMasumiRegistryClaim,
           masumiRequestContent, validateCustomMasumiDeployment, masumiMaxCollateralLovelace, masumiMaxDeadlineHorizonMs,
           clock);
     }

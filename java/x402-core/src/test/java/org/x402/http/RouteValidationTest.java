@@ -27,8 +27,7 @@ import org.x402.core.types.Money;
 import org.x402.http.RouteValidationError.Reason;
 
 /**
- * Route validation at initialize (TS {@code x402HTTPResourceServer.ts:443-448}, :486-495,
- * :1118-1228) plus the Java pin, ambiguity and timeout-budget rules (plan Roles §1b).
+ * Route validation at initialize, plus the facilitator pin, ambiguity and timeout-budget rules.
  */
 class RouteValidationTest {
 

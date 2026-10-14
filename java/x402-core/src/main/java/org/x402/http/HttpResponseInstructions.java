@@ -5,7 +5,7 @@ import java.util.LinkedHashMap;
 import java.util.Map;
 
 /**
- * A response an adapter must write (TS {@code HTTPResponseInstructions}).
+ * A response an adapter must write.
  *
  * @param status the status
  * @param headers headers to set, in order

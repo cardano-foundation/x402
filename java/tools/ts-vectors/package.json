@@ -8,6 +8,7 @@
     "export:bazaar": "../../../typescript/node_modules/.bin/tsx export-bazaar.ts",
     "export:cardano": "../../../typescript/packages/mechanisms/cardano/node_modules/.bin/tsx export-cardano.ts",
     "export:facilitator": "../../../typescript/node_modules/.bin/tsx export-facilitator.ts",
-    "export": "npm run export:core && npm run export:bazaar && npm run export:cardano && npm run export:facilitator"
+    "export": "npm run export:core && npm run export:bazaar && npm run export:cardano && npm run export:facilitator && npm run export:plutus",
+    "export:plutus": "../../../typescript/packages/mechanisms/cardano/node_modules/.bin/tsx export-plutus.ts"
   }
 }

@@ -5,22 +5,22 @@ import java.util.List;
 import java.util.Objects;
 
 /**
- * Client spend controls (TS {@code SpendControls}, {@code x402Client.ts:156}, :170-192), on by
- * default: only assets the scheme recognizes as the network's default asset ({@code
- * findDefaultAsset}; USDM on Cardano) are paid, capped at {@code $1} per payment. Other assets need
- * an {@link AllowedAsset} entry, {@link Builder#allowAnyAsset()}, or {@link #disabled()}.
+ * Client spend controls, on by default: only assets the scheme recognizes as the network's default
+ * asset ({@code findDefaultAsset}; USDM on Cardano) are paid, capped at {@code $1} per payment.
+ * Other assets need an {@link AllowedAsset} entry, {@link Builder#allowAnyAsset()}, or {@link
+ * #disabled()}.
  *
- * @param enabled {@code false} = TS {@code spendControls: false}
+ * @param enabled {@code false} turns all spend controls off
  * @param maxAmountPerPayment the USD cap for default assets as a money string, or {@code null} for
- *     no USD cap (TS {@code maxAmountPerPayment: false})
- * @param allowAnyAsset TS {@code allowedAssets: true}
+ *     no USD cap
+ * @param allowAnyAsset {@code true} allows paying in any asset
  * @param allowedAssets extra allowed assets with optional atomic caps
  */
 public record SpendControls(
     boolean enabled, String maxAmountPerPayment, boolean allowAnyAsset,
     List<AllowedAsset> allowedAssets) {
 
-  /** TS {@code DEFAULT_MAX_AMOUNT_PER_PAYMENT}. */
+  /** The default USD cap per payment. */
   public static final String DEFAULT_MAX_AMOUNT_PER_PAYMENT = "$1";
 
   /** Copies the list. */
@@ -29,7 +29,7 @@ public record SpendControls(
   }
 
   /**
-   * An allowed asset (TS {@code SpendControlAsset}).
+   * An allowed asset.
    *
    * @param network a network or pattern such as {@code cardano:*}
    * @param asset the asset identifier, or the default asset's symbol (case-insensitive)
@@ -45,7 +45,7 @@ public record SpendControls(
   }
 
   /**
-   * TS defaults: default assets only, {@code $1} cap.
+   * The defaults: default assets only, {@code $1} cap.
    *
    * @return the controls
    */
@@ -91,7 +91,7 @@ public record SpendControls(
     }
 
     /**
-     * Removes the USD cap (TS {@code maxAmountPerPayment: false}).
+     * Removes the USD cap.
      *
      * @return this builder
      */
@@ -101,7 +101,7 @@ public record SpendControls(
     }
 
     /**
-     * Allows any asset (TS {@code allowedAssets: true}).
+     * Allows any asset.
      *
      * @return this builder
      */

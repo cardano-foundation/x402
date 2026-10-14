@@ -30,7 +30,7 @@ import org.x402.core.types.PaymentRequired;
 import org.x402.core.types.ResourceInfo;
 
 /**
- * Review findings B1 and O3: the paid retry goes to the policy-checked URI that answered 402 (an
+ * The paid retry goes to the policy-checked URI that answered 402 (an
  * off-list first host never receives {@code PAYMENT-SIGNATURE}); an empty request body is
  * replayable.
  */

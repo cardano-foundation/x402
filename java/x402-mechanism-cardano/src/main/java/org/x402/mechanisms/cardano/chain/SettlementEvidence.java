@@ -3,7 +3,7 @@ package org.x402.mechanisms.cardano.chain;
 import java.util.Locale;
 
 /**
- * Authenticated settlement evidence for one transaction (TS {@code CardanoSettlementEvidence}).
+ * Authenticated settlement evidence for one transaction.
  * {@code confirmations} is -1 for mempool acceptance, 0 for inclusion and {@code n} for {@code n}
  * newer blocks; it is meaningless when the status is {@link Status#UNKNOWN}.
  *
@@ -22,7 +22,7 @@ public record SettlementEvidence(Status status, int confirmations) {
     CONFIRMED;
 
     /**
-     * The TS string.
+     * The wire string.
      *
      * @return {@code unknown}, {@code mempool} or {@code confirmed}
      */
@@ -31,7 +31,7 @@ public record SettlementEvidence(Status status, int confirmations) {
     }
 
     /**
-     * Parses the TS string.
+     * Parses the wire string.
      *
      * @param wire the string
      * @return the status
@@ -42,7 +42,7 @@ public record SettlementEvidence(Status status, int confirmations) {
   }
 
   /**
-   * No record of the transaction (TS uses {@code confirmations: -2}).
+   * No record of the transaction.
    *
    * @return the evidence
    */

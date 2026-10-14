@@ -14,20 +14,24 @@ import org.apache.commons.logging.Log;
 import org.apache.commons.logging.LogFactory;
 import org.springframework.core.annotation.AnnotatedElementUtils;
 import org.springframework.web.method.HandlerMethod;
+import org.x402.core.SchemeNetworkServer;
+import org.x402.core.server.PaymentFlows;
+import org.x402.core.server.X402ResourceServer;
+import org.x402.http.PaymentOption;
 import org.x402.http.RoutePattern;
 import org.x402.spring.X402ConfigurationException;
 import org.x402.spring.annotation.X402Payment;
 
 /**
  * Maps handler methods to offers (stack-neutral). Offers attach to the {@link HandlerMethod} Spring
- * dispatches to, so matching cannot drift from routing (plan rule 3). Built once at startup; every
- * problem in plan rules 1, 2, 4, 5 and 7 is detected here.
+ * dispatches to, so matching cannot drift from routing. Built once at startup; every
+ * offer or annotation problem is detected here.
  */
 public final class OfferRegistry {
 
   /**
    * Request/exchange attribute naming the offer the x402 filter decided for this request. The
-   * dispatch guard refuses to run an offer's handler without it (review finding 3).
+   * dispatch guard refuses to run an offer's handler without it.
    */
   public static final String DECIDED_OFFER = OfferRegistry.class.getName() + ".DECIDED_OFFER";
 
@@ -38,6 +42,7 @@ public final class OfferRegistry {
   private final Map<Method, String> byMethod = new HashMap<>();
   private final Set<String> annotatedOffers = new LinkedHashSet<>();
   private final List<String> warnings = new ArrayList<>();
+  private final boolean hasOffers;
 
   /**
    * Builds the registry.
@@ -51,6 +56,7 @@ public final class OfferRegistry {
    */
   public OfferRegistry(HandlerMethodSource source, X402Offers offers,
       Predicate<String> authorizationFlow) {
+    this.hasOffers = !offers.isEmpty();
     List<HandlerMethodSource.Mapping> mappings = source.mappings();
     for (HandlerMethodSource.Mapping mapping : mappings) {
       HandlerMethod handler = mapping.handlerMethod();
@@ -76,6 +82,48 @@ public final class OfferRegistry {
     warnings.forEach(LOG::warn);
   }
 
+  /**
+   * Whether an offer has an option whose flow settles after the handler (its response must be
+   * buffered, so streaming handlers are refused).
+   *
+   * @param offers the offers
+   * @param server the server with its registered schemes
+   * @return the predicate
+   */
+  public static Predicate<String> settlesAfterHandler(X402Offers offers,
+      X402ResourceServer server) {
+    return name -> {
+      if (offers.offer(name) == null) {
+        return true;
+      }
+      for (PaymentOption option : offers.offer(name).route().accepts()) {
+        SchemeNetworkServer scheme = server.getRegisteredScheme(option.network(),
+            option.scheme());
+        if (scheme == null) {
+          return true;
+        }
+        try {
+          if (PaymentFlows.resolve(scheme, option.extra() == null ? Map.of() : option.extra())
+              .flow().settleAfterHandler()) {
+            return true;
+          }
+        } catch (RuntimeException e) {
+          return true;
+        }
+      }
+      return false;
+    };
+  }
+
+  /**
+   * Whether any offer is configured; without one no request is paid and the filters do nothing.
+   *
+   * @return {@code true} when at least one offer exists
+   */
+  public boolean hasOffers() {
+    return hasOffers;
+  }
+
   private void checkPath(ResolvedOffer offer, List<HandlerMethodSource.Mapping> mappings,
       HandlerMethodSource source, Predicate<String> authorizationFlow) {
     String path = offer.path();
@@ -88,7 +136,7 @@ public final class OfferRegistry {
     }
     if (path.contains("{") || path.contains("}")) {
       throw new X402ConfigurationException("offer \"" + offer.name() + "\": path \"" + path
-          + "\" uses {…}; x402 route patterns use :param, [param] or * (TS syntax)");
+          + "\" uses {…}; x402 route patterns use :param, [param] or *");
     }
     RoutePattern pattern = RoutePattern.parse(path.strip());
     boolean matched = false;

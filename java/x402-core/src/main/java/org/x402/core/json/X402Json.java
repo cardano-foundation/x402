@@ -9,8 +9,8 @@ import com.fasterxml.jackson.databind.json.JsonMapper;
 import java.io.UncheckedIOException;
 
 /**
- * The one JSON configuration for x402 wire data. Output is compact and keeps declaration order,
- * matching TS {@code JSON.stringify}; unknown fields are ignored on input.
+ * The one JSON configuration for x402 wire data. Output is compact and keeps declaration order
+ * (headers are reproducible byte for byte); unknown fields are ignored on input.
  */
 public final class X402Json {
 

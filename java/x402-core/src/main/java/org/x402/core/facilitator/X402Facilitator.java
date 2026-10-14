@@ -38,21 +38,21 @@ import org.x402.core.types.VerifyResponse;
 import org.x402.core.utils.Networks;
 
 /**
- * The facilitator role (TS {@code facilitator/x402Facilitator.ts}): routes verify and settle to
- * the first registered scheme matching scheme and network, runs hooks with TS result semantics,
- * and answers {@code /supported}.
+ * The facilitator role: routes verify and settle to
+ * the first registered scheme matching scheme and network, runs hooks, and answers {@code
+ * /supported}.
  *
  * <ul>
- *   <li>A before-verify abort answers {@code isValid:false} with the reason (TS :293-300).
+ *   <li>A before-verify abort answers {@code isValid:false} with the reason.
  *   <li>An {@code isValid:false} verdict goes through the verify-failure hooks; a recovery then
- *       runs the after-verify hooks with the recovered result (TS :353-360). A thrown error may be
- *       recovered too; after-verify hooks then do not run (TS).
- *   <li>A before-settle abort throws {@link SettleAbortedException} (TS throws {@code Settlement
- *       aborted: …}, :415-419); mapping it to a wire body is the HTTP handler's job.
- *   <li>Hook exceptions propagate, as in TS.
+ *       runs the after-verify hooks with the recovered result. A thrown error may be
+ *       recovered too; after-verify hooks then do not run.
+ *   <li>A before-settle abort throws {@link SettleAbortedException} (message {@code Settlement
+ *       aborted: …}); mapping it to a wire body is the HTTP handler's job.
+ *   <li>Hook exceptions propagate to the caller.
  * </ul>
  *
- * <p>Thread-safe; registration may happen at any time, as in TS.
+ * <p>Thread-safe; registration may happen at any time.
  */
 public final class X402Facilitator {
 
@@ -84,8 +84,7 @@ public final class X402Facilitator {
 
   /**
    * Registers a scheme for several networks. Networks of one namespace also match the wildcard
-   * {@code <namespace>:*}; mixed namespaces match only their listed networks (TS {@code
-   * derivePattern}).
+   * {@code <namespace>:*}; mixed namespaces match only their listed networks.
    *
    * @param networks the networks
    * @param scheme the scheme

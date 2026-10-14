@@ -24,7 +24,7 @@ import org.x402.spring.HookRecorder;
 import org.x402.spring.TestAdapter;
 import org.x402.spring.autoconfigure.X402AutoConfiguration;
 
-/** Plan Roles §1 and §1b through the starter: several options, several facilitators. */
+/** Through the starter: several options, several facilitators. */
 class MultiOptionOfferTest {
 
   private static FakeFacilitator owner;

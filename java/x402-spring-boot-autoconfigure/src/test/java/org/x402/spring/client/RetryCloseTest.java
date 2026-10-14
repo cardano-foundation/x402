@@ -25,7 +25,7 @@ import org.x402.spring.HookRecorder;
 import org.x402.spring.TestClientScheme;
 import org.x402.spring.client.servlet.X402ClientHttpRequestFactory;
 
-/** Review round 2, finding 11: the recovered retry's response is closed if the hook throws. */
+/** The recovered retry's response is closed if the hook throws. */
 class RetryCloseTest {
 
   @Test

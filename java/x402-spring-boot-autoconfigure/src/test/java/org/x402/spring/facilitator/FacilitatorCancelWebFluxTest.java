@@ -28,7 +28,7 @@ import org.x402.core.types.VerifyResponse;
 import org.x402.spring.TestHttp;
 
 /**
- * Review round 2, finding 2: a settle that started on the WebFlux facilitator endpoint completes
+ * A settle that started on the WebFlux facilitator endpoint completes
  * when the client goes away (no interrupted worker mid-broadcast).
  */
 @SpringBootTest(classes = FacilitatorCancelWebFluxTest.App.class,

@@ -1,17 +1,17 @@
 package org.x402.mechanisms.cardano.exact.script;
 
+import com.bloxbean.cardano.client.plutus.spec.PlutusData;
 import java.io.ByteArrayOutputStream;
 import java.util.ArrayList;
 import java.util.List;
 import org.x402.mechanisms.cardano.Cbor;
-import org.x402.mechanisms.cardano.PlutusData;
+import org.x402.mechanisms.cardano.PlutusEncoding;
 
 /**
- * Plutus parameter application performed directly on the flat bit stream (port of the Go
- * branch's {@code exact/script/flat.go}). Every term is copied bit for bit; only the
+ * Plutus parameter application performed directly on the flat bit stream. Every term is copied bit
+ * for bit; only the
  * byte-alignment fillers in front of byte strings are re-emitted for their new position. The
- * result is byte-identical to Aiken's {@code apply_params} and Evolution's {@code
- * applyParamsToScript}; no native library is needed (decision 043).
+ * result is byte-identical to Aiken's {@code apply_params}; no native library is needed.
  */
 public final class FlatApplier {
 
@@ -54,7 +54,7 @@ public final class FlatApplier {
       c.w.bits(1, 1); // type list cons
       c.w.bits(8, 4); // data
       c.w.bits(0, 1); // type list end
-      c.w.byteString(p.toCbor());
+      c.w.byteString(PlutusEncoding.encode(p));
     }
     c.w.filler();
     return new Cbor.Writer().bytes(c.w.toByteArray()).toByteArray();

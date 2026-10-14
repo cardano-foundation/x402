@@ -7,7 +7,7 @@ import java.util.Map;
 import java.util.Objects;
 
 /**
- * One acceptable way to pay (TS {@code PaymentRequirements}).
+ * One acceptable way to pay.
  *
  * @param scheme the payment scheme, e.g. {@code exact}
  * @param network the CAIP-2 network, e.g. {@code cardano:preprod}

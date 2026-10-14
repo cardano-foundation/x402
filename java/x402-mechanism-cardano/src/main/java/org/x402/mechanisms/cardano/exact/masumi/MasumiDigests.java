@@ -14,7 +14,7 @@ import org.x402.core.types.PaymentRequirements;
 import org.x402.mechanisms.cardano.Jcs;
 
 /**
- * The two Masumi digests (TS {@code exact/masumi/digests.ts}): {@code inputHash} over the
+ * The two Masumi digests: {@code inputHash} over the
  * content-free commitment manifest, and {@code termsDigest} over the signed terms. Both are
  * {@code SHA-256(UTF-8(domain) || UTF-8(JCS(value)))} as lowercase hex.
  */
@@ -51,7 +51,7 @@ public final class MasumiDigests {
    * @param content the content
    * @param hasContent whether content is present at all
    * @return the part bytes
-   * @throws IllegalArgumentException with TS's messages when absent or malformed
+   * @throws IllegalArgumentException when absent or malformed
    */
   public static byte[] commitmentPartBytes(String canonicalization, Object content, boolean hasContent) {
     if (!hasContent) {
@@ -131,8 +131,7 @@ public final class MasumiDigests {
 
   /**
    * The signed terms: {@code terms} spread verbatim plus the seven projected requirement fields
-   * (TS {@code buildSignedTerms}). Unknown keys of raw terms are kept, as the TS spread keeps
-   * them.
+   * Unknown keys of raw terms are kept, as a JavaScript object spread keeps them.
    *
    * @param terms the terms as a JSON map (a non-map counts as empty, like a JS spread)
    * @param assetTransferMethod {@code extra.assetTransferMethod}
@@ -169,7 +168,7 @@ public final class MasumiDigests {
   }
 
   /**
-   * The signed terms read straight from {@code requirements.extra} (TS server's cast).
+   * The signed terms read straight from {@code requirements.extra}, without validating its shape.
    *
    * @param requirements the requirements
    * @return the signed terms

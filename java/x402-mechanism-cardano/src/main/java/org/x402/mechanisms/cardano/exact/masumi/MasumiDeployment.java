@@ -5,7 +5,7 @@ import java.util.List;
 import java.util.Map;
 
 /**
- * Validator parameters baked into the escrow script hash (TS {@code MasumiDeployment}). Admin
+ * Validator parameters baked into the escrow script hash. Admin
  * key order and duplicates are preserved: a repeated key carries repeated voting weight.
  *
  * @param requiredAdmins positive canonical decimal string
@@ -30,7 +30,7 @@ public record MasumiDeployment(String requiredAdmins, List<String> adminVkeys, S
   }
 
   /**
-   * The JSON form, in TS field order.
+   * The JSON form, in wire field order.
    *
    * @return the map
    */

@@ -1,8 +1,8 @@
 package org.x402.core;
 
 /**
- * A facilitator call failed at transport level or returned an unusable body (TS {@code
- * FacilitatorResponseError}). Subclass {@link Timeout} is TS {@code FacilitatorTimeoutError}.
+ * A facilitator call failed at transport level or returned an unusable body.
+ * {@link Timeout} is the subclass for a request that timed out.
  */
 public class FacilitatorResponseException extends RuntimeException {
 

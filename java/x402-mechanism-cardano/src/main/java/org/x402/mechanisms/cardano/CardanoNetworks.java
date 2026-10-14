@@ -1,13 +1,14 @@
 package org.x402.mechanisms.cardano;
 
+import com.bloxbean.cardano.client.common.model.SlotConfig;
+import com.bloxbean.cardano.client.common.model.SlotConfigs;
 import java.math.BigInteger;
 import java.time.Clock;
 import java.util.List;
 import java.util.Map;
 
 /**
- * Cardano network identifiers, CIP-34 aliases and slot↔time conversion (TS {@code constants.ts},
- * {@code utils.ts:slotToPosixMs}).
+ * Cardano network identifiers, CIP-34 aliases and slot↔time conversion.
  */
 public final class CardanoNetworks {
 
@@ -30,20 +31,11 @@ public final class CardanoNetworks {
   private static final Map<String, String> ALIASES =
       Map.of(MAINNET_CIP34, MAINNET, PREPROD_CIP34, PREPROD, PREVIEW_CIP34, PREVIEW);
 
-  /**
-   * Shelley-era slot configuration (Evolution {@code SLOT_CONFIG_NETWORK}).
-   *
-   * @param zeroTimeMs POSIX milliseconds of {@code zeroSlot}
-   * @param zeroSlot the first slot of the configuration
-   * @param slotLengthMs milliseconds per slot
-   */
-  public record SlotConfig(long zeroTimeMs, long zeroSlot, long slotLengthMs) {}
-
   private static final Map<String, SlotConfig> SLOT_CONFIGS =
       Map.of(
-          MAINNET, new SlotConfig(1_596_059_091_000L, 4_492_800L, 1000L),
-          PREPROD, new SlotConfig(1_655_769_600_000L, 86_400L, 1000L),
-          PREVIEW, new SlotConfig(1_666_656_000_000L, 0L, 1000L));
+          MAINNET, SlotConfigs.mainnet(),
+          PREPROD, SlotConfigs.preprod(),
+          PREVIEW, SlotConfigs.preview());
 
   private CardanoNetworks() {}
 
@@ -109,19 +101,30 @@ public final class CardanoNetworks {
    */
   public static BigInteger slotToPosixMs(String network, BigInteger slot) {
     SlotConfig c = slotConfig(network);
-    return BigInteger.valueOf(c.zeroTimeMs())
-        .add(slot.subtract(BigInteger.valueOf(c.zeroSlot())).multiply(BigInteger.valueOf(c.slotLengthMs())));
+    return BigInteger.valueOf(c.getZeroTime())
+        .add(slot.subtract(BigInteger.valueOf(c.getZeroSlot())).multiply(BigInteger.valueOf(c.getSlotLength())));
   }
 
   /**
-   * The current slot derived from a clock (TS reference signer {@code getCurrentSlot}).
+   * The current slot derived from a clock.
    *
    * @param network the network identifier
    * @param clock the clock
    * @return the current absolute slot
    */
   public static long currentSlot(String network, Clock clock) {
+    return posixMsToSlot(network, clock.millis());
+  }
+
+  /**
+   * The absolute slot containing a POSIX time.
+   *
+   * @param network the network identifier
+   * @param posixMs the wall-clock time in milliseconds
+   * @return the slot
+   */
+  public static long posixMsToSlot(String network, long posixMs) {
     SlotConfig c = slotConfig(network);
-    return c.zeroSlot() + Math.floorDiv(clock.millis() - c.zeroTimeMs(), c.slotLengthMs());
+    return c.getZeroSlot() + Math.floorDiv(posixMs - c.getZeroTime(), c.getSlotLength());
   }
 }

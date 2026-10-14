@@ -4,8 +4,8 @@ import java.util.List;
 import org.x402.mechanisms.cardano.MnemonicAccounts;
 
 /**
- * The facilitator's own addresses for {@code /supported} (the {@code getAddresses} part of TS
- * {@code FacilitatorCardanoSigner}). A Cardano facilitator needs no funds and signs nothing: the
+ * The facilitator's own addresses for {@code /supported} (the chain backend does not
+ * supply them). A Cardano facilitator needs no funds and signs nothing: the
  * buyer pays the fee. Without a signer the facilitator runs provider-only.
  */
 @FunctionalInterface

@@ -1,6 +1,6 @@
 package org.x402.mechanisms.cardano.exact.masumi;
 
-/** Signs {@code termsDigest} on the seller's behalf (TS {@code MasumiTermsSigner}). */
+/** Signs {@code termsDigest} on the seller's behalf. */
 @FunctionalInterface
 public interface MasumiTermsSigner {
 

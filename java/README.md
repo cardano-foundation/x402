@@ -409,6 +409,8 @@ HttpClient jdk = HttpClient.newBuilder()
 X402HttpClient http = X402HttpClient.wrap(jdk, client, HostPolicy.of(List.of(url.getHost())));
 ```
 
+`blockfrost` is a `BlockfrostChainBackend`. The wallet reads its UTxOs and the protocol parameters through cardano-client-lib's `UtxoSupplier` and `ProtocolParamsSupplier` (`.utxoSupplier(...)`, `.protocolParamsSupplier(...)`), so any implementation of those fits; it must throw on a failed read rather than answer a short list, which cardano-client-lib's own `DefaultUtxoSupplier` does not.
+
 - `X402HttpClient.wrap(jdk, client)` without a `HostPolicy` pays any host, like TS `wrapFetch`: wrapping is a deliberate act. With a `HostPolicy`, only those hosts (and only 402s whose `resource.url` is on the list) are paid, and the wrapped client must not follow redirects (`IllegalArgumentException` otherwise): `X402HttpClient` follows them itself and never forwards a signed request to a host off the list.
 - A request body is recorded while it is sent, up to 1 MiB (`X402HttpClient.builder(...).maxReplayBody(...)`); a larger body gets its 402 back unpaid.
 - Requests without their own timeout get 240 s ([why](#timeout-budget)).
@@ -498,11 +500,11 @@ With the Spring clients, the request carrying `PAYMENT-SIGNATURE` never follows 
 
 - The retry re-sends the request **as prepared by the interceptors and filters before x402**, plus `PAYMENT-SIGNATURE`. They do not run again, so static headers (API keys, bearer tokens) are kept.
 - **Interceptors that sign the complete header set** (HTTP message signatures and similar) are **not supported** on paid requests: their signature cannot cover `PAYMENT-SIGNATURE`.
-- Request bodies are recorded up to `x402.client.max-replay-body` (default 1MB). A larger body gets its 402 back unpaid, decided before anything is signed.
+- Request bodies are recorded up to `x402.client.max-replay-body` (default 1MB). A larger body is passed on to the underlying request factory unrecorded (whether it streams depends on that factory) and gets its 402 back unpaid, decided before anything is signed. Requests to hosts outside `x402.client.hosts` are never recorded or paid.
 
 ## Running a facilitator
 
-No other x402 SDK ships a facilitator server; the Java starter does. With the starter on the classpath, this YAML serves `GET /x402/supported`, `POST /x402/verify` and `POST /x402/settle` for Cardano preprod:
+The Java starter includes a facilitator server. With the starter on the classpath, this YAML serves `GET /x402/supported`, `POST /x402/verify` and `POST /x402/settle` for Cardano preprod:
 
 ```yaml
 x402:
@@ -519,11 +521,11 @@ x402:
           mnemonic: "${FACILITATOR_MNEMONIC:}"   # optional: only shows an address in /supported
 ```
 
-The buyer pays the transaction fee (`areFeesSponsored: false`), so the facilitator holds no funds. It advertises the transfer methods `default`, `masumi` and `script` and the confirmation depths it can check. It logs one line per verify and settle with network, `payTo` and the result. With Spring Boot Actuator, the `x402-facilitator` health component asks each network's backend for its protocol parameters and is `DOWN` when one doesn't answer (`management.health.x402-facilitator.enabled=false` turns it off). Runnable: [`examples/java/facilitator`](../examples/java/facilitator/README.md).
+The buyer pays the transaction fee (`areFeesSponsored: false`), so the facilitator holds no funds. It advertises the transfer methods `default`, `masumi` and `script` and the confirmation depths it can check. It logs one line per verify and settle with network, `payTo` and the result. With Spring Boot Actuator, the `x402-facilitator` health component asks each network's backend for its protocol parameters and is `DOWN` when one doesn't answer (`management.health.x402-facilitator.enabled=false` turns it off). Runnable: [`examples/java/facilitator/spring-boot`](../examples/java/facilitator/spring-boot/README.md).
 
 ### Protect it with Spring Security
 
-The facilitator server has **no authentication of its own**. An open `/settle` lets anyone relay transactions through your node or Blockfrost quota: that, not funds, is what is exposed. Protect `/verify` and `/settle`, and **exempt the base path from CSRF**: resource servers post without a CSRF token, and Spring Security's default answers those POSTs with `403`. From [`SecurityConfig.java`](../examples/java/facilitator/src/main/java/org/x402/examples/facilitator/SecurityConfig.java):
+The facilitator server has **no authentication of its own**. An open `/settle` lets anyone relay transactions through your node or Blockfrost quota: that, not funds, is what is exposed. Protect `/verify` and `/settle`, and **exempt the base path from CSRF**: resource servers post without a CSRF token, and Spring Security's default answers those POSTs with `403`. From [`SecurityConfig.java`](../examples/java/facilitator/spring-boot/src/main/java/org/x402/examples/facilitator/SecurityConfig.java):
 
 ```java
 http.authorizeHttpRequests(auth -> auth
@@ -568,7 +570,7 @@ Every bean below backs off when you define your own.
 | Verification itself, or another scheme or network | `X402FacilitatorCustomizer` → `register(networks, scheme)`; customizers run first, and the Cardano scheme is registered only for networks no customizer claimed. Wrap the auto-built one from `CardanoFacilitatorSchemes.forNetwork(network)`. A replaced scheme is spec-conformant only if it keeps the protocol checks. |
 | HTTP: own controllers, paths, auth | `expose-http: false`, then call the `FacilitatorHttpHandler` bean from your controller; it keeps the wire contract |
 
-From [`PayeeAllowlist.java`](../examples/java/facilitator/src/main/java/org/x402/examples/facilitator/PayeeAllowlist.java):
+From [`PayeeAllowlist.java`](../examples/java/facilitator/spring-boot/src/main/java/org/x402/examples/facilitator/PayeeAllowlist.java):
 
 ```java
 @Bean
@@ -675,6 +677,14 @@ The wire format (headers, JSON, status codes, route syntax) follows TS. Behaviou
 | Facilitator HTTP server | hand-written in each example | `x402.facilitator-server.*` |
 | Already-settled Cardano transaction sent again | public verify accepts it once it is on chain | `duplicate_settlement` |
 | Masumi terms storage fails | the payment proceeds | the payment is refused |
+| Cardano transaction without a TTL | accepted | refused (`ttl_too_far`): `maxTimeoutSeconds` cannot bound it, and its claim could never expire |
+| Cardano input not signed by its owner | accepted by verify (the node rejects it later) | refused (`phase1_invalid`); script-, Byron- or unknown-owned inputs need a complete phase-1 validator |
+| Cardano settlement record after broadcast | evicted once the store needs room | kept until the transaction's TTL has passed, so it cannot be settled twice from the mempool; only an unconfirmed submission (no success reported) may give way under pressure |
+| Blockfrost evidence for another transaction (hash differs or missing), without a block height, or with an unreadable chain tip | counted as included (0 confirmations) | a lookup failure: never a success, the settlement stays pending |
+| Cardano transaction with a repeated CBOR map key (including a repeated policy id or asset name, also when one copy is chunked) | the last value wins | refused (`transaction_decode_failed`) |
+| Redirect to another origin | headers are forwarded | `Authorization`, `Cookie`, `PAYMENT-SIGNATURE` and similar credentials are dropped |
+| Client `resource.url` missing or off the allowlist | not checked | the 402 is returned unpaid |
+| Facilitator unreachable or timing out | 402 | 502 (no receipt) |
 | Handler headers after a failed settle | kept | dropped (the whole paid response is buffered) |
 | Client host allowlist | none (you wrap one `fetch`) | `x402.client.hosts` / `HostPolicy` |
 | Declarative config | code only | `application.yml`, named accounts |

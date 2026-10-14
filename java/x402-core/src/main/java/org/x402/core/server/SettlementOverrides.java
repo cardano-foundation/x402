@@ -7,7 +7,7 @@ import org.x402.core.types.PaymentRequirements;
 import org.x402.core.utils.Amounts;
 
 /**
- * Adjusts what is settled, e.g. partial settlement (TS {@code SettlementOverrides}). Only schemes
+ * Adjusts what is settled, e.g. partial settlement. Only schemes
  * that support partial settlement accept an amount below the authorized one.
  *
  * @param amount atomic units ({@code "1000"}), a percent of the requirements ({@code "50%"}, up to
@@ -29,7 +29,8 @@ public record SettlementOverrides(String amount) {
   }
 
   /**
-   * TS {@code resolveSettlementOverrideAmount}.
+   * Resolves an override amount to atomic units: a percentage of the requirements' amount or a
+   * dollar amount converted with the asset's decimals.
    *
    * @param raw the override amount
    * @param requirements the requirements whose amount a percent refers to

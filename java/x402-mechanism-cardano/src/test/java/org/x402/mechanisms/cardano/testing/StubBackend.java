@@ -7,7 +7,7 @@ import java.util.List;
 import java.util.Map;
 import org.x402.mechanisms.cardano.CardanoTransactionDecoder;
 import org.x402.mechanisms.cardano.chain.CardanoChainBackend;
-import org.x402.mechanisms.cardano.chain.ProtocolParameters;
+import com.bloxbean.cardano.client.api.model.ProtocolParams;
 import org.x402.mechanisms.cardano.chain.SettlementEvidence;
 import org.x402.mechanisms.cardano.chain.SubmissionResult;
 import org.x402.mechanisms.cardano.chain.UtxoSnapshot;
@@ -22,8 +22,8 @@ public class StubBackend implements CardanoChainBackend {
   /** Thrown by {@link #getCurrentSlot} when set. */
   public RuntimeException slotError;
   /** Served parameters ({@code null} = not offered). */
-  public ProtocolParameters parameters =
-      new ProtocolParameters(BigInteger.valueOf(4310), BigInteger.valueOf(44), BigInteger.valueOf(155381));
+  public ProtocolParams parameters =
+      Ccl.params(BigInteger.valueOf(4310), BigInteger.valueOf(44), BigInteger.valueOf(155381));
   /** Thrown by {@link #getProtocolParameters} when set. */
   public RuntimeException parametersError;
   /** Whether evidence can be read. */
@@ -73,7 +73,7 @@ public class StubBackend implements CardanoChainBackend {
   }
 
   @Override
-  public ProtocolParameters getProtocolParameters(String network) {
+  public ProtocolParams getProtocolParameters(String network) {
     if (parametersError != null) {
       throw parametersError;
     }

@@ -16,9 +16,8 @@ import org.x402.core.utils.Networks;
  * X402ResourceServer#initialize()} builds a new snapshot and publishes it with one atomic swap; a
  * published snapshot never changes, so a request that captured one routes consistently.
  *
- * <p>Ownership follows TS {@code x402ResourceServer.initialize} (:644-711): answers are applied in
- * declaration order and the first facilitator listing a kind owns it. Lookups follow TS {@code
- * findByNetworkAndScheme}: an exact network key wins over a wildcard key, and an exact key without
+ * <p>Answers are applied in declaration order and the first facilitator listing a kind
+ * owns it. Lookups: an exact network key wins over a wildcard key, and an exact key without
  * the scheme does not fall back to the pattern.
  */
 public final class RoutingSnapshot {
@@ -104,16 +103,6 @@ public final class RoutingSnapshot {
   }
 
   /**
-   * The client of a facilitator.
-   *
-   * @param identifier the normalized identifier
-   * @return the client, or {@code null}
-   */
-  public FacilitatorClient client(String identifier) {
-    return clients.get(identifier);
-  }
-
-  /**
    * A facilitator's {@code /supported} answer.
    *
    * @param identifier the identifier
@@ -151,7 +140,7 @@ public final class RoutingSnapshot {
   }
 
   /**
-   * The facilitator owning a kind, with TS pattern lookup.
+   * The facilitator owning a kind, with network pattern lookup.
    *
    * @param x402Version the protocol version
    * @param network the network
@@ -164,7 +153,7 @@ public final class RoutingSnapshot {
   }
 
   /**
-   * The owner's exact kind (TS {@code getSupportedKind}); a wildcard kind never matches, so it
+   * The owner's exact kind; a wildcard kind never matches, so it
    * cannot build requirements.
    *
    * @param x402Version the protocol version
@@ -178,7 +167,7 @@ public final class RoutingSnapshot {
   }
 
   /**
-   * The owner's extensions for a kind (TS {@code getFacilitatorExtensions}).
+   * The owner's extensions for a kind.
    *
    * @param x402Version the protocol version
    * @param network the network

@@ -8,7 +8,7 @@ import java.util.List;
 import java.util.Map;
 
 /**
- * A facilitator's {@code /supported} answer (TS {@code SupportedResponse}).
+ * A facilitator's {@code /supported} answer.
  *
  * @param kinds supported kinds
  * @param extensions supported extension keys

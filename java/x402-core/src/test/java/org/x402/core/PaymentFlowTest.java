@@ -28,7 +28,7 @@ import org.x402.core.types.PaymentPayload;
 import org.x402.core.types.PaymentRequirements;
 import org.x402.core.types.SettleResponse;
 
-/** Payment flows per TS {@code server/paymentFlow.ts} and the cancel dispatch. */
+/** Payment flows and the cancel dispatch. */
 class PaymentFlowTest {
 
   private static FakeServerScheme schemeWithFlows() {

@@ -24,7 +24,7 @@ import org.x402.mechanisms.cardano.testing.FakeChain;
 import org.x402.mechanisms.cardano.testing.Vectors;
 
 /**
- * Decision 013 (security divergence from TS): a landed payment cannot be replayed. Public verify
+ * Replay protection: a landed payment cannot be replayed. Public verify
  * never accepts ledger evidence as validity and refuses any transaction the claim store knows;
  * a settled transaction is terminal; the legitimate pending retry still succeeds exactly once.
  */
@@ -34,7 +34,7 @@ class ReplayGuardTest {
 
 
   /**
-   * Decision 126: broadcast records are retained until TTL + grace; this store clock is past
+   * Broadcast records are retained until TTL + grace; this store clock is past
    * every fixture's retention, so the eviction scenarios below stay deterministic.
    */
   private static final java.time.Clock AFTER_RETENTION =
@@ -98,7 +98,7 @@ class ReplayGuardTest {
 
     assertThat(replay.success()).isFalse();
     assertThat(replay.errorReason()).isEqualTo("duplicate_settlement");
-    assertThat(store.claimSettlement(new SettlementClaim(hash, "probe", null))).isEqualTo(SettlementClaimResult.SETTLED);
+    assertThat(store.claimSettlement(new SettlementClaim(hash, "probe", null, null))).isEqualTo(SettlementClaimResult.SETTLED);
     assertThat(chain.submissions()).containsExactly(tx);
   }
 
@@ -107,11 +107,11 @@ class ReplayGuardTest {
     FakeChain chain = FakeChain.fromFixtures("01-default-happy");
     var store = new InMemorySettlementClaimStore();
     var scheme = scheme(chain, store);
-    store.claimSettlement(new SettlementClaim(hash, "worker-a", null));
+    store.claimSettlement(new SettlementClaim(hash, "worker-a", null, null));
     assertThat(verify(scheme).invalidReason()).isEqualTo("duplicate_settlement");
 
     store.markSubmitted(hash, "worker-a");
-    // Deliberate requirement change (013 amendment, decision 125): was duplicate_settlement; a
+    // Deliberate requirement change (replay-guard amendment): was duplicate_settlement; a
     // submitted claim now verifies as broadcast so the spec's paid retry after pending works.
     assertThat(verify(scheme).isValid()).isTrue();
   }

@@ -1,8 +1,8 @@
 package org.x402.mechanisms.cardano.exact.masumi;
 
 /**
- * Independently validates a Masumi registry claim on the selected network (TS {@code
- * validateRegistryClaim}). Without one, a non-empty {@code agentIdentifier} is rejected.
+ * Independently validates a Masumi registry claim on the selected network. Without one, a
+ * non-empty {@code agentIdentifier} is rejected.
  */
 @FunctionalInterface
 public interface MasumiRegistryValidator {

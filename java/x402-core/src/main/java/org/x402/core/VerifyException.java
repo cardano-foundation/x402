@@ -2,7 +2,7 @@ package org.x402.core;
 
 import org.x402.core.types.VerifyResponse;
 
-/** A facilitator answered verify with an error status and a verdict body (TS {@code VerifyError}). */
+/** A facilitator answered verify with an error status and a verdict body. */
 public class VerifyException extends RuntimeException {
 
   private static final long serialVersionUID = 1L;

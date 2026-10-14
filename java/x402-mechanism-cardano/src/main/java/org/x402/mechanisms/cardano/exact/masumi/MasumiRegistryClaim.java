@@ -3,7 +3,7 @@ package org.x402.mechanisms.cardano.exact.masumi;
 import org.x402.core.types.ResourceInfo;
 
 /**
- * A Masumi V2 registry claim to validate (TS {@code MasumiRegistryValidator} argument).
+ * A Masumi V2 registry claim to validate.
  *
  * @param agentIdentifier the non-empty {@code terms.agentIdentifier}
  * @param sellerAddress the address the terms are signed by

@@ -9,7 +9,7 @@ import org.x402.core.types.Money;
 import org.x402.core.types.Price;
 
 /**
- * One way to pay for a route (TS {@code PaymentOption}), plus the Java-only facilitator pin. The
+ * One way to pay for a route, plus the optional facilitator pin. The
  * receiver and the price are each either static or resolved per request.
  *
  * @param scheme the scheme, e.g. {@code exact}
@@ -73,8 +73,7 @@ public record PaymentOption(
    * @return the timeout or 300
    */
   public int effectiveMaxTimeoutSeconds() {
-    return maxTimeoutSeconds == null || maxTimeoutSeconds == 0
-        ? ResourceConfig.DEFAULT_MAX_TIMEOUT_SECONDS : maxTimeoutSeconds;
+    return ResourceConfig.effectiveMaxTimeoutSeconds(maxTimeoutSeconds);
   }
 
   /** Builds a {@link PaymentOption}. */

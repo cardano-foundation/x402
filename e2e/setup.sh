@@ -105,16 +105,12 @@ default_build() {
     run_step "Build" "$dir" uv sync --reinstall-package x402
     return $?
   fi
-  if [ -f "$dir/pom.xml" ]; then
-    run_step "Build" "$dir" mvn -q package
-    return $?
-  fi
   return 0
 }
 
 has_setup_work() {
   local dir=$1
-  [ -f "$dir/install.sh" ] || [ -f "$dir/build.sh" ] || [ -f "$dir/go.mod" ] || [ -f "$dir/pyproject.toml" ] || [ -f "$dir/pom.xml" ]
+  [ -f "$dir/install.sh" ] || [ -f "$dir/build.sh" ] || [ -f "$dir/go.mod" ] || [ -f "$dir/pyproject.toml" ]
 }
 
 setup_component() {
@@ -238,6 +234,17 @@ process_directory_flat() {
 echo "======================================================="
 echo "Starting Setup Process"
 echo "======================================================="
+
+# The Java components all build on the java/ reactor (org.x402:*:2.0.0-SNAPSHOT): install it
+# once here; each component's build.sh then only packages itself.
+if command -v mvn > /dev/null 2>&1 \
+    && [ -n "$(find servers clients facilitators -path '*/java/*' -name build.sh -print -quit 2>/dev/null)" ]; then
+  echo ""
+  echo "☕ Java SDK reactor (java/)"
+  if run_step "Install" "../java" mvn -q -B install -DskipTests; then
+    export X402_JAVA_REACTOR_READY=1
+  fi
+fi
 
 process_role_v2 "servers" "server"
 process_role_v2 "clients" "client"

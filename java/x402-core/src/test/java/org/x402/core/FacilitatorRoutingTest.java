@@ -13,7 +13,7 @@ import org.x402.core.types.PaymentRequirements;
 import org.x402.core.types.ResourceInfo;
 import org.x402.core.types.VerifyResponse;
 
-/** TS {@code x402Facilitator} routing: first registered scheme matching scheme + network. */
+/** Facilitator routing: first registered scheme matching scheme + network. */
 class FacilitatorRoutingTest {
 
   private static PaymentRequirements req(String scheme, String network) {

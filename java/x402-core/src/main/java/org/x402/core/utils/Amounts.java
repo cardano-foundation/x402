@@ -5,9 +5,7 @@ import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
 /**
- * Money parsing and atomic-unit conversion, matching TS {@code parseMoney}, {@code
- * parseMoneyString} and {@code convertToTokenAmount} ({@code core/src/utils/index.ts}) including
- * their error messages.
+ * Money parsing and atomic-unit conversion.
  */
 public final class Amounts {
 
@@ -32,7 +30,7 @@ public final class Amounts {
    *
    * @param money the money string
    * @return the amount and optional ticker
-   * @throws IllegalArgumentException with TS's message when the format is invalid
+   * @throws IllegalArgumentException when the format is invalid
    */
   public static ParsedMoney parseMoney(String money) {
     String trimmed = money.strip();
@@ -49,7 +47,7 @@ public final class Amounts {
   }
 
   /**
-   * Parses a numeric money value (TS {@code number} input).
+   * Parses a numeric money value.
    *
    * @param money the amount
    * @return the amount without ticker
@@ -63,11 +61,11 @@ public final class Amounts {
   }
 
   /**
-   * TS {@code parseMoneyString}: strips a leading {@code $} and requires a plain decimal.
+   * Strips a leading {@code $} and requires a plain decimal.
    *
    * @param money the money string
    * @return the decimal string
-   * @throws IllegalArgumentException with TS's message when invalid
+   * @throws IllegalArgumentException when invalid
    */
   public static String parseMoneyString(String money) {
     String cleaned = money.replaceFirst("^\\$", "").strip();
@@ -78,13 +76,13 @@ public final class Amounts {
   }
 
   /**
-   * TS {@code convertToTokenAmount}: shifts a decimal by {@code decimals} places, truncating
+   * Shifts a decimal by {@code decimals} places, truncating
    * extra digits.
    *
    * @param decimalAmount the decimal amount
    * @param decimals the asset's decimals
    * @return the atomic amount
-   * @throws IllegalArgumentException with TS's message when invalid
+   * @throws IllegalArgumentException when invalid
    */
   public static String convertToTokenAmount(String decimalAmount, int decimals) {
     if (EXPONENT.matcher(decimalAmount).find()) {

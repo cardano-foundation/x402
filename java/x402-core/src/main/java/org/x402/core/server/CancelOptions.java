@@ -4,7 +4,7 @@ import java.util.Objects;
 import org.x402.core.server.ServerHooks.CancellationReason;
 
 /**
- * Why a verified payment is cancelled (TS {@code VerifiedPaymentCancelOptions}).
+ * Why a verified payment is cancelled.
  *
  * @param reason the reason
  * @param error the handler's exception, if any

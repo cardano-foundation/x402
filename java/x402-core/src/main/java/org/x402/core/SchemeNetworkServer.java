@@ -15,9 +15,8 @@ import org.x402.core.types.ResourceInfo;
 import org.x402.core.types.SupportedKind;
 
 /**
- * The resource-server side of one payment scheme on a set of networks (TS {@code
- * SchemeNetworkServer}, {@code core/src/types/mechanisms.ts}). Optional TS members are default
- * methods returning {@code null} or empty.
+ * The resource-server side of one payment scheme on a set of networks. Optional members are
+ * default methods returning {@code null} or empty.
  */
 public interface SchemeNetworkServer {
 
@@ -149,10 +148,9 @@ public interface SchemeNetworkServer {
   }
 
   /**
-   * Context handed to {@link #enrichPaymentRequiredResponse} (TS {@code
-   * SchemePaymentRequiredContext}).
+   * Context handed to {@link #enrichPaymentRequiredResponse}.
    *
-   * @param requirements this scheme's requirements in the 402
+   * @param requirements every payment option in the 402 (of all schemes)
    * @param paymentPayload the rejected payload, if any
    * @param resourceInfo the resource
    * @param error the 402's error, if any

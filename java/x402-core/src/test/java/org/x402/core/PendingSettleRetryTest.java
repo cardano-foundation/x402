@@ -16,7 +16,7 @@ import org.x402.core.server.X402ResourceServer;
 import org.x402.core.types.PaymentRequirements;
 import org.x402.core.types.SettleResponse;
 
-/** TS {@code settleWithPendingRetry}: a {@code settlement_pending} outcome is retried once. */
+/** A {@code settlement_pending} settle outcome is retried once. */
 class PendingSettleRetryTest {
 
   private final FakeFacilitatorClient a = new FakeFacilitatorClient("A", supported(kind(PREPROD)));

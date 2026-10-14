@@ -1,21 +1,18 @@
 package org.x402.spring.web.servlet;
 
 import java.util.ArrayList;
-import java.util.Arrays;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Set;
 import java.util.function.Supplier;
 import org.springframework.core.ResolvableType;
-import org.springframework.core.annotation.AnnotatedElementUtils;
 import org.springframework.http.HttpEntity;
-import org.springframework.http.MediaType;
-import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.method.HandlerMethod;
 import org.springframework.web.servlet.mvc.method.RequestMappingInfoHandlerMapping;
 import org.springframework.web.servlet.mvc.method.annotation.ResponseBodyEmitter;
 import org.springframework.web.servlet.mvc.method.annotation.StreamingResponseBody;
 import org.x402.spring.offer.HandlerMethodSource;
+import org.x402.spring.web.StreamingHandlers;
 
 /** The WebMvc handler methods ({@link RequestMappingInfoHandlerMapping}s). */
 public final class ServletHandlerMethodSource implements HandlerMethodSource {
@@ -51,8 +48,8 @@ public final class ServletHandlerMethodSource implements HandlerMethodSource {
 
   /**
    * Whether a WebMvc handler streams: {@code SseEmitter}, {@code ResponseBodyEmitter}, {@code
-   * StreamingResponseBody} (also inside {@code ResponseEntity}), or {@code text/event-stream}
-   * produces.
+   * StreamingResponseBody} (also inside {@code ResponseEntity}), or what {@link StreamingHandlers}
+   * recognises on both stacks.
    *
    * @param handlerMethod the handler
    * @return {@code true} for a streaming handler
@@ -69,19 +66,11 @@ public final class ServletHandlerMethodSource implements HandlerMethodSource {
         return true;
       }
     }
-    return producesEventStream(
-        AnnotatedElementUtils.findMergedAnnotation(handlerMethod.getMethod(), RequestMapping.class))
-        || producesEventStream(AnnotatedElementUtils.findMergedAnnotation(
-            handlerMethod.getBeanType(), RequestMapping.class));
+    return StreamingHandlers.isStreaming(handlerMethod);
   }
 
   private static boolean streamingType(Class<?> type) {
     return ResponseBodyEmitter.class.isAssignableFrom(type)
         || StreamingResponseBody.class.isAssignableFrom(type);
-  }
-
-  static boolean producesEventStream(RequestMapping mapping) {
-    return mapping != null && Arrays.stream(mapping.produces())
-        .anyMatch(p -> p.toLowerCase(java.util.Locale.ROOT).startsWith(MediaType.TEXT_EVENT_STREAM_VALUE));
   }
 }

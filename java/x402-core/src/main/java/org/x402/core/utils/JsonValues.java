@@ -13,21 +13,21 @@ import org.x402.core.json.X402Json;
 
 /**
  * Structural comparison of JSON-like values ({@code Map}, {@code List}, strings, numbers,
- * booleans, {@code null}, or anything Jackson can convert), matching TS {@code deepEqual} and the
- * resource server's {@code objectContainsSubset}. Numbers compare by value, so {@code 1} equals
- * {@code 1.0} as in JavaScript.
+ * booleans, {@code null}, or anything Jackson can convert).
+ * Numbers compare by value, so {@code 1} equals
+ * {@code 1.0}.
  */
 public final class JsonValues {
 
-  /** Builder-code {@code s}: an array the client may extend (TS {@code ADDITIVE_ARRAY_INFO_FIELDS}). */
+  /** Builder-code {@code s}: an array the client may extend. */
   public static final Map<String, Set<String>> ADDITIVE_ARRAY_INFO_FIELDS =
       Map.of("builder-code", Set.of("s"));
 
-  /** Fields only the server may declare (TS {@code SERVER_OWNED_INFO_FIELDS}). */
+  /** Fields only the server may declare. */
   public static final Map<String, Set<String>> SERVER_OWNED_INFO_FIELDS =
       Map.of("builder-code", Set.of("a"));
 
-  /** Combined-length caps of additive fields (TS {@code ADDITIVE_ARRAY_MAX_LENGTHS}). */
+  /** Combined-length caps of additive fields. */
   public static final Map<String, Map<String, Integer>> ADDITIVE_ARRAY_MAX_LENGTHS =
       Map.of("builder-code", Map.of("s", 10));
 
@@ -58,7 +58,7 @@ public final class JsonValues {
   }
 
   /**
-   * TS {@code deepEqual}: structural equality ignoring object key order.
+   * Structural equality ignoring object key order.
    *
    * @param a first value
    * @param b second value
@@ -69,7 +69,7 @@ public final class JsonValues {
   }
 
   /**
-   * TS {@code objectContainsSubset} without additive fields: {@code actual} contains every field
+   * Whether {@code actual} contains every field
    * of {@code expected}; objects may carry extra fields; everything else must be deeply equal.
    *
    * @param expected the required subset
@@ -81,7 +81,7 @@ public final class JsonValues {
   }
 
   /**
-   * TS {@code objectContainsSubset} with additive array fields.
+   * Like {@link #containsSubset(Object, Object)}, but the listed array fields may be extended.
    *
    * @param expected the required subset
    * @param actual the candidate
@@ -149,7 +149,7 @@ public final class JsonValues {
   }
 
   /**
-   * Returns a copy of a map without the given keys (TS {@code omitFields}).
+   * Returns a copy of a map without the given keys.
    *
    * @param value the map, may be {@code null}
    * @param fields keys to drop

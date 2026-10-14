@@ -18,7 +18,7 @@ import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
 
 /**
- * Buffers a paid handler's whole response (plan rule 6, WP6, review finding 1). {@code
+ * Buffers a paid handler's whole response. {@code
  * writeWith}, {@code writeAndFlushWith} and {@code setComplete} all end here, so no-body responses
  * (204, {@code Mono<Void>}) are settled too. Status, headers, cookies and before-commit actions
  * are held locally as well; the real response only carries what outer filters set, until the

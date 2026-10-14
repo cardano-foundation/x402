@@ -40,7 +40,7 @@ import org.x402.core.server.X402ResourceServer;
 import org.x402.core.types.PaymentPayload;
 import org.x402.core.types.SettleResponse;
 
-/** TS {@code processSettlement} (:757-924) and the settlement header helpers (:926, :961). */
+/** Settlement processing and the settlement header helpers. */
 class HttpSettlementTest {
 
   private final FakeFacilitatorClient f = new FakeFacilitatorClient("f", supported(kind(PREPROD)));

@@ -1,7 +1,7 @@
 package org.x402.core;
 
 /**
- * A facilitator extension (TS {@code FacilitatorExtension}): a key advertised in {@code
+ * A facilitator extension: a key advertised in {@code
  * /supported}, plus whatever capability methods the implementation defines for schemes to use via
  * {@link FacilitatorContext}.
  */

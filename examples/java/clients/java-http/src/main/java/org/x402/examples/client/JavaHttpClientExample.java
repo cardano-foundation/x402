@@ -72,7 +72,7 @@ public final class JavaHttpClientExample {
   /**
    * The payment client.
    *
-   * <p>Spend controls are on by default (TS parity): only the network's default asset (USDM on
+   * <p>Spend controls are on by default: only the network's default asset (USDM on
    * Cardano) is paid, capped at $1 per payment, and <b>lovelace is refused</b>. To pay in ADA,
    * list it under {@code allowedAssets} with a cap in lovelace.
    *

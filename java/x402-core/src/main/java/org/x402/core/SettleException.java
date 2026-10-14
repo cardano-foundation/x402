@@ -2,7 +2,7 @@ package org.x402.core;
 
 import org.x402.core.types.SettleResponse;
 
-/** A facilitator answered settle with an error status and a result body (TS {@code SettleError}). */
+/** A facilitator answered settle with an error status and a result body. */
 public class SettleException extends RuntimeException {
 
   private static final long serialVersionUID = 1L;

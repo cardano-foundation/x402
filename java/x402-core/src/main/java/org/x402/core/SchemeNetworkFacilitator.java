@@ -7,7 +7,7 @@ import org.x402.core.types.PaymentRequirements;
 import org.x402.core.types.SettleResponse;
 import org.x402.core.types.VerifyResponse;
 
-/** The facilitator side of one payment scheme (TS {@code SchemeNetworkFacilitator}). */
+/** The facilitator side of one payment scheme. */
 public interface SchemeNetworkFacilitator {
 
   /**

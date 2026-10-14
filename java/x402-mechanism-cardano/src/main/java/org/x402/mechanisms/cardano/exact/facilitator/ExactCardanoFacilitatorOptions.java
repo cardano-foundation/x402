@@ -6,7 +6,7 @@ import org.x402.mechanisms.cardano.exact.masumi.MasumiDeploymentValidator;
 import org.x402.mechanisms.cardano.exact.masumi.MasumiRegistryValidator;
 
 /**
- * Options of the Cardano facilitator scheme, mirroring TS {@code ExactCardanoFacilitatorConfig}.
+ * Options of the Cardano facilitator scheme.
  *
  * @param settlementStore the duplicate-settlement guard (default: a bounded {@link
  *     InMemorySettlementClaimStore}, right for a single instance)
@@ -47,10 +47,17 @@ public record ExactCardanoFacilitatorOptions(
     if (confirmationTimeout.isNegative() || confirmationPoll.isNegative()) {
       throw new IllegalArgumentException("confirmation timeout and poll must not be negative");
     }
+    try {
+      // Settle converts both after broadcast, where an overflow must not surface.
+      confirmationTimeout.toMillis();
+      confirmationPoll.toMillis();
+    } catch (ArithmeticException e) {
+      throw new IllegalArgumentException("confirmation timeout and poll must fit in milliseconds", e);
+    }
   }
 
   /**
-   * The TS defaults with a fresh in-memory store.
+   * The defaults, with a fresh in-memory settlement store.
    *
    * @return the options
    */

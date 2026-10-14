@@ -1,5 +1,5 @@
 /**
- * x402 v2 wire types. JSON field order follows the TS type declarations so encoded headers are
- * byte-identical to {@code JSON.stringify}.
+ * x402 v2 wire types. JSON field order is the declaration order, so encoded headers are
+ * reproducible byte for byte.
  */
 package org.x402.core.types;

@@ -19,9 +19,9 @@ import org.x402.mechanisms.cardano.testing.FakeChain.SubmitMode;
 import org.x402.mechanisms.cardano.testing.Vectors;
 
 /**
- * Settlement invariants S1–S8 and C1–C5 of the WP7 invariant list: claim before broadcast, no
+ * Settlement invariants S1–S8 and C1–C5: claim before broadcast, no
  * resubmission while a claim is retained, the submit-failure ladder, pending/expired outcomes,
- * and the post-eviction outcomes of decisions 006 and 040.
+ * and the post-eviction outcomes.
  */
 class SettlementFlowTest {
 
@@ -83,7 +83,7 @@ class SettlementFlowTest {
     Payment p = Payment.of("01-default-happy");
     FakeChain chain = FakeChain.fromFixtures("01-default-happy");
     var store = new InMemorySettlementClaimStore();
-    assertThat(store.claimSettlement(new SettlementClaim(p.hash(), "other-worker", null)))
+    assertThat(store.claimSettlement(new SettlementClaim(p.hash(), "other-worker", null, null)))
         .isEqualTo(SettlementClaimResult.FRESH);
     var scheme = new ExactCardanoFacilitatorScheme(chain, null, fast().settlementStore(store).build());
 
@@ -108,7 +108,7 @@ class SettlementFlowTest {
         .isEqualTo("invalid_exact_cardano_payload_amount_insufficient");
     assertThat(response.transaction()).isEqualTo(p.hash());
     assertThat(chain.submissions()).isEmpty();
-    assertThat(store.claimSettlement(new SettlementClaim(p.hash(), "next", null)))
+    assertThat(store.claimSettlement(new SettlementClaim(p.hash(), "next", null, null)))
         .isEqualTo(SettlementClaimResult.FRESH);
   }
 
@@ -162,7 +162,7 @@ class SettlementFlowTest {
     FakeChain chain =
         FakeChain.fromFixtures("01-default-happy").submitMode(SubmitMode.WRONG_HASH).evidenceCapable(false);
     var scheme = new ExactCardanoFacilitatorScheme(chain, null, fast().build());
-    // Without an evidence read only depth 0 can verify (decision 054: setup corrected after red-first).
+    // Without an evidence read only depth 0 can verify.
     PaymentRequirements zeroDepth =
         p.requirements().withExtra("confirmationPolicy", java.util.Map.of("l1Confirmations", 0));
     PaymentPayload payload = new PaymentPayload(2, p.payload().resource(), zeroDepth, p.payload().payload(), null);
@@ -201,7 +201,7 @@ class SettlementFlowTest {
     Payment p = Payment.of("01-default-happy");
     FakeChain chain = FakeChain.fromFixtures("01-default-happy");
     var store = new InMemorySettlementClaimStore(1);
-    store.claimSettlement(new SettlementClaim("ab".repeat(32), "other", null));
+    store.claimSettlement(new SettlementClaim("ab".repeat(32), "other", null, null));
     var scheme = new ExactCardanoFacilitatorScheme(chain, null, fast().settlementStore(store).build());
 
     SettleResponse response = settle(scheme, p);
@@ -272,15 +272,15 @@ class SettlementFlowTest {
     assertThat(scheme.verify(p.payload(), p.requirements(), FacilitatorContext.EMPTY).isValid()).isTrue();
     assertThat(scheme.verify(p.payload(), p.requirements(), FacilitatorContext.EMPTY).isValid()).isTrue();
 
-    assertThat(store.claimSettlement(new SettlementClaim(p.hash(), "x", null)))
+    assertThat(store.claimSettlement(new SettlementClaim(p.hash(), "x", null, null)))
         .isEqualTo(SettlementClaimResult.FRESH);
   }
 
-  // ---------------------------------------------------------------- decision 006 / 040
+  // ---------------------------------------------------------------- post-eviction outcomes
 
   /** Fills a 1-entry store with another settled claim so the first claim is evicted. */
   /**
-   * Decision 126: broadcast records are retained until TTL + grace; this store clock is past
+   * Broadcast records are retained until TTL + grace; this store clock is past
    * every fixture's retention, so the eviction scenarios below stay deterministic.
    */
   private static final java.time.Clock AFTER_RETENTION =
@@ -308,7 +308,7 @@ class SettlementFlowTest {
     evict(scheme, "01e-native-asset-happy");
     SettleResponse done = settle(scheme, p);
 
-    // Deliberate requirement change (decision 013): was success; after the second eviction the
+    // Deliberate requirement change: was success; after the second eviction the
     // included transaction's nonce is spent and verify no longer accepts ledger evidence.
     assertThat(done.errorReason()).isEqualTo("invalid_exact_cardano_payload_nonce_not_on_chain");
     assertThat(chain.submissions().stream().filter(p.tx()::equals).count()).isGreaterThanOrEqualTo(2);
@@ -330,7 +330,7 @@ class SettlementFlowTest {
 
     SettleResponse retry = settle(scheme, p);
 
-    // Deliberate requirement change (decision 013): was success with a second (identical)
+    // Deliberate requirement change: was success with a second (identical)
     // submission; now the spent nonce refuses the retry before anything is resubmitted.
     assertThat(retry.success()).isFalse();
     assertThat(retry.errorReason()).isEqualTo("invalid_exact_cardano_payload_nonce_not_on_chain");
@@ -387,7 +387,7 @@ class SettlementFlowTest {
     }
 
     @Override
-    public org.x402.mechanisms.cardano.chain.ProtocolParameters getProtocolParameters(String network) {
+    public com.bloxbean.cardano.client.api.model.ProtocolParams getProtocolParameters(String network) {
       return chain.getProtocolParameters(network);
     }
 

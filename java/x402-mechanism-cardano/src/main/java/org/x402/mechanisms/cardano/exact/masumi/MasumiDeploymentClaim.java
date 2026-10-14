@@ -1,7 +1,7 @@
 package org.x402.mechanisms.cardano.exact.masumi;
 
 /**
- * A non-canonical deployment to approve (TS {@code MasumiDeploymentValidator} argument).
+ * A non-canonical deployment to approve.
  *
  * @param network the x402 network
  * @param payTo the escrow address

@@ -16,10 +16,8 @@ import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.Executor;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicReference;
-import org.x402.core.FacilitatorClient;
 import org.x402.core.FacilitatorResponseException;
 import org.x402.core.PaymentFlow;
-import org.x402.core.SchemeNetworkServer;
 import org.x402.core.SettleException;
 import org.x402.core.json.X402Json;
 import org.x402.core.server.CompletedSettlement;
@@ -36,38 +34,32 @@ import org.x402.core.server.ServerVerifyResult;
 import org.x402.core.server.SettlementOverrides;
 import org.x402.core.server.SettlementRouting;
 import org.x402.core.server.X402ResourceServer;
-import org.x402.core.types.AssetAmount;
 import org.x402.core.types.PaymentPayload;
 import org.x402.core.types.PaymentRequired;
 import org.x402.core.types.PaymentRequirements;
 import org.x402.core.types.ResourceInfo;
 import org.x402.core.types.SettleResponse;
-import org.x402.core.types.SupportedKind;
-import org.x402.core.utils.JsonValues;
-import org.x402.core.utils.Networks;
-import org.x402.http.RouteValidationError.Reason;
 
 /**
- * The framework-agnostic HTTP resource server (TS {@code x402HTTPResourceServer}): matches routes,
+ * The framework-agnostic HTTP resource server: matches routes,
  * answers 402s, verifies payments and settles them, on top of an {@link X402ResourceServer}.
  *
  * <h2>Lifecycle</h2>
  *
- * <p>The constructor checks transfer methods, payment flows and pins (TS constructor check plus
- * Java pins). {@link #initialize()} syncs the facilitators, validates every route against the new
- * snapshot (TS {@code validateRouteConfiguration} plus Java pin, capability, ambiguity and
+ * <p>The constructor checks transfer methods, payment flows and pins. {@link #initialize()} syncs
+ * the facilitators, validates every route against the new snapshot (pin, capability, ambiguity and
  * timeout-budget checks), and publishes snapshot and validation together as one {@link
  * HttpServerState} with a single atomic swap. Every request reads that state once and passes its
- * snapshot to every core call, so it never mixes new routing with an old validation result.
- * {@code initialize()} may be called again to re-sync; callers outside Spring should serialize
- * those calls.
+ * snapshot to every core call, so it never mixes new routing with an old validation result. {@code
+ * initialize()} may be called again to re-sync; callers outside Spring should serialize those
+ * calls.
  *
  * <p><b>Skip-handler caution.</b> An after-verify hook may skip the handler; the payment is then
- * settled inline <i>after-handler</i>, exactly as TS. For {@code upfront} flows (which settle only
+ * settled inline <i>after-handler</i>. For {@code upfront} flows (which settle only
  * before the handler) that settles nothing, so the response is served unpaid; a warning is logged.
  * Do not combine skip-handler hooks with upfront flows.
  *
- * <h2>Adapter contract (WP5/WP6)</h2>
+ * <h2>Adapter contract</h2>
  *
  * <ol>
  *   <li>Build an {@link HttpRequestContext} with the raw path within the application ({@code ;}
@@ -82,8 +74,7 @@ import org.x402.http.RouteValidationError.Reason;
  *         <li>If the handler throws, or answers with status ≥ 400: call {@code
  *             cancellationDispatcher().cancel(...)} (reason {@code handler_threw} / {@code
  *             handler_failed}), set {@link #createFailurePathSettlementHeaders} on the response,
- *             remove {@code Settlement-Overrides}, and do not settle (TS {@code
- *             express/src/index.ts:313-371}).
+ *             remove {@code Settlement-Overrides}, and do not settle.
  *         <li>Otherwise call {@link #processSettlement(HttpProcessResult.PaymentVerified,
  *             HttpTransportContext)} with the buffered body and response headers ({@code
  *             Settlement-Overrides} is read from them), then remove {@code Settlement-Overrides}.
@@ -96,17 +87,17 @@ import org.x402.http.RouteValidationError.Reason;
  */
 public final class X402HttpResourceServer {
 
-  /** TS {@code PAYMENT_REQUIRED_CACHE_CONTROL}. */
+  /** The {@code Cache-Control} of an unpaid 402. */
   public static final String PAYMENT_REQUIRED_CACHE_CONTROL = "no-store";
 
   private static final System.Logger LOG =
       System.getLogger(X402HttpResourceServer.class.getName());
   private static final String FALLBACK_PAYWALL = loadFallbackPaywall();
   private static final Map<String, Object> EMPTY_BODY = Map.of();
-  private static final Duration CLIENT_BUDGET = X402HttpClient.DEFAULT_REQUEST_TIMEOUT;
 
   private final X402ResourceServer server;
   private final RouteResolver resolver;
+  private final RouteValidator validator;
   private final List<ProtectedRequestHook> protectedHooks = new CopyOnWriteArrayList<>();
   private final AtomicReference<HttpServerState> state = new AtomicReference<>();
   private final AtomicBoolean warnedMissingBeforeHandler = new AtomicBoolean();
@@ -123,8 +114,8 @@ public final class X402HttpResourceServer {
   public X402HttpResourceServer(X402ResourceServer server, RouteResolver resolver) {
     this.server = Objects.requireNonNull(server, "server");
     this.resolver = Objects.requireNonNull(resolver, "resolver");
-    List<RouteValidationError> errors = new ArrayList<>();
-    resolver.routes().forEach((key, config) -> validateOptions(key, config, null, errors));
+    this.validator = new RouteValidator(server, resolver);
+    List<RouteValidationError> errors = validator.beforeSync();
     if (!errors.isEmpty()) {
       throw new RouteConfigurationError(errors);
     }
@@ -171,8 +162,10 @@ public final class X402HttpResourceServer {
   }
 
   /**
-   * TS {@code isFatalStartupInitError} ({@code backgroundInit.ts:14-16}): configuration errors that
-   * a retry cannot fix.
+   * Whether an {@code initialize()} failure is fatal, that is not worth retrying. This includes
+   * every {@link RouteConfigurationError}, even one whose {@link
+   * RouteConfigurationError#onlyAwaitingFacilitators()} is true. An adapter that re-syncs in the
+   * background should check that first and keep retrying instead (the Spring starter does).
    *
    * @param error an {@code initialize()} failure
    * @return {@code true} for {@link FacilitatorCapabilityError} and {@link RouteConfigurationError}
@@ -216,27 +209,16 @@ public final class X402HttpResourceServer {
   }
 
   private HttpServerState publishValidated(RoutingSnapshot snapshot) {
-    List<RouteValidationError> errors = new ArrayList<>();
-    List<String> warnings = new ArrayList<>();
-    resolver.routes().forEach((key, config) -> {
-      warnWildcardBazaar(key, config, warnings);
-      validateOptions(key, config, snapshot, errors);
-      capabilityProblems(key, config, snapshot, errors);
-      checkAmbiguity(key, config, snapshot, errors);
-      checkBudget(key, config, snapshot, warnings);
-    });
-    // Kinds some option uses are checked per option with that option's build facilitator above;
-    // a core-level problem matters only for a registered kind no option uses (TS parity: fatal).
-    for (X402ResourceServer.CapabilityProblem problem
-        : server.facilitatorCapabilityProblems(snapshot)) {
-      if (!kindUsed(problem.scheme(), problem.network())) {
-        errors.add(new RouteValidationError(null, problem.scheme(), problem.network(),
-            Reason.FACILITATOR_CAPABILITY, problem.line(), null, problem.facilitator(), false));
-      }
-    }
+    RouteValidator.Result checked = validator.validate(snapshot);
+    List<RouteValidationError> errors = checked.errors();
+    List<String> warnings = checked.warnings();
     HttpServerState next = new HttpServerState(snapshot, errors, warnings);
     server.publish(snapshot);
-    state.set(next);
+    // The state follows the same rule as the core snapshot: an older sync never replaces it.
+    state.accumulateAndGet(next,
+        (current, candidate) -> current == null
+            || current.snapshot().generation() < candidate.snapshot().generation()
+            ? candidate : current);
     warnings.forEach(w -> LOG.log(Level.WARNING, w));
     if (errors.stream().anyMatch(e -> !e.retryable())) {
       throw new RouteConfigurationError(errors);
@@ -250,343 +232,6 @@ public final class X402HttpResourceServer {
       throw new RouteConfigurationError(errors);
     }
     return next;
-  }
-
-  /**
-   * TS {@code validateRouteConfiguration} for one route, plus pins. With {@code snapshot == null}
-   * (constructor) only methods, flows and unknown pins are checked; missing schemes are skipped.
-   */
-  private void validateOptions(String key, RouteConfig config, RoutingSnapshot snapshot,
-      List<RouteValidationError> errors) {
-    List<PaymentOption> options = config.accepts();
-    for (int i = 0; i < options.size(); i++) {
-      PaymentOption option = options.get(i);
-      SchemeNetworkServer scheme = server.getRegisteredScheme(option.network(), option.scheme());
-      if (option.facilitator() != null && server.facilitator(option.facilitator()) == null) {
-        errors.add(new RouteValidationError(key, option.scheme(), option.network(),
-            Reason.UNKNOWN_FACILITATOR, "Route \"" + key + "\" option " + i
-                + ": unknown facilitator \"" + option.facilitator() + "\"; known: "
-                + String.join(", ", server.facilitatorIdentifiers()), i, option.facilitator(),
-            false));
-      }
-      if (scheme == null) {
-        if (snapshot != null) {
-          errors.add(new RouteValidationError(key, option.scheme(), option.network(),
-              Reason.MISSING_SCHEME, "Route \"" + key + "\": No scheme implementation registered "
-                  + "for \"" + option.scheme() + "\" on network \"" + option.network() + "\"", i,
-              null, false));
-        }
-        continue;
-      }
-      Object method = option.extra() == null ? null : option.extra().get(
-          PaymentFlows.ASSET_TRANSFER_METHOD);
-      String atm = method instanceof String s ? s : scheme.defaultAssetTransferMethod();
-      if (!scheme.paymentFlows().containsKey(atm)) {
-        errors.add(new RouteValidationError(key, option.scheme(), option.network(),
-            Reason.UNSUPPORTED_ASSET_TRANSFER_METHOD, "Route \"" + key + "\": [x402] Scheme \""
-                + scheme.scheme() + "\" does not support assetTransferMethod \"" + atm
-                + "\". Supported: " + String.join(", ", scheme.paymentFlows().keySet()) + ".", i,
-            null, false));
-        continue;
-      }
-      try {
-        PaymentFlows.resolve(scheme, option.extra());
-      } catch (IllegalArgumentException e) {
-        errors.add(new RouteValidationError(key, option.scheme(), option.network(),
-            Reason.UNSUPPORTED_PAYMENT_FLOW, "Route \"" + key + "\": " + e.getMessage(), i, null,
-            false));
-      }
-      if (snapshot == null || (option.facilitator() != null
-          && server.facilitator(option.facilitator()) == null)) {
-        continue;
-      }
-      String pin = pin(option);
-      if (pin != null) {
-        if (snapshot.kindOf(pin, X402ResourceServer.X402_VERSION, option.network(),
-            scheme.scheme()) == null) {
-          errors.add(new RouteValidationError(key, option.scheme(), option.network(),
-              Reason.MISSING_FACILITATOR, "Route \"" + key + "\" option " + i
-                  + ": pinned facilitator \"" + pin + "\" does not support scheme \""
-                  + option.scheme() + "\" on network \"" + option.network() + "\"", i, pin,
-              snapshot.failures().containsKey(pin)));
-        }
-      } else if (snapshot.supportedKind(X402ResourceServer.X402_VERSION, option.network(),
-          option.scheme()) == null) {
-        errors.add(new RouteValidationError(key, option.scheme(), option.network(),
-            Reason.MISSING_FACILITATOR, "Route \"" + key + "\": Facilitator does not support "
-                + "scheme \"" + option.scheme() + "\" on network \"" + option.network() + "\"", i,
-            null, !snapshot.failures().isEmpty()));
-      }
-    }
-  }
-
-  private boolean kindUsed(String scheme, String networkKey) {
-    return resolver.routes().values().stream().flatMap(c -> c.accepts().stream())
-        .anyMatch(o -> o.scheme().equals(scheme)
-            && Networks.matchesPattern(networkKey, o.network()));
-  }
-
-  /**
-   * Whether an error that depends on kind ownership may heal: some facilitator failed and the
-   * option is unpinned (a recovered facilitator may own its kind) or its pin is the one that failed.
-   */
-  private static boolean mayHeal(RoutingSnapshot snapshot, PaymentOption option, String pin) {
-    return !snapshot.failures().isEmpty()
-        && (option.facilitator() == null || snapshot.failures().containsKey(pin));
-  }
-
-  /** Per-option {@code validateFacilitatorSupport} with the build facilitator's kind. */
-  private void capabilityProblems(String key, RouteConfig config, RoutingSnapshot snapshot,
-      List<RouteValidationError> errors) {
-    List<PaymentOption> options = config.accepts();
-    for (int i = 0; i < options.size(); i++) {
-      PaymentOption option = options.get(i);
-      SchemeNetworkServer scheme = server.getRegisteredScheme(option.network(), option.scheme());
-      String build = buildFacilitator(option, snapshot);
-      if (scheme == null || build == null) {
-        continue;
-      }
-      SupportedKind kind = snapshot.kindOf(build, X402ResourceServer.X402_VERSION,
-          option.network(), scheme.scheme());
-      if (kind == null) {
-        continue;
-      }
-      List<String> extensions = snapshot.extensions(build);
-      String problem = scheme.validateFacilitatorSupport(option.network(), kind, extensions);
-      if (problem != null) {
-        String line = scheme.scheme() + " on " + option.network() + ": " + problem;
-        errors.add(new RouteValidationError(key, option.scheme(), option.network(),
-            Reason.FACILITATOR_CAPABILITY, "Route \"" + key + "\" option " + i + ": " + line
-                + " (facilitator \"" + build + "\")", i, build,
-            mayHeal(snapshot, option, pin(option))));
-      }
-    }
-  }
-
-  /**
-   * Plan Roles §1b ambiguity check: two options with a different routing policy whose core fields
-   * may be equal and whose {@code extra} is compatible could both match one payment.
-   */
-  private void checkAmbiguity(String key, RouteConfig config, RoutingSnapshot snapshot,
-      List<RouteValidationError> errors) {
-    List<PaymentOption> options = config.accepts();
-    for (int i = 0; i < options.size(); i++) {
-      for (int j = i + 1; j < options.size(); j++) {
-        PaymentOption a = options.get(i);
-        PaymentOption b = options.get(j);
-        if (!knownPin(a) || !knownPin(b)) {
-          continue;
-        }
-        String policyA = policy(a, config, snapshot);
-        String policyB = policy(b, config, snapshot);
-        if (policyA.equals(policyB) || !mayOverlap(a, b)) {
-          continue;
-        }
-        errors.add(new RouteValidationError(key, a.scheme(), a.network(),
-            Reason.AMBIGUOUS_OPTIONS, "Route \"" + key + "\": options " + i + " and " + j
-                + " can match the same payment but route to different facilitators ("
-                + policyA + " vs " + policyB + "); make a payment term differ (network, asset, "
-                + "amount, payTo, maxTimeoutSeconds or a shared extra key) or use the same "
-                + "facilitator", i, null,
-            mayHeal(snapshot, a, pin(a)) || mayHeal(snapshot, b, pin(b))));
-      }
-    }
-  }
-
-  private boolean knownPin(PaymentOption option) {
-    return option.facilitator() == null || server.facilitator(option.facilitator()) != null;
-  }
-
-  private String policy(PaymentOption option, RouteConfig config, RoutingSnapshot snapshot) {
-    String build = buildFacilitator(option, snapshot);
-    String policy = build == null ? "<none>" : "\"" + build + "\"";
-    if (config.failover()) {
-      policy += option.facilitator() != null ? " pinned" : " unpinned";
-    }
-    return policy;
-  }
-
-  private boolean mayOverlap(PaymentOption a, PaymentOption b) {
-    if (!a.scheme().equals(b.scheme()) || !a.network().equals(b.network())
-        || a.effectiveMaxTimeoutSeconds() != b.effectiveMaxTimeoutSeconds()) {
-      return false;
-    }
-    if (a.payTo() != null && b.payTo() != null && !a.payTo().equals(b.payTo())) {
-      return false;
-    }
-    AssetAmount priceA = staticPrice(a);
-    AssetAmount priceB = staticPrice(b);
-    if (priceA != null && priceB != null && (!Objects.equals(priceA.asset(), priceB.asset())
-        || !Objects.equals(priceA.amount(), priceB.amount()))) {
-      return false;
-    }
-    SchemeNetworkServer scheme = server.getRegisteredScheme(a.network(), a.scheme());
-    List<String> dynamic = scheme == null ? List.of() : scheme.dynamicExtraFields();
-    return compatible(JsonValues.omit(wireExtra(scheme, finalExtra(a, priceA)), dynamic),
-        JsonValues.omit(wireExtra(scheme, finalExtra(b, priceB)), dynamic));
-  }
-
-  /**
-   * The {@code extra} as it goes on the wire and is matched: the SDK {@code "default"} transfer
-   * method is dropped and a non-authorization flow is announced (decision 096).
-   */
-  private static Map<String, Object> wireExtra(SchemeNetworkServer scheme,
-      Map<String, Object> extra) {
-    if (scheme == null) {
-      return extra;
-    }
-    try {
-      return PaymentFlows.applyWireExtra(extra, PaymentFlows.resolve(scheme, extra));
-    } catch (IllegalArgumentException e) {
-      return extra;
-    }
-  }
-
-  private AssetAmount staticPrice(PaymentOption option) {
-    if (option.price() == null) {
-      return null;
-    }
-    SchemeNetworkServer scheme = server.getRegisteredScheme(option.network(), option.scheme());
-    if (scheme == null) {
-      return null;
-    }
-    try {
-      return scheme.parsePrice(option.price(), option.network());
-    } catch (RuntimeException e) {
-      return null;
-    }
-  }
-
-  private static Map<String, Object> finalExtra(PaymentOption option, AssetAmount price) {
-    Map<String, Object> extra = new LinkedHashMap<>();
-    if (price != null && price.extra() != null) {
-      extra.putAll(price.extra());
-    }
-    if (option.extra() != null) {
-      extra.putAll(option.extra());
-    }
-    return extra;
-  }
-
-  @SuppressWarnings("unchecked")
-  private static boolean compatible(Map<String, Object> a, Map<String, Object> b) {
-    for (Map.Entry<String, Object> e : a.entrySet()) {
-      if (!b.containsKey(e.getKey())) {
-        continue;
-      }
-      Object other = b.get(e.getKey());
-      if (e.getValue() instanceof Map && other instanceof Map) {
-        if (!compatible((Map<String, Object>) e.getValue(), (Map<String, Object>) other)) {
-          return false;
-        }
-      } else if (!JsonValues.deepEqual(e.getValue(), other)) {
-        return false;
-      }
-    }
-    return true;
-  }
-
-  /**
-   * Plan Roles §1b timeout budget: build verify-timeout + (failover ? largest candidate
-   * verify-timeout : 0) + n × largest settle timeout of the possible settle targets, where n is 2
-   * (one settle and its pending retry) or 4 for escrow, which settles before and after the
-   * handler (decision 097).
-   */
-  private void checkBudget(String key, RouteConfig config, RoutingSnapshot snapshot,
-      List<String> warnings) {
-    List<PaymentOption> options = config.accepts();
-    for (int i = 0; i < options.size(); i++) {
-      PaymentOption option = options.get(i);
-      String build = knownPin(option) ? buildFacilitator(option, snapshot) : null;
-      if (build == null) {
-        continue;
-      }
-      FacilitatorClient buildClient = server.facilitator(build);
-      Duration verify = buildClient.verifyTimeout();
-      Duration failover = Duration.ZERO;
-      Duration settle = buildClient.settleTimeout();
-      if (config.failover() && option.facilitator() == null) {
-        for (String candidate : candidates(build, option, snapshot)) {
-          FacilitatorClient c = server.facilitator(candidate);
-          failover = max(failover, c.verifyTimeout());
-          settle = max(settle, c.settleTimeout());
-        }
-      }
-      int settles = settlesPerPayment(option);
-      Duration worst = verify.plus(failover).plus(settle.multipliedBy(settles));
-      if (worst.compareTo(CLIENT_BUDGET) > 0) {
-        warnings.add("Route \"" + key + "\" option " + i + ": the worst-case payment path takes "
-            + worst.toSeconds() + " s (verify " + verify.toSeconds() + " s + failover verify "
-            + failover.toSeconds() + " s + " + settles + " × settle " + settle.toSeconds()
-            + " s), above the " + CLIENT_BUDGET.toSeconds() + " s client default timeout");
-      }
-    }
-  }
-
-  private int settlesPerPayment(PaymentOption option) {
-    SchemeNetworkServer scheme = server.getRegisteredScheme(option.network(), option.scheme());
-    if (scheme == null) {
-      return 2;
-    }
-    try {
-      PaymentFlow flow = PaymentFlows.resolve(scheme, finalExtra(option, null)).flow();
-      return flow.settleBeforeHandler() && flow.settleAfterHandler() ? 4 : 2;
-    } catch (IllegalArgumentException e) {
-      return 2;
-    }
-  }
-
-  private List<String> candidates(String build, PaymentOption option, RoutingSnapshot snapshot) {
-    List<String> out = new ArrayList<>();
-    SupportedKind built = snapshot.kindOf(build, X402ResourceServer.X402_VERSION,
-        option.network(), option.scheme());
-    if (built == null) {
-      return out;
-    }
-    for (String id : snapshot.facilitatorIdentifiers()) {
-      SupportedKind kind = snapshot.kindOf(id, X402ResourceServer.X402_VERSION, option.network(),
-          option.scheme());
-      if (!id.equals(build) && kind != null
-          && JsonValues.deepEqual(extraOf(kind), extraOf(built))) {
-        out.add(id);
-      }
-    }
-    return out;
-  }
-
-  private static Map<String, Object> extraOf(SupportedKind kind) {
-    return kind.extra() == null ? Map.of() : kind.extra();
-  }
-
-  private static Duration max(Duration a, Duration b) {
-    return a.compareTo(b) >= 0 ? a : b;
-  }
-
-  private void warnWildcardBazaar(String key, RouteConfig config, List<String> warnings) {
-    String pathPart = key.contains(" ") ? key.split("\\s+", -1)[1] : key;
-    if (pathPart.contains("*") && config.extensions() != null
-        && config.extensions().containsKey("bazaar")) {
-      warnings.add("[x402] Route \"" + key + "\": Wildcard (*) patterns with bazaar discovery "
-          + "extensions will auto-generate parameter names (var1, var2, ...). Consider using "
-          + "named parameters instead (e.g. /weather/:city) for better discovery metadata.");
-    }
-  }
-
-  private String buildFacilitator(PaymentOption option, RoutingSnapshot snapshot) {
-    String pin = pin(option);
-    if (pin != null) {
-      return pin;
-    }
-    return snapshot.owner(X402ResourceServer.X402_VERSION, option.network(), option.scheme());
-  }
-
-  private String pin(PaymentOption option) {
-    if (option.facilitator() == null) {
-      return null;
-    }
-    FacilitatorClient client = server.facilitator(option.facilitator());
-    return client == null ? null : server.facilitatorIdentifiers().stream()
-        .filter(id -> server.facilitator(id) == client).findFirst().orElse(null);
   }
 
   // ---------------------------------------------------------------- requests
@@ -613,7 +258,7 @@ public final class X402HttpResourceServer {
   }
 
   /**
-   * TS {@code processHTTPRequest} (:528-755): route match, protected-request hooks, 402 for
+   * Processes a request: route match, protected-request hooks, 402 for
    * unpaid requests (paywall HTML for browsers), then match, extension echo check, verify, and
    * for upfront/escrow flows settle before the handler.
    *
@@ -667,8 +312,7 @@ public final class X402HttpResourceServer {
     Map<String, Object> extensions = config.extensions() == null ? null
         : server.enrichExtensions(config.extensions(), request);
     HttpTransportContext transport = new HttpTransportContext(request, null, null);
-    // TS schemes read the paid payload from the PAYMENT-SIGNATURE header in the transport
-    // context; Java hands it over explicitly on every paid-path 402 (decision 038).
+    // Scheme enrichment gets the paid payload explicitly on every paid-path 402.
     PaymentRequired required = server.createPaymentRequiredResponse(requirements, resource,
         payload == null ? "Payment required" : null, extensions, transport, payload);
     if (payload == null) {
@@ -749,8 +393,8 @@ public final class X402HttpResourceServer {
       ServerVerifyResult verified, PaymentFlow flow) {
     if (!flow.settleAfterHandler()) {
       LOG.log(Level.WARNING, "[x402] skipHandler on payment flow \"" + flow.wire()
-          + "\": the payment was not settled (TS parity: the skip-handler path settles only "
-          + "after the handler, and this flow settles before it)");
+          + "\": the payment was not settled (skipping the handler settles only on flows that "
+          + "settle after the handler, and this flow settles before it)");
     }
     ProcessSettleResult result = processSettlement(payload, requirements, extensions, transport,
         null, null, SettlePhase.AFTER_HANDLER, routing);
@@ -865,9 +509,9 @@ public final class X402HttpResourceServer {
   }
 
   /**
-   * TS {@code processSettlement} (:757-924). Flows that do not settle after the handler echo the
-   * before-handler settlement. {@code Settlement-Overrides} is read from the response headers when
-   * no overrides are given; a malformed value is ignored.
+   * Processes the settlement of a verified payment. Flows that do not settle after the handler
+   * echo the before-handler settlement. {@code Settlement-Overrides} is read from the response
+   * headers when no overrides are given; a malformed value is ignored.
    *
    * @param payload the payment
    * @param requirements the requirements
@@ -981,7 +625,7 @@ public final class X402HttpResourceServer {
   }
 
   /**
-   * TS {@code createSettlementHeaders}: the {@code PAYMENT-RESPONSE} header.
+   * Creates the {@code PAYMENT-RESPONSE} header.
    *
    * @param response the settlement
    * @return the headers
@@ -991,7 +635,7 @@ public final class X402HttpResourceServer {
   }
 
   /**
-   * TS {@code createCompletedSettlementHeaders}: the receipt of a completed settle plus a private
+   * The receipt of a completed settle plus a private
    * {@code Cache-Control}.
    *
    * @param settlement the settlement
@@ -1006,7 +650,7 @@ public final class X402HttpResourceServer {
   }
 
   /**
-   * TS {@code createFailurePathSettlementHeaders} (:961): the receipt to send when the handler
+   * The receipt to send when the handler
    * failed after the payment was verified (cancel result, else the before-handler settlement).
    *
    * @param cancelSettlement the cancel dispatcher's result, may be {@code null}
@@ -1029,7 +673,7 @@ public final class X402HttpResourceServer {
   }
 
   /**
-   * TS {@code withPrivateCacheControl}: adds {@code private} unless present.
+   * Adds {@code private} unless present.
    *
    * @param value the current {@code Cache-Control}, may be {@code null}
    * @return the value with {@code private}

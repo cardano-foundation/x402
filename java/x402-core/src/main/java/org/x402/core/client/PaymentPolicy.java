@@ -3,7 +3,7 @@ package org.x402.core.client;
 import java.util.List;
 import org.x402.core.types.PaymentRequirements;
 
-/** Filters or reorders payment options (TS {@code PaymentPolicy}). */
+/** Filters or reorders payment options. */
 @FunctionalInterface
 public interface PaymentPolicy {
 

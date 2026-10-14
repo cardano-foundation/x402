@@ -1,8 +1,7 @@
 package org.x402.core.server;
 
 /**
- * Whether a client's extension echoes preserve the server's advertisement (TS {@code
- * ExtensionValidationResult}).
+ * Whether a client's extension echoes preserve the server's advertisement.
  *
  * @param valid whether the echoes are acceptable
  * @param invalidReason {@code extension_echo_mismatch} when not

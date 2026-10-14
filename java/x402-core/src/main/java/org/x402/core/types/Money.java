@@ -4,7 +4,7 @@ import java.math.BigDecimal;
 import java.util.Objects;
 
 /**
- * A money string such as {@code "$0.50"} or {@code "0.50 USDM"} (TS {@code Money}). The scheme's
+ * A money string such as {@code "$0.50"} or {@code "0.50 USDM"}. The scheme's
  * {@code parsePrice} turns it into an {@link AssetAmount}; {@code $} means the network's default
  * stablecoin at 1:1.
  *
@@ -18,7 +18,7 @@ public record Money(String value) implements Price {
   }
 
   /**
-   * Creates money from a decimal (TS {@code number} input).
+   * Creates money from a decimal.
    *
    * @param amount the amount
    * @return the money

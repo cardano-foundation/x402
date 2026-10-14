@@ -3,10 +3,10 @@ package org.x402.mechanisms.cardano.exact.script;
 import java.util.HexFormat;
 import java.util.Map;
 import org.x402.mechanisms.cardano.CardanoConstants;
-import org.x402.mechanisms.cardano.PlutusData;
+import org.x402.mechanisms.cardano.PlutusEncoding;
 
 /**
- * The inline datum a {@code script} payment attaches (TS {@code exact/script/datum.ts}). The
+ * The inline datum a {@code script} payment attaches. The
  * facilitator does not verify it; only the server that defined the contract can.
  */
 public final class ScriptDatum {
@@ -18,7 +18,7 @@ public final class ScriptDatum {
    *
    * @param extra the script extra block
    * @return the datum's CBOR bytes, or {@code null} when the extra carries none
-   * @throws IllegalArgumentException with TS's messages when present but not CBOR hex
+   * @throws IllegalArgumentException when present but not CBOR hex
    */
   public static byte[] datumBytes(Map<String, ?> extra) {
     if (extra == null || !extra.containsKey("datum")) {
@@ -33,7 +33,7 @@ public final class ScriptDatum {
     }
     try {
       byte[] bytes = HexFormat.of().parseHex(hex);
-      PlutusData.fromCbor(bytes);
+      PlutusEncoding.check(bytes);
       return bytes;
     } catch (RuntimeException e) {
       throw new IllegalArgumentException("Cardano script payment \"datum\" is not valid CBOR hex", e);

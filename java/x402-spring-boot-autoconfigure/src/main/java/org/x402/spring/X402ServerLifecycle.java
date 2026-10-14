@@ -17,11 +17,11 @@ import org.x402.http.X402HttpResourceServer;
 import org.x402.spring.properties.X402Properties;
 
 /**
- * Startup facilitator sync and background re-sync (plan Roles §1b). Starts before the web server
+ * Startup facilitator sync and background re-sync. Starts before the web server
  * accepts requests.
  *
  * <ul>
- *   <li>All facilitators answered and validation fails: startup fails (TS parity).
+ *   <li>All facilitators answered and validation fails: startup fails.
  *   <li>A facilitator failed and only problems it might heal remain: the app starts; affected
  *       routes answer 503 and a single-flight background re-sync retries with exponential backoff.
  *   <li>A re-sync whose validation still fails: affected routes answer 500, logged once; re-sync
@@ -174,7 +174,7 @@ public final class X402ServerLifecycle implements SmartLifecycle {
     }
     for (String failed : state.failedFacilitators()) {
       LOG.warn("x402: facilitator \"" + failed + "\" failed at startup but no route needs it; it "
-          + "is not retried until restart (ownership stays fixed, as in TS)");
+          + "is not retried until restart, so route ownership stays fixed");
     }
   }
 

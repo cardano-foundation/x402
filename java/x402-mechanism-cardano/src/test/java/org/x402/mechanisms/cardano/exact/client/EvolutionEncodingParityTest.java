@@ -14,10 +14,10 @@ import org.x402.mechanisms.cardano.DecodedCardanoTransaction;
 import org.x402.mechanisms.cardano.testing.Vectors;
 
 /**
- * The Java encoder writes transactions exactly as Evolution (TS) does: re-encoding the parts of
- * an Evolution-built fixture transaction reproduces its bytes. This matters because the TS
- * facilitator decodes and re-encodes before submitting; any other encoding would change the
- * transaction id there (decision 100).
+ * The Java encoder writes transactions in the canonical form: re-encoding the parts of a
+ * fixture transaction built by the TypeScript SDK reproduces its bytes. This matters because a
+ * facilitator that decodes and re-encodes before submitting would otherwise change the
+ * transaction id.
  */
 class EvolutionEncodingParityTest {
 

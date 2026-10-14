@@ -11,7 +11,8 @@ import org.springframework.http.client.reactive.ClientHttpConnector;
 /**
  * Wraps Boot's {@link ClientHttpConnectorBuilder} bean so the connector of Boot's {@code
  * WebClient.Builder} sends paid requests through a twin built with the same settings and
- * redirects disabled (decision 075).
+ * redirects disabled, so each Boot-built client holds two connectors (two connection pools): a
+ * redirect must never carry {@code PAYMENT-SIGNATURE} to another host.
  */
 public final class X402ClientHttpConnectorBuilderPostProcessor implements BeanPostProcessor {
 

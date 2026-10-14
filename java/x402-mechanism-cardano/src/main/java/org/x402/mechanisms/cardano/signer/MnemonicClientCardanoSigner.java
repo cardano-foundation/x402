@@ -1,5 +1,7 @@
 package org.x402.mechanisms.cardano.signer;
 
+import com.bloxbean.cardano.client.api.model.ProtocolParams;
+import com.bloxbean.cardano.client.api.model.Utxo;
 import com.bloxbean.cardano.client.account.Account;
 import com.bloxbean.cardano.client.crypto.api.impl.EdDSASigningProvider;
 import java.math.BigInteger;
@@ -15,9 +17,9 @@ import org.x402.core.types.PaymentRequirements;
 import org.x402.mechanisms.cardano.CardanoAddresses;
 import org.x402.mechanisms.cardano.CardanoConstants;
 import org.x402.mechanisms.cardano.CardanoNetworks;
+import org.x402.mechanisms.cardano.CardanoUtils;
 import org.x402.mechanisms.cardano.MnemonicAccounts;
-import org.x402.mechanisms.cardano.chain.ProtocolParameters;
-import org.x402.mechanisms.cardano.chain.WalletUtxo;
+import org.x402.mechanisms.cardano.PlutusEncoding;
 import org.x402.mechanisms.cardano.exact.client.ClientCardanoSignInput;
 import org.x402.mechanisms.cardano.exact.client.ClientCardanoSignResult;
 import org.x402.mechanisms.cardano.exact.client.ClientCardanoSigner;
@@ -31,7 +33,7 @@ import org.x402.mechanisms.cardano.exact.masumi.MasumiVerifier;
 import org.x402.mechanisms.cardano.exact.script.ScriptDatum;
 
 /**
- * The reference client signer (TS {@code toClientCardanoSigner}): a BIP-39 wallet on one network.
+ * The reference client signer: a BIP-39 wallet on one network.
  * It validates a Masumi 402 completely before touching the wallet, uses the first wallet UTxO as
  * the nonce, pays the requested asset to {@code payTo}, sets the TTL from {@code
  * maxTimeoutSeconds} (Masumi: {@code payByTime}), signs offline and never broadcasts.
@@ -80,7 +82,7 @@ public final class MnemonicClientCardanoSigner implements ClientCardanoSigner {
     // Every Masumi guard runs before the wallet's UTxOs are read.
     MasumiExtra masumi = null;
     MasumiLock.Lock lock = null;
-    ProtocolParameters parameters = null;
+    ProtocolParams parameters = null;
     if (CardanoConstants.METHOD_MASUMI.equals(extra.get("assetTransferMethod"))) {
       masumi = guardMasumi(input, extra);
       MasumiBuyerInput buyerInput = config.masumiBuyerInput() == null ? null : config.masumiBuyerInput().apply(masumi);
@@ -91,9 +93,9 @@ public final class MnemonicClientCardanoSigner implements ClientCardanoSigner {
           && !CardanoAddresses.isKeyCredentialAddressOn(buyerInput.buyerReturnAddress(), input.network())) {
         throw new IllegalArgumentException("Masumi buyer return address must be a key-credential address on network");
       }
-      parameters = config.walletProvider().getProtocolParameters(input.network());
-      lock = MasumiLock.build(masumi, address, asset, amount, parameters.coinsPerUtxoByte(), buyerInput);
-      MasumiDatum.View view = MasumiDatum.parse(lock.datum().toCbor());
+      parameters = CardanoUtils.requireComplete(config.protocolParamsSupplier().getProtocolParams());
+      lock = MasumiLock.build(masumi, address, asset, amount, CardanoUtils.coinsPerUtxoByte(parameters), buyerInput);
+      MasumiDatum.View view = MasumiDatum.parse(PlutusEncoding.encode(lock.datum()));
       if (view == null) {
         throw new IllegalStateException("Masumi client preflight could not decode the lock datum");
       }
@@ -110,13 +112,13 @@ public final class MnemonicClientCardanoSigner implements ClientCardanoSigner {
       }
     }
 
-    List<WalletUtxo> utxos = new ArrayList<>(config.walletProvider().getAddressUtxos(address, input.network()));
-    utxos.removeIf(WalletUtxo::hasReferenceScript);
+    List<Utxo> utxos = new ArrayList<>(config.utxoSupplier().getAll(address));
+    utxos.removeIf(u -> u.getReferenceScriptHash() != null);
     if (utxos.isEmpty()) {
       throw new IllegalStateException("Funding wallet has no UTXOs available for the payment");
     }
     if (parameters == null) {
-      parameters = config.walletProvider().getProtocolParameters(input.network());
+      parameters = CardanoUtils.requireComplete(config.protocolParamsSupplier().getProtocolParams());
     }
 
     Map<String, BigInteger> assets = isLovelace ? Map.of() : Map.of(asset, amount);
@@ -125,7 +127,7 @@ public final class MnemonicClientCardanoSigner implements ClientCardanoSigner {
     if (masumi != null) {
       payment =
           new PaymentTransactionBuilder.Payment(
-              new PaymentTransactionBuilder.Output(input.payTo(), lock.lockedLovelace(), assets, lock.datum().toCbor()),
+              new PaymentTransactionBuilder.Output(input.payTo(), lock.lockedLovelace(), assets, PlutusEncoding.encode(lock.datum())),
               false);
       ttlMs = Long.parseLong(masumi.terms().payByTime());
     } else {
@@ -137,9 +139,7 @@ public final class MnemonicClientCardanoSigner implements ClientCardanoSigner {
               !isLovelace || datum != null);
       ttlMs = config.clock().millis() + input.maxTimeoutSeconds() * 1000L;
     }
-    CardanoNetworks.SlotConfig slots = CardanoNetworks.slotConfig(input.network());
-    BigInteger ttlSlot =
-        BigInteger.valueOf(slots.zeroSlot() + Math.floorDiv(ttlMs - slots.zeroTimeMs(), slots.slotLengthMs()));
+    BigInteger ttlSlot = BigInteger.valueOf(CardanoNetworks.posixMsToSlot(input.network(), ttlMs));
 
     PaymentTransactionBuilder.Built built =
         PaymentTransactionBuilder.build(

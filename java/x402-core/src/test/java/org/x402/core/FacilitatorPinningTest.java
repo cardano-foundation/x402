@@ -22,7 +22,7 @@ import org.x402.core.server.X402ResourceServer;
 import org.x402.core.types.Money;
 import org.x402.core.types.PaymentRequirements;
 
-/** Plan Roles §1b: a pinned option builds, verifies and settles only via its facilitator. */
+/** A pinned option builds, verifies and settles only via its facilitator. */
 class FacilitatorPinningTest {
 
   private final FakeServerScheme scheme = new FakeServerScheme();

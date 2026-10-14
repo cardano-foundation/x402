@@ -14,9 +14,10 @@ import org.springframework.web.client.RestClient;
 import org.x402.core.client.X402Client;
 import org.x402.http.HostPolicy;
 import org.x402.spring.autoconfigure.X402AutoConfiguration;
+import org.x402.spring.properties.X402Properties;
 
 /**
- * Blocking clients (WP5): {@code RestClient} and {@code RestTemplate} built from Boot's builders
+ * Blocking clients: {@code RestClient} and {@code RestTemplate} built from Boot's builders
  * pay through a decorated request factory; self-built beans get a warning and the {@link
  * X402ClientHttpRequestFactoryDecorator} bean ({@code x402Decorator}) for an explicit opt-in.
  */
@@ -28,9 +29,10 @@ public class X402RestClientAutoConfiguration {
   @Bean
   @ConditionalOnMissingBean
   X402ClientHttpRequestFactoryDecorator x402Decorator(X402Client client,
-      ObjectProvider<HostPolicy> hostPolicy) {
+      ObjectProvider<HostPolicy> hostPolicy, X402Properties properties) {
     return new X402ClientHttpRequestFactoryDecorator(client,
-        hostPolicy.getIfAvailable(() -> HostPolicy.of(java.util.List.of())));
+        hostPolicy.getIfAvailable(() -> HostPolicy.of(java.util.List.of())),
+        properties.client().maxReplayBody().toBytes());
   }
 
   @Bean

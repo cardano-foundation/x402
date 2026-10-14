@@ -4,8 +4,9 @@ import org.x402.core.facilitator.X402Facilitator;
 
 /**
  * Customizes the auto-configured facilitator: hooks ({@code onBeforeVerify}, …) and schemes.
- * Customizers run before the Cardano schemes are registered, and auto-configuration registers a
- * Cardano scheme only for (scheme, network) pairs no customizer claimed, so a custom scheme wins.
+ * The configured Cardano networks are registered by a customizer of lowest precedence that runs
+ * after yours (application beans come before auto-configuration on equal order), and only for
+ * (scheme, network) pairs no customizer claimed, so a custom scheme wins.
  */
 @FunctionalInterface
 public interface X402FacilitatorCustomizer {

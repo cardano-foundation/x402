@@ -1,6 +1,6 @@
 {
   "generatedFrom": "typescript/packages/core/src/http/httpFacilitatorClient.ts",
-  "responsesFrom": "plan Roles §3 wire table; e2e/facilitators/typescript/index.ts:1039-1131",
+  "responsesFrom": "the TS e2e facilitator handlers (e2e/facilitators/typescript/index.ts)",
   "tsCommit": "f8f83309706b14cc696962f0a002eeeb66c3dc26",
   "basePath": "/x402",
   "cases": [
@@ -156,7 +156,7 @@
     {
       "name": "settle-abort-ts-e2e-shape",
       "operation": "settle",
-      "note": "the TS e2e abort body (index.ts:1103-1107); TS settleResponseSchema rejects it",
+      "note": "the TS e2e abort body (e2e/facilitators/typescript/index.ts); TS settleResponseSchema rejects it",
       "request": {
         "method": "POST",
         "path": "/x402/settle",

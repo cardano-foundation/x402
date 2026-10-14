@@ -68,26 +68,24 @@ import org.x402.core.utils.JsonValues;
 import org.x402.core.utils.Networks;
 
 /**
- * The transport-agnostic x402 resource server (TS {@code x402ResourceServer}, Go {@code
- * server.go}): builds payment requirements, verifies and settles payments through facilitators,
- * and runs server-wide, scheme and extension hooks with TS semantics.
+ * The transport-agnostic x402 resource server: builds payment requirements, verifies and settles
+ * payments through facilitators, and runs server-wide, scheme and extension hooks.
  *
  * <p><b>Lifecycle.</b> Register schemes, extensions and hooks, then call {@link #initialize()}.
  * Registration after the first {@code initialize()} (or {@link #sync()}) throws {@link
  * IllegalStateException}. {@code initialize()} may be called again to re-sync: each call builds a
  * new immutable {@link RoutingSnapshot} and publishes it with one atomic swap. Overlapping {@code
- * initialize()} calls are allowed and the last publish wins, so callers outside Spring should
- * serialize them; otherwise a slow, older sync can overwrite newer data.
+ * initialize()} calls are allowed: snapshots are numbered when their sync starts, and a published
+ * snapshot is never replaced by one from an earlier sync.
  *
- * <p><b>Facilitators (plan Roles §1b).</b> Facilitators are a list in declaration order. The first
+ * <p><b>Facilitators.</b> Facilitators are a list in declaration order. The first
  * one listing an exact (version, network, scheme) kind owns it. Options may be pinned to one
  * facilitator by identifier ({@link FacilitatorRoute#pinned}); unpinned options may opt into a
  * one-hop verify failover ({@link FacilitatorRoute#autoWithVerifyFailover}). Settle goes to {@code
- * verifiedBy}, else the pin, else the build facilitator, and never to any other facilitator: this
- * deliberately diverges from TS's unmapped-kind settle loop ({@code :1325-1340}), which could
- * broadcast twice after a timeout.
+ * verifiedBy}, else the pin, else the build facilitator, and never to any other facilitator: trying
+ * further facilitators for an unmapped kind could broadcast twice after a timeout.
  *
- * <p>All calls are synchronous (plan decision 1) and thread-safe once registration is done.
+ * <p>All calls are synchronous and thread-safe once registration is done.
  */
 public final class X402ResourceServer {
 
@@ -157,7 +155,7 @@ public final class X402ResourceServer {
     }
 
     /**
-     * Sets the in-process facilitator (WP12 {@code x402.local-facilitator}). It is prepended to
+     * Sets the in-process facilitator ({@code x402.local-facilitator}). It is prepended to
      * the list under the reserved identifier {@code local} and so takes precedence.
      *
      * @param client the in-process client
@@ -181,8 +179,8 @@ public final class X402ResourceServer {
      */
     public X402ResourceServer build() {
       if (clients.isEmpty() && local == null) {
-        throw new IllegalArgumentException("x402 resource server needs at least one facilitator "
-            + "(TS default: an HttpFacilitatorClient for https://x402.org/facilitator)");
+        throw new IllegalArgumentException("x402 resource server needs at least one facilitator, "
+            + "e.g. an HttpFacilitatorClient for https://x402.org/facilitator");
       }
       Map<String, FacilitatorClient> byId = new LinkedHashMap<>();
       if (local != null) {
@@ -207,7 +205,7 @@ public final class X402ResourceServer {
   // ---------------------------------------------------------------- registration
 
   /**
-   * Registers a scheme for a network or network pattern (TS {@code register}, :374). A later
+   * Registers a scheme for a network or network pattern. A later
    * registration for the same network and scheme replaces the earlier one.
    *
    * @param network the network, or a pattern such as {@code cardano:*}
@@ -260,7 +258,7 @@ public final class X402ResourceServer {
   }
 
   /**
-   * Registers an extension; the same key replaces an earlier registration (TS :462).
+   * Registers an extension; the same key replaces an earlier registration.
    *
    * @param extension the extension
    * @return this server
@@ -414,14 +412,54 @@ public final class X402ResourceServer {
   }
 
   /**
+   * An identifier as this server stores it (trailing slashes removed), e.g. to compare a pin.
+   *
+   * @param identifier the identifier
+   * @return the normalized identifier
+   */
+  public static String normalizeIdentifier(String identifier) {
+    return Identifiers.normalize(identifier);
+  }
+
+  /**
+   * The facilitators that may take over a verify from {@code owner} when it is unavailable: every
+   * other facilitator listing the same kind with the same {@code extra}, in declaration order.
+   *
+   * @param snap the routing snapshot
+   * @param owner the facilitator that owns the kind
+   * @param version the x402 version
+   * @param network the network
+   * @param scheme the scheme
+   * @return the candidates, possibly empty
+   */
+  public List<String> failoverCandidates(RoutingSnapshot snap, String owner, int version,
+      String network, String scheme) {
+    List<String> out = new ArrayList<>();
+    SupportedKind built = snap.kindOf(owner, version, network, scheme);
+    if (built == null) {
+      return out;
+    }
+    for (String id : snap.facilitatorIdentifiers()) {
+      SupportedKind kind = snap.kindOf(id, version, network, scheme);
+      if (!id.equals(owner) && kind != null
+          && JsonValues.deepEqual(extraOf(kind), extraOf(built))) {
+        out.add(id);
+      }
+    }
+    return out;
+  }
+
+  /**
    * Fetches {@code /supported} from every facilitator in declaration order and builds a new
    * snapshot without publishing it. A failing facilitator is logged and recorded in {@link
-   * RoutingSnapshot#failures()}; the others still count (TS :690-695). Ends registration.
+   * RoutingSnapshot#failures()}; the others still count. Ends registration.
    *
    * @return the new snapshot
    */
   public RoutingSnapshot sync() {
     freeze();
+    // Numbered when it starts: a sync that began earlier stays older, whenever it finishes.
+    long generation = generations.incrementAndGet();
     Map<String, SupportedResponse> answers = new LinkedHashMap<>();
     Map<String, Throwable> failures = new LinkedHashMap<>();
     facilitators.forEach((id, client) -> {
@@ -431,7 +469,7 @@ public final class X402ResourceServer {
         recordSyncFailure(failures, id, e);
       }
     });
-    return RoutingSnapshot.build(generations.incrementAndGet(), facilitators, answers, failures);
+    return RoutingSnapshot.build(generation, facilitators, answers, failures);
   }
 
   /**
@@ -445,6 +483,7 @@ public final class X402ResourceServer {
    * @return the new snapshot
    */
   public RoutingSnapshot sync(Duration budget, Executor executor) {
+    long generation = generations.incrementAndGet();
     freeze();
     long deadline = System.nanoTime() + budget.toNanos();
     Map<String, CompletableFuture<SupportedResponse>> calls = new LinkedHashMap<>();
@@ -471,7 +510,7 @@ public final class X402ResourceServer {
         recordSyncFailure(failures, id, e);
       }
     });
-    return RoutingSnapshot.build(generations.incrementAndGet(), facilitators, answers, failures);
+    return RoutingSnapshot.build(generation, facilitators, answers, failures);
   }
 
   private static void recordSyncFailure(Map<String, Throwable> failures, String id, Throwable e) {
@@ -481,7 +520,8 @@ public final class X402ResourceServer {
   }
 
   /**
-   * Publishes a snapshot built by {@link #sync()} with one atomic swap.
+   * Publishes a snapshot built by {@link #sync()} with one atomic swap, unless a newer one (a
+   * later sync) is already published: overlapping syncs never move routing backwards.
    *
    * @param next the snapshot
    * @throws IllegalArgumentException when it was built for other facilitators
@@ -491,12 +531,13 @@ public final class X402ResourceServer {
       throw new IllegalArgumentException("snapshot belongs to another facilitator list");
     }
     freeze();
-    snapshot.set(next);
+    snapshot.accumulateAndGet(next,
+        (current, candidate) -> current == null || current.generation() < candidate.generation()
+            ? candidate : current);
   }
 
   /**
-   * Syncs, publishes the new snapshot, then validates facilitator capabilities (TS {@code
-   * initialize}, :644).
+   * Syncs, publishes the new snapshot, then validates facilitator capabilities.
    *
    * @return the published snapshot
    * @throws IllegalStateException when no facilitator listed any kind (retryable; the cause is
@@ -527,7 +568,7 @@ public final class X402ResourceServer {
   }
 
   /**
-   * TS {@code validateFacilitatorCapabilities} (:1607): asks every registered scheme whether the
+   * Asks every registered scheme whether the
    * owner's kind can serve it.
    *
    * @param snap the snapshot to check
@@ -575,7 +616,7 @@ public final class X402ResourceServer {
       String problem) {
 
     /**
-     * TS's line, {@code "<scheme> on <network>: <problem>"}.
+     * The line {@code "<scheme> on <network>: <problem>"}.
      *
      * @return the line
      */
@@ -585,7 +626,7 @@ public final class X402ResourceServer {
   }
 
   /**
-   * The owner's exact kind in the current snapshot (TS {@code getSupportedKind}).
+   * The owner's exact kind in the current snapshot.
    *
    * @param x402Version the version
    * @param network the network
@@ -598,8 +639,7 @@ public final class X402ResourceServer {
   }
 
   /**
-   * Decimals of the asset in requirements, falling back to 6 (TS {@code
-   * getAssetDecimalsForRequirements}, display only).
+   * Decimals of the asset in requirements, falling back to 6 (display only).
    *
    * @param requirements the requirements
    * @return the decimals
@@ -633,7 +673,7 @@ public final class X402ResourceServer {
    * Builds requirements with the current snapshot.
    *
    * @param config the option
-   * @return a one-element list (TS shape)
+   * @return a one-element list
    * @see #buildPaymentRequirements(ResourceConfig, RoutingSnapshot)
    */
   public List<PaymentRequirements> buildPaymentRequirements(ResourceConfig config) {
@@ -641,7 +681,7 @@ public final class X402ResourceServer {
   }
 
   /**
-   * TS {@code buildPaymentRequirements} (:761) using the option's build facilitator: its exact
+   * Builds an option's requirements using its build facilitator: its exact
    * kind for {@code enhancePaymentRequirements}, its extensions, and (for a pin) its {@code
    * validateFacilitatorSupport}. Price {@code extra} merges below the option's {@code extra};
    * the payment flow is resolved and applied to the wire {@code extra}.
@@ -688,13 +728,7 @@ public final class X402ResourceServer {
       facilitatorExtensions = s.ownerExtensions(X402_VERSION, config.network(), scheme.scheme());
     }
     AssetAmount price = scheme.parsePrice(config.price(), config.network());
-    Map<String, Object> extra = new LinkedHashMap<>();
-    if (price.extra() != null) {
-      extra.putAll(price.extra());
-    }
-    if (config.extra() != null) {
-      extra.putAll(config.extra());
-    }
+    Map<String, Object> extra = PaymentFlows.mergeExtra(price.extra(), config.extra());
     PaymentRequirements base = new PaymentRequirements(scheme.scheme(), config.network(),
         price.asset(), price.amount(), config.payTo(), config.effectiveMaxTimeoutSeconds(), extra);
     PaymentRequirements enhanced =
@@ -704,7 +738,7 @@ public final class X402ResourceServer {
   }
 
   /**
-   * TS {@code enrichExtensions}: lets registered extensions rewrite route declarations; a
+   * Lets registered extensions rewrite route declarations; a
    * throwing extension keeps the declaration and logs a warning.
    *
    * @param declared the route's declarations
@@ -730,7 +764,7 @@ public final class X402ResourceServer {
   }
 
   /**
-   * TS {@code createPaymentRequiredResponse} (:890): the 402 body, after scheme enrichment (which
+   * Builds the 402 body, after scheme enrichment (which
    * may only add {@code extra} keys to its own accepts) and extension enrichment.
    *
    * @param requirements the requirements
@@ -800,9 +834,9 @@ public final class X402ResourceServer {
   }
 
   /**
-   * TS {@code findMatchingRequirements} (:1516): v2 needs equal core fields and the advertised
-   * {@code extra} as a subset of the accepted one, minus the scheme's dynamic fields; v1 matches
-   * scheme and network.
+   * Finds the advertised requirements a payment answers: v2 needs equal core fields and the
+   * advertised {@code extra} as a subset of the accepted one, minus the scheme's dynamic fields; v1
+   * matches scheme and network.
    *
    * @param available the advertised requirements
    * @param payload the payment
@@ -853,7 +887,7 @@ public final class X402ResourceServer {
   }
 
   /**
-   * TS {@code validateExtensions} (:1455): client extension echoes must preserve the advertised
+   * Client extension echoes must preserve the advertised
    * {@code info} (minus dynamic fields) and never invent server-owned fields.
    *
    * @param paymentRequired the 402 the payment answers
@@ -924,7 +958,7 @@ public final class X402ResourceServer {
   }
 
   /**
-   * The payment flow of requirements, from the scheme's table (TS {@code getPaymentFlow}).
+   * The payment flow of requirements, from the scheme's table.
    *
    * @param payload the payment (unused; the flow is requirements-driven)
    * @param requirements the requirements
@@ -943,7 +977,7 @@ public final class X402ResourceServer {
   // ---------------------------------------------------------------- verify
 
   /**
-   * Verifies with TS routing ({@link FacilitatorRoute#auto()}) and the current snapshot.
+   * Verifies with routing by kind ({@link FacilitatorRoute#auto()}) and the current snapshot.
    *
    * @param payload the payment
    * @param requirements the matched requirements
@@ -961,9 +995,9 @@ public final class X402ResourceServer {
   }
 
   /**
-   * TS {@code verifyPayment} (:1002) with Java facilitator routing. Before-verify hooks always
+   * Verifies a payment at the facilitator chosen by {@code route}. Before-verify hooks always
    * run; the facilitator is called only when the flow verifies before the handler. Throwing hooks
-   * are logged and skipped (TS :1027-1046).
+   * are logged and skipped.
    *
    * @param payload the payment
    * @param requirements the matched requirements
@@ -1038,7 +1072,7 @@ public final class X402ResourceServer {
     String owner = snap == null ? null
         : snap.owner(version, requirements.network(), requirements.scheme());
     if (owner == null) {
-      // Defensive TS fallback (:1066-1086): try every facilitator in order.
+      // No known owner (defensive): try every facilitator in order.
       RuntimeException last = null;
       for (String id : facilitators.keySet()) {
         try {
@@ -1075,7 +1109,7 @@ public final class X402ResourceServer {
 
   /**
    * Whether an error is a transport-level verify failure that may fail over: no response or a
-   * timeout, or HTTP 5xx / 429 without a verdict body (plan Roles §1b). Verdict bodies ({@code
+   * timeout, or HTTP 5xx / 429 without a verdict body. Verdict bodies ({@code
    * VerifyException}), other 4xx and unusable 2xx bodies are final.
    *
    * @param e the error
@@ -1094,21 +1128,9 @@ public final class X402ResourceServer {
 
   private String failoverCandidate(
       RoutingSnapshot snap, String owner, int version, PaymentRequirements requirements) {
-    SupportedKind built = snap.kindOf(owner, version, requirements.network(),
+    List<String> candidates = failoverCandidates(snap, owner, version, requirements.network(),
         requirements.scheme());
-    if (built == null) {
-      return null;
-    }
-    for (String id : snap.facilitatorIdentifiers()) {
-      if (id.equals(owner)) {
-        continue;
-      }
-      SupportedKind kind = snap.kindOf(id, version, requirements.network(), requirements.scheme());
-      if (kind != null && JsonValues.deepEqual(extraOf(kind), extraOf(built))) {
-        return id;
-      }
-    }
-    return null;
+    return candidates.isEmpty() ? null : candidates.get(0);
   }
 
   private static Map<String, Object> extraOf(SupportedKind kind) {
@@ -1148,7 +1170,7 @@ public final class X402ResourceServer {
   // ---------------------------------------------------------------- settle
 
   /**
-   * Settles with TS routing and the current snapshot.
+   * Settles with routing by kind and the current snapshot.
    *
    * @param payload the payment
    * @param requirements the requirements
@@ -1170,9 +1192,9 @@ public final class X402ResourceServer {
   }
 
   /**
-   * TS {@code settlePayment} (:1197): overrides, before-settle hooks (an abort throws a 400
+   * Settles a payment: overrides, before-settle hooks (an abort throws a 400
    * {@link SettleException}), payload enrichment, settle with one pending retry ({@code
-   * settleWithPendingRetry}, :1577) at the settle target, failure hooks for thrown errors and
+   * settleWithPendingRetry}) at the settle target, failure hooks for thrown errors and
    * for returned {@code success:false} results, after hooks, response enrichment.
    *
    * @param payload the payment
@@ -1307,8 +1329,7 @@ public final class X402ResourceServer {
   }
 
   private static boolean isRetryablePending(SettleResponse r) {
-    return r != null && !r.success() && SettleResponse.SETTLEMENT_PENDING.equals(r.errorReason())
-        && r.transaction() != null && !r.transaction().isEmpty();
+    return r != null && r.isPending() && r.transaction() != null && !r.transaction().isEmpty();
   }
 
   private static SettleException settleResponseToError(SettleResponse r) {
@@ -1405,7 +1426,7 @@ public final class X402ResourceServer {
   // ---------------------------------------------------------------- cancel
 
   /**
-   * TS {@code createPaymentCancellationDispatcher} (:1158): a once-only cancel for a payment that
+   * Creates a once-only cancel for a payment that
    * passed the pre-handler gates. A settle-on-cancel uses the same {@code routing} as the
    * payment's other settles.
    *
@@ -1496,7 +1517,7 @@ public final class X402ResourceServer {
 
   /**
    * Manual hooks first, then the matched scheme's hook, then hooks of declared extensions in
-   * registration order (TS {@code getLabeledHooks}, :1870).
+   * registration order.
    */
   private <H> List<Labeled<H>> hooks(
       String phase,

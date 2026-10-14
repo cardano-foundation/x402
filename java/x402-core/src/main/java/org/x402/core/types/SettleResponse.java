@@ -6,8 +6,7 @@ import com.fasterxml.jackson.annotation.JsonPropertyOrder;
 import java.util.Map;
 
 /**
- * A facilitator's settle answer, also the body of {@code PAYMENT-RESPONSE} (TS {@code
- * SettleResponse}).
+ * A facilitator's settle answer, also the body of {@code PAYMENT-RESPONSE}.
  *
  * @param success whether settlement succeeded
  * @param errorReason machine-readable reason on failure

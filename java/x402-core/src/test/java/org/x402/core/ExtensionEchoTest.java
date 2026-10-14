@@ -13,7 +13,7 @@ import org.x402.core.types.PaymentPayload;
 import org.x402.core.types.PaymentRequired;
 import org.x402.core.types.PaymentRequirements;
 
-/** TS {@code validateExtensions} (:1455): client echoes must preserve the advertisement. */
+/** Client extension echoes must preserve the server's advertisement. */
 class ExtensionEchoTest {
 
   private final X402ResourceServer server = X402ResourceServer.builder()
@@ -82,7 +82,7 @@ class ExtensionEchoTest {
     assertThat(check(map("builder-code", map("info", map("a", "app"))),
         map("builder-code", "scalar")).valid()).isFalse();
     assertThat(check(null, map("builder-code", "scalar")).valid()).isTrue();
-    // a JSON null is a present value in TS too (only undefined is skipped)
+    // a JSON null is a present value (only an absent key is skipped)
     assertThat(check(null, map("builder-code", map("info", map("a", null)))).valid()).isFalse();
     assertThat(check(null, map("builder-code", map("info", map("s", List.of())))).valid())
         .isTrue();

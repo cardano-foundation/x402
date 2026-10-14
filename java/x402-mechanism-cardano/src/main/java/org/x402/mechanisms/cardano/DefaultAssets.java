@@ -6,7 +6,7 @@ import java.util.Map;
 import org.x402.core.SchemeNetworkClient.DefaultAsset;
 
 /**
- * USD-pegged default assets per network (TS {@code defaultAssets.ts}). Index 0 is what {@code
+ * USD-pegged default assets per network Index 0 is what {@code
  * "$0.10"} means. Preview has none; lovelace is never a default.
  */
 public final class DefaultAssets {
@@ -27,7 +27,7 @@ public final class DefaultAssets {
    * @param network the network (CIP-34 aliases accepted)
    * @param symbol the ticker, or {@code null} for the network default
    * @return the entry
-   * @throws IllegalArgumentException with TS's message when unknown
+   * @throws IllegalArgumentException when the network or symbol is unknown
    */
   public static DefaultAsset get(String network, String symbol) {
     List<DefaultAsset> assets = TABLE.get(CardanoNetworks.normalize(network));

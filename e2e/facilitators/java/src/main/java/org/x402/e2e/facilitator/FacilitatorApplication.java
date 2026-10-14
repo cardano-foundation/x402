@@ -11,7 +11,7 @@ import org.springframework.boot.context.event.ApplicationReadyEvent;
  * ({@code POST /verify}, {@code POST /settle}, {@code GET /supported}), plus {@code GET /health}
  * and {@code POST /close} for the harness.
  *
- * <p>Env (mirrors {@code e2e/facilitators/typescript/index.ts}): {@code PORT} (default 4022);
+ * <p>Env: {@code PORT} (default 4022);
  * Cardano is registered only when both {@code CARDANO_RPC_URL} and {@code BLOCKFROST_PROJECT_ID}
  * are set; {@code FACILITATOR_CARDANO_MNEMONIC} is optional (provider-only without it); {@code
  * CARDANO_NETWORK} picks the one {@code networks[]} entry (default {@code cardano:preprod}); {@code

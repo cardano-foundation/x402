@@ -13,7 +13,7 @@ import java.util.concurrent.Future;
 import org.junit.jupiter.api.Test;
 import org.x402.core.types.PaymentRequirements;
 
-/** Port of the TS {@code InMemoryMasumiTermsStorage} tests ({@code settlementStore.test.ts}). */
+/** Storage, first-claim binding, atomic updates and oldest-first eviction. */
 class InMemoryMasumiTermsStorageTest {
 
   private static PaymentRequirements requirements(String amount) {

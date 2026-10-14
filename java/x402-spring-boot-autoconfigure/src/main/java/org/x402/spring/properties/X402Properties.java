@@ -11,12 +11,12 @@ import org.springframework.util.unit.DataSize;
 import org.x402.http.HttpFacilitatorClient;
 
 /**
- * The x402.* configuration (plan "Developer-facing contract"). Unknown fields are ignored,
- * because mechanism auto-configurations bind their own blocks (e.g. * x402.accounts.*.cardano) over the same prefix; fields that are not allowed in a place are
- * detected separately and fail startup.
+ * The x402.* configuration. Unknown fields are ignored, because mechanism auto-configurations
+ * bind their own blocks (e.g. x402.accounts.*.cardano) over the same prefix; fields that are not
+ * allowed in a place are detected separately and fail startup.
  *
  * @param enabled whether the resource server and the client are active (default true)
- * @param facilitators the facilitators, in precedence order; none = *     https://x402.org/facilitator
+ * @param facilitators the facilitators, in precedence order; none = https://x402.org/facilitator
  * @param sync startup and background /supported sync
  * @param accounts where you get paid: one entry per network, receiver and transfer method
  * @param defaults network-independent defaults for every payment option
@@ -24,7 +24,7 @@ import org.x402.http.HttpFacilitatorClient;
  * @param paywall the browser paywall
  * @param client the payment client for outgoing requests
  * @param filterOrder the order of the x402 filter (default: right after Spring Security)
- * @param localFacilitator use the in-process facilitator (needs *     x402.facilitator-server.enabled)
+ * @param localFacilitator use the in-process facilitator (needs x402.facilitator-server.enabled)
  */
 @ConfigurationProperties("x402")
 public record X402Properties(
@@ -62,14 +62,14 @@ public record X402Properties(
   }
 
   /**
-   * One facilitator (TS/Go/Python list entry).
+   * One facilitator entry of the facilitator list.
    *
    * @param url the base URL
    * @param identifier the name used in logs, health and pins; defaults to the URL
    * @param timeout settle and /supported timeout (default 90 s)
    * @param verifyTimeout /verify timeout (default 15 s)
    * @param headers static auth headers per endpoint
-   * @param authRef the bean name of an X402FacilitatorAuthProvider; replaces *     headers
+   * @param authRef the bean name of an X402FacilitatorAuthProvider; replaces headers
    */
   public record Facilitator(
       String url,
@@ -108,7 +108,7 @@ public record X402Properties(
   }
 
   /**
-   * Static headers per facilitator endpoint (TS createAuthHeaders shape).
+   * Static headers per facilitator endpoint.
    *
    * @param verify headers for POST /verify
    * @param settle headers for POST /settle
@@ -130,7 +130,7 @@ public record X402Properties(
       @DefaultValue("60s") Duration maxBackoff) {}
 
   /**
-   * Where you get paid (plan Roles §1a). Mechanism blocks such as cardano are bound by the
+   * Where you get paid. Mechanism blocks such as cardano are bound by the
    * mechanism's own auto-configuration.
    *
    * @param network the CAIP-2 network (required)
@@ -242,11 +242,10 @@ public record X402Properties(
    * @param enabled hook Boot-built clients (default false)
    * @param spendControls spend limits
    * @param prefer preferred networks and schemes, first entry most preferred
-   * @param hosts hosts allowed to trigger a payment (api.example.com, *     *.example.com); empty = none
+   * @param hosts hosts allowed to trigger a payment (api.example.com, *.example.com); empty = none
    * @param instrumentBeans hook self-built WebClient beans and warn about self-built
    *     RestClient / RestTemplate beans (default true)
    * @param maxReplayBody largest request body that can be re-sent with payment (default 1 MB)
-   * @param cardano Cardano client settings (consumed by the Cardano auto-configuration)
    */
   public record Client(
       boolean enabled,
@@ -254,8 +253,7 @@ public record X402Properties(
       @DefaultValue Prefer prefer,
       List<String> hosts,
       @DefaultValue("true") boolean instrumentBeans,
-      @DefaultValue("1MB") DataSize maxReplayBody,
-      ClientCardano cardano) {
+      @DefaultValue("1MB") DataSize maxReplayBody) {
 
     /** Normalizes an absent list. */
     public Client {
@@ -264,7 +262,7 @@ public record X402Properties(
   }
 
   /**
-   * Client spend controls (TS SpendControls).
+   * Client spend controls: caps on what the client may pay.
    *
    * @param enabled false = no spend controls (default true)
    * @param maxAmountPerPayment USD cap for default assets (default "$1")
@@ -306,35 +304,4 @@ public record X402Properties(
       schemes = schemes == null ? List.of() : List.copyOf(schemes);
     }
   }
-
-  /**
-   * Cardano client settings (plan Roles §2), consumed by the Cardano auto-configuration.
-   *
-   * @param mnemonic the default buyer mnemonic
-   * @param networks one client scheme and signer per network
-   */
-  public record ClientCardano(String mnemonic, List<CardanoNetwork> networks) {
-
-    /** Normalizes an absent list. */
-    public ClientCardano {
-      networks = networks == null ? List.of() : List.copyOf(networks);
-    }
-  }
-
-  /**
-   * One Cardano network of the client.
-   *
-   * @param network the CAIP-2 network
-   * @param mnemonic a per-network mnemonic
-   * @param blockfrost the Blockfrost backend
-   */
-  public record CardanoNetwork(String network, String mnemonic, Blockfrost blockfrost) {}
-
-  /**
-   * A Blockfrost backend.
-   *
-   * @param projectId the project id
-   * @param baseUrl the base URL; defaults per network
-   */
-  public record Blockfrost(String projectId, String baseUrl) {}
 }

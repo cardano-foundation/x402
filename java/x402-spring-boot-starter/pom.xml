@@ -16,6 +16,11 @@
   <description>Spring Boot starter for x402: auto-configuration plus the Cardano mechanism and extensions.</description>
 
   <dependencies>
+    <!-- Boot's starter convention: core Boot support (auto-configuration, logging). -->
+    <dependency>
+      <groupId>org.springframework.boot</groupId>
+      <artifactId>spring-boot-starter</artifactId>
+    </dependency>
     <dependency>
       <groupId>org.x402</groupId>
       <artifactId>x402-spring-boot-autoconfigure</artifactId>

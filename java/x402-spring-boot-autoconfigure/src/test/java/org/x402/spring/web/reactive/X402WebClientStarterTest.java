@@ -51,8 +51,8 @@ import reactor.core.publisher.Flux;
 import reactor.netty.http.client.HttpClient;
 
 /**
- * WebClient payments (WP6): Boot's builder, self-built beans, the host allowlist, bounded body
- * replay, signing off the event loop, and no redirect of a paid request (decision 075).
+ * WebClient payments: Boot's builder, self-built beans, the host allowlist, bounded body
+ * replay, signing off the event loop, and no redirect of a paid request.
  */
 @ExtendWith(OutputCaptureExtension.class)
 class X402WebClientStarterTest {

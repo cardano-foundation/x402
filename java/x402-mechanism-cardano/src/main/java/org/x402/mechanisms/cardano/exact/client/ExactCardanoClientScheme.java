@@ -12,7 +12,7 @@ import org.x402.mechanisms.cardano.CardanoPolicies;
 import org.x402.mechanisms.cardano.DefaultAssets;
 
 /**
- * Cardano client for the {@code exact} scheme (TS {@code exact/client/scheme.ts}): validates the
+ * Cardano client for the {@code exact} scheme: validates the
  * requirements, lets the signer build and sign, and returns {@code {transaction, nonce}}. Nothing
  * is broadcast; the facilitator submits during settle. USDM is the network's default asset for
  * spend controls; lovelace is not a default.

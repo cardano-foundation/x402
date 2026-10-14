@@ -35,7 +35,7 @@ import org.x402.spring.HookRecorder;
 import org.x402.spring.TestHttp;
 import org.x402.spring.annotation.X402Payment;
 
-/** Plan Roles §1b startup sync: the four cases, health, and single-flight re-sync. */
+/** Startup sync: the four cases, health, and single-flight re-sync. */
 @ExtendWith(OutputCaptureExtension.class)
 class StartupSyncTest {
 

@@ -4,10 +4,10 @@ import java.util.Map;
 import java.util.Set;
 
 /**
- * Configuration of an HTTP discovery declaration (TS {@code DeclareQueryDiscoveryExtensionConfig}
- * and {@code DeclareBodyDiscoveryExtensionConfig}). Setting {@link #bodyType(String)} makes it a
+ * Configuration of an HTTP discovery declaration. Setting {@link #bodyType(String)} makes it a
  * body declaration (POST, PUT, PATCH); otherwise it is a query declaration (GET, HEAD, DELETE).
- * Unset {@code input} and {@code inputSchema} take the TS defaults.
+ * Unset {@code input} and {@code inputSchema} default to an empty example and an empty-properties
+ * schema.
  */
 public final class HttpDiscoveryConfig {
 
@@ -95,7 +95,7 @@ public final class HttpDiscoveryConfig {
    * @throws IllegalArgumentException for any other value
    */
   public HttpDiscoveryConfig bodyType(String value) {
-    if (!BODY_TYPES.contains(value)) {
+    if (value == null || !BODY_TYPES.contains(value)) {
       throw new IllegalArgumentException("bodyType must be one of " + BODY_TYPES + ": " + value);
     }
     this.bodyType = value;

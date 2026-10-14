@@ -3,7 +3,7 @@ package org.x402.http;
 import java.util.Map;
 
 /**
- * Transport data handed to hooks and settlement (TS {@code HTTPTransportContext}).
+ * Transport data handed to hooks and settlement.
  *
  * @param request the request
  * @param responseBody the buffered handler response, when settling after the handler

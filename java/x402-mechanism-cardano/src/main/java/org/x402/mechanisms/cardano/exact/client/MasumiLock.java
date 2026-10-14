@@ -1,16 +1,17 @@
 package org.x402.mechanisms.cardano.exact.client;
 
+import com.bloxbean.cardano.client.plutus.spec.PlutusData;
 import java.math.BigInteger;
 import java.util.Locale;
 import org.x402.mechanisms.cardano.CardanoConstants;
-import org.x402.mechanisms.cardano.PlutusData;
+import org.x402.mechanisms.cardano.PlutusEncoding;
 import org.x402.mechanisms.cardano.exact.masumi.MasumiConstants;
 import org.x402.mechanisms.cardano.exact.masumi.MasumiDatum;
 import org.x402.mechanisms.cardano.exact.masumi.MasumiExtra;
 import org.x402.mechanisms.cardano.exact.masumi.MasumiTerms;
 
 /**
- * Builds the Masumi {@code vested_pay} lock (TS {@code exact/masumi/lock.ts}): the 19-field datum
+ * Builds the Masumi {@code vested_pay} lock: the 19-field datum
  * and the lovelace the escrow output must carry. The client derives {@code
  * collateral_return_lovelace} so the escrow still clears min-UTxO after {@code SubmitResult}.
  */
@@ -58,7 +59,7 @@ public final class MasumiLock {
     boolean converged = false;
     for (int round = 0; round < COLLATERAL_FIXED_POINT_ROUNDS; round++) {
       BigInteger needed =
-          MasumiConstants.collateralLovelace(requestedLovelace, datum.toCbor().length, nativeTokenCount, coinsPerUtxoByte);
+          MasumiConstants.collateralLovelace(requestedLovelace, PlutusEncoding.encode(datum).length, nativeTokenCount, coinsPerUtxoByte);
       if (needed.compareTo(collateral) <= 0) {
         converged = true;
         break;

@@ -58,7 +58,7 @@ Also add `SERVER_*` / `CLIENT_*` / `FACILITATOR_*` secrets to [`.env-local`](.en
 |-----|--------|
 | TypeScript | Add `clients/typescript/http/<name>/index.ts` or `servers/typescript/http/<name>/index.ts` using the language-root helpers (`../../client.ts` / `../../index.ts` for servers); add the adapter dep to the language `package.json`. Vanilla components need no local `test.config.json`. |
 | Go / Python | Add component dir with `main.go` / `main.py` + module file. `setup.sh` runs language defaults. Vanilla components need no local `test.config.json`. |
-| Java | Add `clients/java/http/<name>/` (or `servers/java/http/<name>/`) with `test.config.json` (`"language": "java"`), `build.sh` (installs the `java/` reactor with `mvn -q -f <repo>/java/pom.xml install -DskipTests`, then packages the component) and `run.sh`. `setup.sh` runs `build.sh`; a component with only a `pom.xml` gets `mvn -q package`. Needs JDK 17+ and Maven on `PATH`. See [Java components](#java-components). |
+| Java | Add `clients/java/http/<name>/` (or `servers/java/http/<name>/`) with `test.config.json` (`"language": "java"`), `build.sh` (installs the `java/` reactor with `mvn -q -f <repo>/java/pom.xml install -DskipTests` unless `X402_JAVA_REACTOR_READY` is set, then packages the component) and `run.sh`. `setup.sh` installs the reactor once, sets that variable and runs each `build.sh`. Needs JDK 17+ and Maven on `PATH`. See [Java components](#java-components). |
 
 ## Custom flows (escape hatches)
 
@@ -422,8 +422,8 @@ The Java v2 SDK (`java/`) currently implements Cardano only, so `java` is listed
   - Env: `PORT` (default 4022). Cardano is registered only when both `CARDANO_RPC_URL` and `BLOCKFROST_PROJECT_ID` are set. `FACILITATOR_CARDANO_MNEMONIC` is optional (provider-only without it). `CARDANO_NETWORK` picks the network, and `CARDANO_L1_CONFIRMATIONS=-1` enables accept-mempool.
   - It has no `/discovery/resources`. `test.config.json` declares `"extensions": []`, so bazaar validation skips it.
   - Because `java` is in the Cardano routes' `sdks`, unfiltered Cardano runs pair it with every server and client (full matrix).
-- **Build** once with `./setup.sh`, or with each component's `build.sh`, which installs the `java/` reactor first. `run.sh` only starts the packaged jar (`target/app.jar` for the Spring apps).
-- **Seller mnemonic.** The harness requires `SERVER_CARDANO_SELLER_MNEMONIC` for **any** Cardano run (catalog `required: true`), and the TS servers register the Cardano scheme only when it is set. Without it, no Cardano scenario runs, including `default` and `script`. CI writes no such secret line, so CI never selects Cardano.
+- **Build** once with `./setup.sh` (it installs the `java/` reactor once), or with a component's `build.sh` alone, which then installs the reactor itself. `run.sh` only starts the packaged jar (`target/app.jar` for the Spring apps).
+- **Seller mnemonic.** The harness requires `SERVER_CARDANO_SELLER_MNEMONIC` for **any** Cardano run (catalog `required: true`), and the TS servers register the Cardano scheme only when it is set. Without it, no Cardano scenario runs, including `default` and `script`. CI writes it from the `SERVER_CARDANO_SELLER_MNEMONIC` repository secret; until that secret exists, CI selects no Cardano scenario.
 - **One wallet per run.** Live runs that share `CLIENT_CARDANO_MNEMONIC` must not run concurrently. A wallet with one UTxO lets only one payer at a time spend it, and a concurrent payment makes the other settle fail (`settlement_failed`, then `nonce_not_on_chain`).
 
 Examples:

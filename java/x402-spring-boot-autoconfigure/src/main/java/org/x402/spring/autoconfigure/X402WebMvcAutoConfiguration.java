@@ -16,6 +16,7 @@ import org.springframework.boot.autoconfigure.web.servlet.WebMvcAutoConfiguratio
 import org.springframework.boot.web.servlet.FilterRegistrationBean;
 import org.springframework.context.ApplicationContext;
 import org.springframework.context.annotation.Bean;
+import org.springframework.context.annotation.Lazy;
 import org.springframework.core.Ordered;
 import org.springframework.core.annotation.AnnotationAwareOrderComparator;
 import org.springframework.web.servlet.DispatcherServlet;
@@ -36,7 +37,7 @@ import org.x402.spring.web.servlet.X402DispatchGuard;
 import org.x402.spring.web.servlet.X402ServletFilter;
 
 /**
- * WebMvc wiring (WP5): the handler → offer registry and the x402 servlet filter, registered for
+ * WebMvc wiring: the handler → offer registry and the x402 servlet filter, registered for
  * {@code REQUEST} and {@code ASYNC} dispatches right after Spring Security ({@code
  * x402.filter-order} overrides).
  */
@@ -49,13 +50,15 @@ public class X402WebMvcAutoConfiguration {
   /** Default filter order: right after Spring Security, so 401 comes before 402. */
   public static final int DEFAULT_FILTER_ORDER = SecurityProperties.DEFAULT_FILTER_ORDER + 1;
 
+  // Not lazy: it checks every @X402Payment at startup, also under spring.main.lazy-initialization.
   @Bean
+  @Lazy(false)
   @ConditionalOnMissingBean
   OfferRegistry x402OfferRegistry(X402Offers offers, X402ResourceServer server,
       ObjectProvider<RequestMappingInfoHandlerMapping> mappings) {
     return new OfferRegistry(new ServletHandlerMethodSource(
         () -> mappings.orderedStream().toList()), offers,
-        X402AutoConfiguration.settlesAfterHandler(offers, server));
+        OfferRegistry.settlesAfterHandler(offers, server));
   }
 
   @Bean
@@ -70,6 +73,7 @@ public class X402WebMvcAutoConfiguration {
   }
 
   @Bean
+  @ConditionalOnMissingBean(name = "x402ServletFilter")
   FilterRegistrationBean<X402ServletFilter> x402ServletFilter(
       ObjectProvider<X402HttpResourceServer> server, ObjectProvider<OfferRegistry> registry,
       ObjectProvider<OfferRouteResolver> routes,

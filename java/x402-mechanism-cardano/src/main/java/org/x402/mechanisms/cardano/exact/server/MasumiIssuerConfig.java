@@ -10,11 +10,11 @@ import org.x402.mechanisms.cardano.exact.masumi.MasumiCommitmentInput;
 import org.x402.mechanisms.cardano.exact.masumi.MasumiDeployment;
 
 /**
- * Lets the server scheme issue Masumi quotes itself (TS {@code MasumiIssuerConfig}). A route then
+ * Lets the server scheme issue Masumi quotes itself. A route then
  * declares only {@code extra: {assetTransferMethod: "masumi"}} with the escrow address as {@code
  * payTo}; every 402 gets a fresh seller-signed quote.
  *
- * @param seller the selling wallet per network (TS {@code seller}, value or resolver)
+ * @param seller the selling wallet per network (a fixed value or a resolver)
  * @param sellerReturnAddress optional key-credential payout address, or {@code null}
  * @param agentIdentifierPresent whether to sign an {@code agentIdentifier}
  * @param agentIdentifier the registry asset id ({@code null} is a distinct signed value)

@@ -24,7 +24,7 @@ Map<String, Object> weather() {
 ```yaml
 x402:
   facilitators:
-    # examples/java/facilitator, started locally. Any x402 facilitator that lists Cardano works.
+    # examples/java/facilitator/spring-boot, started locally. Any x402 facilitator that lists Cardano works.
     - url: "${FACILITATOR_URL:http://127.0.0.1:8402/x402}"
       headers:
         # The example facilitator protects /verify and /settle with HTTP Basic (Spring Security).
@@ -73,12 +73,12 @@ You need Java 17+, Maven, a [Blockfrost](https://blockfrost.io) preprod project 
 mvn -f java/pom.xml install -DskipTests
 ```
 
-**2. Start the facilitator** on port 8402 (see [`examples/java/facilitator`](../../facilitator/README.md)):
+**2. Start the facilitator** on port 8402 (see [`examples/java/facilitator/spring-boot`](../../facilitator/spring-boot/README.md)):
 
 ```bash
 export BLOCKFROST_PREPROD_PROJECT_ID=preprod...
 export FACILITATOR_PASSWORD=change-me
-mvn -f examples/java/facilitator/pom.xml spring-boot:run
+mvn -f examples/java/facilitator/spring-boot/pom.xml spring-boot:run
 ```
 
 **3. Start this server** on port 8080, in a second terminal:
@@ -147,7 +147,7 @@ x402:
 Run a second facilitator on port 8403 and start the server with the profile:
 
 ```bash
-mvn -f examples/java/facilitator/pom.xml spring-boot:run -Dspring-boot.run.arguments=--server.port=8403
+mvn -f examples/java/facilitator/spring-boot/pom.xml spring-boot:run -Dspring-boot.run.arguments=--server.port=8403
 mvn -f examples/java/servers/spring-boot/pom.xml spring-boot:run -Dspring-boot.run.profiles=multi-facilitator
 curl -s http://127.0.0.1:8080/actuator/health/x402
 # {"status":"UP","details":{"facilitators":{"primary":{"status":"UP"},"backup":{"status":"UP"}},...}}

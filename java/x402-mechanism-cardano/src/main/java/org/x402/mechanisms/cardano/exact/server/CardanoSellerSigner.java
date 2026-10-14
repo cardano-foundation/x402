@@ -4,7 +4,7 @@ import org.x402.mechanisms.cardano.exact.masumi.MasumiSellerAuthorization;
 
 /**
  * The selling wallet for Masumi quotes: its key-credential address and a CIP-8 signer over
- * {@code termsDigest} (TS {@code MasumiSellerSigner}). {@link #fromMnemonic} builds one from a
+ * {@code termsDigest}. {@link #fromMnemonic} builds one from a
  * mnemonic; a wallet or HSM integration supplies its own.
  */
 public interface CardanoSellerSigner {
@@ -26,7 +26,7 @@ public interface CardanoSellerSigner {
   MasumiSellerAuthorization signTerms(String sellerAddress, String termsDigestHex);
 
   /**
-   * A mnemonic-backed seller (account 0, base address), like TS {@code toMasumiSellerSigner}.
+   * A mnemonic-backed seller (account 0, base address).
    *
    * @param mnemonic the BIP-39 phrase
    * @param network the x402 Cardano network

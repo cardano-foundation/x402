@@ -31,7 +31,7 @@ import org.x402.mechanisms.cardano.testing.TxBuilder;
 
 /**
  * Server scheme branches: stored-quote matching, issuer options, transport payloads and the
- * advertisement check. Added after the implementation for branch coverage; not red-first.
+ * advertisement check.
  */
 class ServerBranchesTest {
 

@@ -11,6 +11,7 @@ import org.springframework.boot.autoconfigure.condition.ConditionalOnWebApplicat
 import org.springframework.boot.autoconfigure.security.SecurityProperties;
 import org.springframework.boot.autoconfigure.web.reactive.WebFluxAutoConfiguration;
 import org.springframework.context.annotation.Bean;
+import org.springframework.context.annotation.Lazy;
 import org.springframework.web.reactive.DispatcherHandler;
 import org.springframework.web.reactive.HandlerMapping;
 import org.springframework.web.reactive.result.method.RequestMappingInfoHandlerMapping;
@@ -27,7 +28,7 @@ import org.x402.spring.web.reactive.X402DispatchGuardHandlerAdapter;
 import org.x402.spring.web.reactive.X402WebFilter;
 
 /**
- * WebFlux wiring (WP6): the handler → offer registry over the reactive mappings and the x402 web
+ * WebFlux wiring: the handler → offer registry over the reactive mappings and the x402 web
  * filter, ordered right after Spring Security's {@code WebFilterChainProxy} ({@code
  * x402.filter-order} overrides).
  */
@@ -40,13 +41,15 @@ public class X402WebFluxAutoConfiguration {
   /** Default order: right after Spring Security ({@code -100}). */
   public static final int DEFAULT_FILTER_ORDER = SecurityProperties.DEFAULT_FILTER_ORDER + 1;
 
+  // Not lazy: it checks every @X402Payment at startup, also under spring.main.lazy-initialization.
   @Bean
+  @Lazy(false)
   @ConditionalOnMissingBean
   OfferRegistry x402OfferRegistry(X402Offers offers, X402ResourceServer server,
       ObjectProvider<RequestMappingInfoHandlerMapping> mappings) {
     return new OfferRegistry(new ReactiveHandlerMethodSource(
         () -> mappings.orderedStream().toList()), offers,
-        X402AutoConfiguration.settlesAfterHandler(offers, server));
+        OfferRegistry.settlesAfterHandler(offers, server));
   }
 
   @Bean

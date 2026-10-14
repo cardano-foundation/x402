@@ -33,7 +33,7 @@ import org.x402.spring.client.servlet.X402ClientHttpRequestFactoryDecorator;
 
 /**
  * A {@code SimpleClientHttpRequestFactory} reached through a wrapper cannot have redirects
- * switched off on its paid connection, so it is not trusted (decision 143).
+ * switched off on its paid connection, so it is not trusted.
  */
 class WrappedSimpleFactoryTest {
 

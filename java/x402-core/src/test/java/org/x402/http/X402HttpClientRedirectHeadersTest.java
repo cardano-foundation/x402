@@ -24,7 +24,7 @@ import org.x402.core.FakeClientScheme;
 import org.x402.core.client.X402Client;
 
 /**
- * Security regression (automated review, 2026-10-12): when {@code X402HttpClient} follows a
+ * Security regression: when {@code X402HttpClient} follows a
  * redirect itself, credential headers must not leak to another origin.
  */
 class X402HttpClientRedirectHeadersTest {

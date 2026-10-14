@@ -9,13 +9,15 @@ import java.util.Objects;
 import java.util.Optional;
 
 /**
- * Bounded process-local {@link SettlementClaimStore}, the facilitator default, mirroring TS
- * {@code InMemoryCardanoSettlementStore} exactly (decision 006): {@code markSubmitted} clears the
- * in-flight flag, and once full the oldest record that is no longer in flight is evicted with its
- * terms binding. A claim before broadcast is never evicted; when every record is in flight a
- * claim reports {@link SettlementClaimResult#CAPACITY_EXCEEDED}. Settled records (decision 013)
- * are evictable like any other record no longer in flight; after eviction the spent nonce (rule
- * 5) refuses a replay. Single instance only.
+ * Bounded process-local {@link SettlementClaimStore}, the facilitator default. Single instance
+ * only.
+ *
+ * <p>When full, a new claim evicts, oldest first: a record that is rejected or past its retention
+ * ({@link SettlementClaim#retainUntilMs()}, the TTL plus a grace); otherwise a record whose
+ * submission is unconfirmed and that never settled. In-flight claims, and submitted or settled
+ * records still within their retention, are never evicted; if nothing can go, the claim reports
+ * {@link SettlementClaimResult#CAPACITY_EXCEEDED}. A submitted transaction is kept while it could
+ * still land, so it cannot be settled twice from the mempool.
  */
 public final class InMemorySettlementClaimStore implements SettlementClaimStore {
 
@@ -30,6 +32,7 @@ public final class InMemorySettlementClaimStore implements SettlementClaimStore 
     boolean inFlight = true;
     boolean rejected;
     boolean settled;
+    boolean unconfirmed;
 
     Record(SettlementClaim claim) {
       this.txHash = claim.txHash();
@@ -38,15 +41,17 @@ public final class InMemorySettlementClaimStore implements SettlementClaimStore 
       this.retainUntilMs = claim.retainUntilMs();
     }
 
-    /**
-     * Decision 126 (divergence from TS): a broadcast record is kept until its transaction can no
-     * longer land (TTL plus grace); without a known TTL, forever. Rejected records may go.
-     */
-    boolean evictable(long now) {
+    /** Rejected, or past the time its transaction could still land (never without a TTL). */
+    boolean expired(long now) {
       if (inFlight) {
         return false;
       }
       return rejected || (retainUntilMs != null && now >= retainUntilMs);
+    }
+
+    /** An unknown broadcast outcome that never produced a success. */
+    boolean droppable() {
+      return unconfirmed && !inFlight && !settled && !rejected;
     }
   }
 
@@ -70,7 +75,7 @@ public final class InMemorySettlementClaimStore implements SettlementClaimStore 
   }
 
   /**
-   * A store with a capacity and the clock its retention rule reads (decision 126).
+   * A store with a capacity and the clock its retention rule reads.
    *
    * @param maxEntries the capacity
    * @param clock the clock
@@ -104,7 +109,7 @@ public final class InMemorySettlementClaimStore implements SettlementClaimStore 
     }
     int required = 1 + (claim.termsDigest() != null && existingTerms == null ? 1 : 0);
     while (submissions.size() + terms.size() + required > maxEntries) {
-      if (!evictOldestSettled()) {
+      if (!evictOne()) {
         return SettlementClaimResult.CAPACITY_EXCEEDED;
       }
     }
@@ -121,6 +126,25 @@ public final class InMemorySettlementClaimStore implements SettlementClaimStore 
     if (record != null && record.ownerToken.equals(ownerToken) && !record.settled) {
       record.inFlight = false;
       record.rejected = false;
+      record.unconfirmed = false;
+    }
+  }
+
+  @Override
+  public synchronized void markSubmissionUnconfirmed(String txHash, String ownerToken) {
+    Record record = submissions.get(txHash);
+    if (record != null && record.ownerToken.equals(ownerToken) && !record.settled) {
+      record.inFlight = false;
+      record.rejected = false;
+      record.unconfirmed = true;
+    }
+  }
+
+  @Override
+  public synchronized void markSubmissionObserved(String txHash) {
+    Record record = submissions.get(txHash);
+    if (record != null && !record.inFlight && !record.rejected) {
+      record.unconfirmed = false;
     }
   }
 
@@ -178,17 +202,21 @@ public final class InMemorySettlementClaimStore implements SettlementClaimStore 
     }
   }
 
-  private boolean evictOldestSettled() {
+  /** Evicts the oldest expired record, else the oldest droppable one. */
+  private boolean evictOne() {
     long now = clock.millis();
+    return evictFirst(record -> record.expired(now)) || evictFirst(Record::droppable);
+  }
+
+  private boolean evictFirst(java.util.function.Predicate<Record> candidate) {
     Iterator<Record> it = submissions.values().iterator();
     while (it.hasNext()) {
       Record record = it.next();
-      if (!record.evictable(now)) {
-        continue;
+      if (candidate.test(record)) {
+        it.remove();
+        dropTerms(record);
+        return true;
       }
-      it.remove();
-      dropTerms(record);
-      return true;
     }
     return false;
   }

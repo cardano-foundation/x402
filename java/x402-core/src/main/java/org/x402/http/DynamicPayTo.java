@@ -1,6 +1,6 @@
 package org.x402.http;
 
-/** Resolves a receiving address per request (TS {@code DynamicPayTo}). */
+/** Resolves a receiving address per request. */
 @FunctionalInterface
 public interface DynamicPayTo {
 

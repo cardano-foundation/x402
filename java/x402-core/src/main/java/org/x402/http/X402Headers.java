@@ -12,7 +12,7 @@ public final class X402Headers {
   /** Server → client: base64 {@code SettleResponse}. */
   public static final String PAYMENT_RESPONSE = "PAYMENT-RESPONSE";
 
-  /** v1 request header, recognised only to answer with a v2 402. */
+  /** The v1 payment header. Clients treat a request that already carries it as paid. */
   public static final String X_PAYMENT = "X-PAYMENT";
 
   /** Response header a handler may set to adjust the settled amount. */

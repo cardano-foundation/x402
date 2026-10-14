@@ -24,7 +24,7 @@ import org.x402.core.types.SettleResponse;
 import org.x402.core.types.SupportedResponse;
 import org.x402.core.types.VerifyResponse;
 
-/** TS {@code x402Facilitator} hook result semantics, extension lookup and the pending store. */
+/** Facilitator hook result semantics, extension lookup and the pending store. */
 class FacilitatorHooksTest {
 
   private final FakeFacilitatorScheme scheme = new FakeFacilitatorScheme();

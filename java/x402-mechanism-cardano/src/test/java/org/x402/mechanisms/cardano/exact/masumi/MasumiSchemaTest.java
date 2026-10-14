@@ -13,8 +13,7 @@ import org.x402.mechanisms.cardano.testing.MasumiFixtures;
 import org.x402.mechanisms.cardano.testing.TxBuilder;
 
 /**
- * Every rejection detail of the closed Masumi schema (TS {@code exact/masumi/schema.ts}). Added
- * after the implementation for branch coverage; not red-first.
+ * Every rejection detail of the closed Masumi schema.
  */
 class MasumiSchemaTest {
 

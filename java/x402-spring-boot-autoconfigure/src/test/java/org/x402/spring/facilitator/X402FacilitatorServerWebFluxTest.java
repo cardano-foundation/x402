@@ -19,7 +19,7 @@ import org.x402.core.json.X402Json;
 import org.x402.spring.TestHttp;
 import reactor.blockhound.BlockHound;
 
-/** WP12: the facilitator server on WebFlux (Reactor Netty, BlockHound) answers the wire table. */
+/** The facilitator server on WebFlux (Reactor Netty, BlockHound) answers the wire table. */
 @SpringBootTest(classes = X402FacilitatorServerWebFluxTest.App.class,
     webEnvironment = SpringBootTest.WebEnvironment.RANDOM_PORT,
     properties = {

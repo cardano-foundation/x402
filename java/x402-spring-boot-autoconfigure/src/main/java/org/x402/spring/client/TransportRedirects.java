@@ -9,7 +9,8 @@ import org.springframework.util.ClassUtils;
 import org.springframework.util.ReflectionUtils;
 
 /**
- * Whether a transport can follow a redirect with a paid request (decision 143). Recognised
+ * Whether a transport can follow a redirect with a paid request, so a payment is never signed
+ * over one that might leak {@code PAYMENT-SIGNATURE}. Recognised
  * transports are inspected; anything else is {@link Safety#UNKNOWN}, and the payment clients do
  * not sign over it.
  */

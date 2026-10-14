@@ -8,7 +8,7 @@ import org.x402.core.types.SupportedResponse;
 import org.x402.core.types.VerifyResponse;
 
 /**
- * How a resource server reaches a facilitator (TS {@code FacilitatorClient}): over HTTP ({@code
+ * How a resource server reaches a facilitator: over HTTP ({@code
  * HttpFacilitatorClient}) or in process ({@code LocalFacilitatorClient}).
  */
 public interface FacilitatorClient {
@@ -41,7 +41,7 @@ public interface FacilitatorClient {
   SupportedResponse getSupported();
 
   /**
-   * An identifier for logs, health and pins (Go/Python {@code identifier}); the URL by default.
+   * An identifier for logs, health and pins; the URL by default.
    *
    * @return the identifier
    */

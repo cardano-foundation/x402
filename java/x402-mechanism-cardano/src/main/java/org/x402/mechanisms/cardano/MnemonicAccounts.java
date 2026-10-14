@@ -6,7 +6,7 @@ import com.bloxbean.cardano.client.common.model.Networks;
 import java.util.Locale;
 
 /**
- * BIP-39 mnemonic → CIP-1852 account, as the TS reference signers derive it (account {@code
+ * BIP-39 mnemonic → CIP-1852 account (account {@code
  * m/1852'/1815'/accountIndex'}, payment key {@code /0/0}, base address with the {@code /2/0}
  * stake key).
  */
@@ -15,7 +15,7 @@ public final class MnemonicAccounts {
   private MnemonicAccounts() {}
 
   /**
-   * Normalizes a mnemonic: trims, collapses whitespace, lowercases (TS {@code normalizeMnemonic}).
+   * Normalizes a mnemonic: trims, collapses whitespace, lowercases.
    *
    * @param mnemonic the raw phrase
    * @return the normalized phrase

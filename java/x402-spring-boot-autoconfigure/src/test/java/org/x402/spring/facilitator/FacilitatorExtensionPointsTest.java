@@ -35,7 +35,7 @@ import org.x402.mechanisms.cardano.exact.masumi.MasumiDeploymentValidator;
 import org.x402.mechanisms.cardano.exact.masumi.MasumiRegistryValidator;
 import org.x402.spring.cardano.X402CardanoNetworkBeans;
 
-/** WP12 / plan §3a: every facilitator override point takes effect. */
+/** Every facilitator override point takes effect. */
 @ExtendWith(OutputCaptureExtension.class)
 class FacilitatorExtensionPointsTest {
 

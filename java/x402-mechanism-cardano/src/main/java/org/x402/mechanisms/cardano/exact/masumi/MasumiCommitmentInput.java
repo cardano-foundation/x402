@@ -1,7 +1,7 @@
 package org.x402.mechanisms.cardano.exact.masumi;
 
 /**
- * One request part the issuer commits to (TS {@code MasumiCommitmentInput}).
+ * One request part the issuer commits to.
  *
  * @param name unique non-empty part name
  * @param canonicalization {@code jcs} or {@code raw}

@@ -29,7 +29,7 @@ The `coverage` profile enforces instruction coverage ≥ 0.85 and branch coverag
 
 - Core is synchronous and framework-free; `ArchitectureTest` forbids Spring and mechanism imports there. Time comes from an injected `java.time.Clock`.
 - Wire types are immutable records whose JSON is byte-identical to TS `JSON.stringify`. When TS behaviour changes, re-export the fixtures (`cd tools/ts-vectors && npm run export`, after `pnpm install` in `typescript/`) and commit them with the Java change.
-- Behaviour follows the TypeScript reference. Deliberate divergences are recorded in `docs/decisions/` and cited in code comments.
+- Behaviour follows the TypeScript reference. A deliberate divergence gets a row in the README's [Differences from the TypeScript SDK](README.md#differences-from-the-typescript-sdk) and a one-line reason in the code that implements it.
 - Write the test first and see it fail; do not weaken an existing test to make a change pass.
 - Public types and methods carry Javadoc (checkstyle).
 

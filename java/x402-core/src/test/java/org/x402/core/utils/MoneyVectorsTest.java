@@ -14,7 +14,10 @@ import org.junit.jupiter.params.provider.Arguments;
 import org.junit.jupiter.params.provider.MethodSource;
 import org.x402.core.json.X402Json;
 
-/** TS {@code parseMoney} / {@code convertToTokenAmount} parity, including the error messages. */
+/**
+ * Money parsing and token-amount conversion, including the error messages, against vectors
+ * exported from the TypeScript SDK.
+ */
 class MoneyVectorsTest {
 
   static JsonNode load() throws IOException {

@@ -11,18 +11,18 @@ import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
 import org.junit.jupiter.api.Test;
 
-/** Port of TS {@code test/unit/settlementStore.test.ts} plus a concurrency check (C1–C4). */
+/** Claim, retention, eviction and capacity rules of the in-memory store, plus concurrency. */
 class InMemorySettlementClaimStoreTest {
 
   private static SettlementClaim claim(String tx, String owner) {
-    return new SettlementClaim(tx, owner, null);
+    return new SettlementClaim(tx, owner, null, null);
   }
 
   private static SettlementClaim claim(String tx, String owner, String terms) {
-    return new SettlementClaim(tx, owner, terms);
+    return new SettlementClaim(tx, owner, terms, null);
   }
 
-  /** Decision 126: a claim whose retention (TTL + grace) has already passed. */
+  /** A claim whose retention (TTL + grace) has already passed. */
   private static SettlementClaim expired(String tx, String owner, String terms) {
     return new SettlementClaim(tx, owner, terms, 0L);
   }
@@ -135,13 +135,7 @@ class InMemorySettlementClaimStoreTest {
   }
 
   @Test
-  void resultsCarryTheirTypeScriptNames() {
-    assertThat(SettlementClaimResult.FRESH.wire()).isEqualTo("fresh");
-    assertThat(SettlementClaimResult.IN_FLIGHT.wire()).isEqualTo("in-flight");
-    assertThat(SettlementClaimResult.SUBMITTED.wire()).isEqualTo("submitted");
-    assertThat(SettlementClaimResult.REJECTED.wire()).isEqualTo("rejected");
-    assertThat(SettlementClaimResult.TERMS_CONFLICT.wire()).isEqualTo("terms-conflict");
-    assertThat(SettlementClaimResult.CAPACITY_EXCEEDED.wire()).isEqualTo("capacity-exceeded");
+  void theDefaultCapacityMatchesTypeScript() {
     assertThat(InMemorySettlementClaimStore.DEFAULT_MAX_ENTRIES).isEqualTo(4096);
   }
 
@@ -172,5 +166,94 @@ class InMemorySettlementClaimStoreTest {
     }
     pool.shutdown();
     assertThat(fresh).isEqualTo(1);
+  }
+
+  private static SettlementClaim retained(String tx, String owner) {
+    return new SettlementClaim(tx, owner, null, Long.MAX_VALUE);
+  }
+
+  @Test
+  void unconfirmedRecordsAreEvictedOnlyAfterExpiredOnes() {
+    var store = new InMemorySettlementClaimStore(2);
+    store.claimSettlement(retained("unknown", "a"));
+    store.markSubmissionUnconfirmed("unknown", "a");
+    store.claimSettlement(expired("old", "b", null));
+    store.markSubmitted("old", "b");
+
+    assertThat(store.claimSettlement(retained("next", "c"))).isEqualTo(SettlementClaimResult.FRESH);
+    assertThat(store.claimState("old")).isEmpty();
+    assertThat(store.claimState("unknown")).contains(SettlementClaimState.SUBMITTED);
+
+    assertThat(store.claimSettlement(retained("last", "d"))).isEqualTo(SettlementClaimResult.FRESH);
+    assertThat(store.claimState("unknown")).isEmpty();
+  }
+
+  @Test
+  void settledAndSubmittedRecordsAreNeverEvictedForPressure() {
+    var store = new InMemorySettlementClaimStore(2);
+    store.claimSettlement(retained("unknown", "a"));
+    store.markSubmissionUnconfirmed("unknown", "a");
+    assertThat(store.markSettled("unknown", "x")).isTrue();
+    store.claimSettlement(retained("known", "b"));
+    store.markSubmitted("known", "b");
+
+    assertThat(store.claimSettlement(retained("next", "c"))).isEqualTo(SettlementClaimResult.CAPACITY_EXCEEDED);
+  }
+
+  @Test
+  void anObservedUnconfirmedRecordIsKept() {
+    var store = new InMemorySettlementClaimStore(1);
+    store.claimSettlement(retained("unknown", "a"));
+    store.markSubmissionUnconfirmed("unknown", "a");
+    store.markSubmissionObserved("unknown");
+
+    assertThat(store.claimSettlement(retained("next", "c"))).isEqualTo(SettlementClaimResult.CAPACITY_EXCEEDED);
+  }
+
+  @Test
+  void aResumeClaimDoesNotPinAnUnconfirmedRecord() {
+    var store = new InMemorySettlementClaimStore(1);
+    store.claimSettlement(retained("unknown", "a"));
+    store.markSubmissionUnconfirmed("unknown", "a");
+    assertThat(store.claimSettlement(retained("unknown", "b"))).isEqualTo(SettlementClaimResult.SUBMITTED);
+
+    assertThat(store.claimSettlement(retained("next", "c"))).isEqualTo(SettlementClaimResult.FRESH);
+  }
+
+  @Test
+  void theDefaultUnconfirmedMarkRetainsLikeSubmitted() {
+    java.util.List<String> calls = new java.util.ArrayList<>();
+    SettlementClaimStore store = new SettlementClaimStore() {
+      @Override
+      public SettlementClaimResult claimSettlement(SettlementClaim claim) {
+        return SettlementClaimResult.FRESH;
+      }
+
+      @Override
+      public void markSubmitted(String txHash, String ownerToken) {
+        calls.add("markSubmitted " + txHash + " " + ownerToken);
+      }
+
+      @Override
+      public void markRejected(String txHash, String ownerToken) {}
+
+      @Override
+      public boolean markSettled(String txHash, String ownerToken) {
+        return false;
+      }
+
+      @Override
+      public java.util.Optional<SettlementClaimState> claimState(String txHash) {
+        return java.util.Optional.empty();
+      }
+
+      @Override
+      public void releaseClaim(String txHash, String ownerToken) {}
+    };
+
+    store.markSubmissionUnconfirmed("tx", "owner");
+    store.markSubmissionObserved("tx");
+
+    assertThat(calls).containsExactly("markSubmitted tx owner");
   }
 }

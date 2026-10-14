@@ -33,13 +33,13 @@ import reactor.core.publisher.Mono;
 import reactor.core.scheduler.Schedulers;
 
 /**
- * Pays x402 402s for a {@code WebClient} (plan Roles §2, WP6). The request body is recorded while
+ * Pays x402 402s for a {@code WebClient}. The request body is recorded while
  * the first request is sent, up to {@code maxReplayBody}; a body that was larger or could not be
  * recorded gets the 402 back unpaid. Only hosts allowed by the {@link HostPolicy} trigger a payment
  * (request URI and {@code PAYMENT-REQUIRED.resource.url}). Signing runs on {@code
  * boundedElastic}; the first response is released before the retry. The paid request is marked in
  * the Reactor context so {@link X402ClientHttpConnector} sends it without following redirects, and
- * it is refused when a Reactor Netty connector would follow a redirect (decision 075).
+ * it is refused when a Reactor Netty connector would follow a redirect.
  */
 public final class X402ExchangeFilterFunction implements ExchangeFilterFunction {
 
@@ -83,7 +83,7 @@ public final class X402ExchangeFilterFunction implements ExchangeFilterFunction 
   }
 
   /**
-   * The same filter for a WebClient whose connector was inspected (decision 143).
+   * The same filter for a WebClient whose connector was inspected.
    *
    * @param safety what is known about the connector's redirect handling
    * @return a filter that trusts that knowledge
@@ -92,17 +92,12 @@ public final class X402ExchangeFilterFunction implements ExchangeFilterFunction 
     return new X402ExchangeFilterFunction(client, hostPolicy, maxReplayBody, safety);
   }
 
-  /**
-   * What this filter was told about its connector.
-   *
-   * @return the declared safety
-   */
-  public TransportRedirects.Safety declaredTransport() {
-    return declared;
-  }
-
   @Override
   public Mono<ClientResponse> filter(ClientRequest request, ExchangeFunction next) {
+    if (!hostPolicy.allows(request.url())) {
+      // Never paid, so never re-sent: no body recording, no probe.
+      return next.exchange(request);
+    }
     Recorder recorder = new Recorder(maxReplayBody);
     Probe probe = new Probe();
     Consumer<ClientHttpRequest> existing = request.httpRequest();

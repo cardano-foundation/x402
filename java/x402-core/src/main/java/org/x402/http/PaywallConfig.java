@@ -1,7 +1,7 @@
 package org.x402.http;
 
 /**
- * Paywall options (TS {@code PaywallConfig}).
+ * Paywall options.
  *
  * @param appName the application name
  * @param appLogo the logo URL

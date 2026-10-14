@@ -13,7 +13,7 @@ import java.util.Set;
 import org.x402.mechanisms.cardano.CardanoTransactionDecoder;
 import org.x402.mechanisms.cardano.DecodedCardanoTransaction;
 import org.x402.mechanisms.cardano.chain.CardanoChainBackend;
-import org.x402.mechanisms.cardano.chain.ProtocolParameters;
+import com.bloxbean.cardano.client.api.model.ProtocolParams;
 import org.x402.mechanisms.cardano.chain.SettlementEvidence;
 import org.x402.mechanisms.cardano.chain.SubmissionResult;
 import org.x402.mechanisms.cardano.chain.UtxoSnapshot;
@@ -47,7 +47,7 @@ public final class FakeChain implements CardanoChainBackend {
   private final Set<String> mempool = new HashSet<>();
   private final List<String> submissions = Collections.synchronizedList(new ArrayList<>());
   private long currentSlot;
-  private ProtocolParameters protocolParameters;
+  private ProtocolParams protocolParameters;
   private boolean evidenceCapable = true;
   private SubmitMode mode = SubmitMode.ACCEPT;
 
@@ -159,7 +159,7 @@ public final class FakeChain implements CardanoChainBackend {
   }
 
   @Override
-  public ProtocolParameters getProtocolParameters(String network) {
+  public ProtocolParams getProtocolParameters(String network) {
     return protocolParameters;
   }
 

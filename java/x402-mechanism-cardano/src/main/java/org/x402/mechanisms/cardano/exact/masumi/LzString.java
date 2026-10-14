@@ -9,7 +9,7 @@ import java.util.Set;
 
 /**
  * LZString 1.5.0 {@code compressToUint8Array}, and a decompressor that enforces its output limit
- * while expanding (TS {@code exact/masumi/boundedLz.ts}).
+ * while expanding.
  */
 public final class LzString {
 

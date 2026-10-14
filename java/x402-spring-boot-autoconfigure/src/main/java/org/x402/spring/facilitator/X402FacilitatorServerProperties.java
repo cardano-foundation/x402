@@ -4,12 +4,14 @@ import java.time.Duration;
 import java.util.List;
 import org.springframework.boot.context.properties.ConfigurationProperties;
 import org.springframework.boot.context.properties.bind.DefaultValue;
+import org.x402.spring.cardano.X402CardanoProperties;
 
 /**
- * x402.facilitator-server.* (plan Roles §3). Independent of x402.enabled.
+ * x402.facilitator-server.*. Independent of x402.enabled.
  *
  * @param enabled run the facilitator (default false)
- * @param exposeHttp serve /verify, /settle, /supported (default *     true); false keeps it in-process (local client, own controllers)
+ * @param exposeHttp serve /verify, /settle, /supported (default true); false keeps it in-process
+ *     (local client, own controllers)
  * @param basePath the endpoint prefix (default /x402); "" or / = root
  * @param cardano the Cardano facilitator
  */
@@ -46,15 +48,9 @@ public record X402FacilitatorServerProperties(
    *
    * @param network the CAIP-2 network
    * @param blockfrost the Blockfrost backend
-   * @param mnemonic optional facilitator mnemonic (only shown as an address in *     /supported); provider-only without it
+   * @param mnemonic optional facilitator mnemonic (only shown as an address in /supported);
+   *     provider-only without it
    */
-  public record Network(String network, Blockfrost blockfrost, String mnemonic) {}
-
-  /**
-   * A Blockfrost backend.
-   *
-   * @param projectId the project id
-   * @param baseUrl the base URL; defaults per network
-   */
-  public record Blockfrost(String projectId, String baseUrl) {}
+  public record Network(String network, X402CardanoProperties.Blockfrost blockfrost,
+      String mnemonic) {}
 }

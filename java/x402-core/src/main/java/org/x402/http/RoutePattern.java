@@ -11,11 +11,10 @@ import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
 /**
- * An x402 route pattern, ported from TS {@code parseRoutePattern} ({@code
- * x402HTTPResourceServer.ts:1373-1402}): an optional verb ({@code "GET /x"}; none or {@code *}
+ * An x402 route pattern, an optional verb ({@code "GET /x"}; none or {@code *}
  * matches any), {@code *} wildcards, {@code :param} and {@code [param]} segments, and a trailing
  * {@code /*} that also matches the bare prefix. Matching is case-insensitive and {@code .} matches
- * line breaks (TS flags {@code "is"}).
+ * line breaks.
  */
 public final class RoutePattern {
 
@@ -108,7 +107,7 @@ public final class RoutePattern {
   }
 
   /**
-   * TS {@code normalizePath}: drops query and fragment, percent-decodes each segment (a malformed
+   * Drops query and fragment, percent-decodes each segment (a malformed
    * escape keeps the raw segment) while re-escaping decoded {@code /} and {@code \}, collapses
    * repeated slashes and drops trailing ones.
    *
@@ -131,7 +130,7 @@ public final class RoutePattern {
   }
 
   /**
-   * TS {@code normalizeDecodedPath}: drops query and fragment, collapses repeated slashes and
+   * Drops query and fragment, collapses repeated slashes and
    * drops trailing ones; never empty.
    *
    * @param path an already decoded path

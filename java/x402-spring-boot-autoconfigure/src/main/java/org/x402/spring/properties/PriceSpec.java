@@ -10,9 +10,8 @@ import org.x402.core.types.Money;
 import org.x402.core.types.Price;
 
 /**
- * A {@code price} value: a money string (TS {@code Money}, e.g. {@code "$0.50"}, {@code "0.50
- * USDM"}) bound by {@link PriceSpecConverter}, or an object {@code {amount, asset, extra}} (TS
- * {@code AssetAmount}) bound by the binder.
+ * A {@code price} value: a money string (e.g. {@code "$0.50"}, {@code "0.50 USDM"}) bound by
+ * {@link PriceSpecConverter}, or an object {@code {amount, asset, extra}} bound by the binder.
  */
 public final class PriceSpec {
 
@@ -22,7 +21,7 @@ public final class PriceSpec {
   private final Map<String, Object> extra;
 
   /**
-   * The object form (TS {@code AssetAmount}).
+   * The object form: an explicit amount of a named asset.
    *
    * @param amount the amount in atomic units
    * @param asset the asset identifier

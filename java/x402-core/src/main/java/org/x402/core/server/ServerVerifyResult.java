@@ -5,7 +5,7 @@ import org.x402.core.hooks.HookResults.SkipHandlerDirective;
 import org.x402.core.types.VerifyResponse;
 
 /**
- * The resource server's verify outcome (TS {@code ResourceVerifyRespone}): the verdict, an
+ * The resource server's verify outcome: the verdict, an
  * optional skip-handler directive, and which facilitator verified.
  *
  * @param response the verdict

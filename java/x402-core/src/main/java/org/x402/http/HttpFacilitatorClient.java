@@ -39,36 +39,34 @@ import org.x402.core.types.VerifyResponse;
 import org.x402.core.utils.JsonValues;
 
 /**
- * A facilitator over HTTP (TS {@code HTTPFacilitatorClient}, {@code httpFacilitatorClient.ts}),
- * built on {@code java.net.http}.
+ * A facilitator over HTTP built on {@code java.net.http}.
  *
  * <ul>
  *   <li>{@code POST {url}/verify}, {@code POST {url}/settle} with {@code {x402Version,
  *       paymentPayload, paymentRequirements}}; {@code GET {url}/supported}.
- *   <li>Timeouts: {@link #DEFAULT_TIMEOUT} (90 s, TS) for settle and supported, and a separate
- *       {@link #DEFAULT_VERIFY_TIMEOUT} (15 s, Java) for verify. A timeout throws {@link
+ *   <li>Timeouts: {@link #DEFAULT_TIMEOUT} (90 s) for settle and supported, and a separate
+ *       {@link #DEFAULT_VERIFY_TIMEOUT} (15 s) for verify. A timeout throws {@link
  *       FacilitatorResponseException.Timeout}.
  *   <li>Error statuses: a body with {@code isValid} / {@code success} throws {@link
  *       VerifyException} / {@link SettleException}; any other error status throws {@link
- *       FacilitatorStatusException} with TS's message; an unusable 2xx body or a failed connection
- *       throws {@link FacilitatorResponseException}.
- *   <li>{@code /supported} retries a 429 up to three attempts, honouring {@code Retry-After}
- *       (TS :512-574).
+ *       FacilitatorStatusException} carrying the status and a body excerpt; an unusable 2xx
+ *       body or a failed connection throws {@link FacilitatorResponseException}.
+ *   <li>{@code /supported} retries a 429 up to three attempts, honouring {@code Retry-After}.
  *   <li>Per-endpoint headers from a {@link FacilitatorAuthProvider}.
- *   <li>Redirects are not followed (TS follows them): a 3xx answer throws {@link
+ *   <li>Redirects are not followed: a 3xx answer throws {@link
  *       FacilitatorResponseException}, so auth headers never reach another host. A client passed
  *       to {@link Builder#httpClient} keeps its own redirect setting.
  * </ul>
  */
 public final class HttpFacilitatorClient implements FacilitatorClient {
 
-  /** The TS default facilitator. */
+  /** The default facilitator URL. */
   public static final String DEFAULT_URL = "https://x402.org/facilitator";
 
-  /** TS {@code DEFAULT_TIMEOUT_MS}: settle and supported. */
+  /** The timeout for settle and supported. */
   public static final Duration DEFAULT_TIMEOUT = Duration.ofSeconds(90);
 
-  /** The verify timeout (plan Roles §1b). */
+  /** The verify timeout. */
   public static final Duration DEFAULT_VERIFY_TIMEOUT = Duration.ofSeconds(15);
 
   private static final int SUPPORTED_ATTEMPTS = 3;
@@ -113,7 +111,7 @@ public final class HttpFacilitatorClient implements FacilitatorClient {
   }
 
   /**
-   * Starts a builder with TS defaults.
+   * Starts a builder with the default URL and timeouts.
    *
    * @return the builder
    */
@@ -387,7 +385,7 @@ public final class HttpFacilitatorClient implements FacilitatorClient {
   }
 
   /**
-   * TS {@code computeRetryDelay}: {@code Retry-After} seconds or HTTP date, else exponential
+   * The delay before a retry: {@code Retry-After} seconds or HTTP date, else exponential
    * backoff from 1 s, capped at 30 s.
    *
    * @param retryAfter the header value, may be {@code null}
@@ -395,7 +393,7 @@ public final class HttpFacilitatorClient implements FacilitatorClient {
    * @param clock the clock for HTTP dates
    * @return the delay
    */
-  public static Duration computeRetryDelay(String retryAfter, int attempt, Clock clock) {
+  static Duration computeRetryDelay(String retryAfter, int attempt, Clock clock) {
     Long delay = null;
     if (retryAfter != null) {
       String trimmed = retryAfter.strip();
@@ -434,7 +432,7 @@ public final class HttpFacilitatorClient implements FacilitatorClient {
 
   /**
    * A facilitator answering 3xx is an error: the default transport never follows it, so the
-   * per-endpoint auth headers cannot reach another host (decision 099).
+   * per-endpoint auth headers cannot reach another host.
    */
   private static void rejectRedirect(String operation, HttpResponse<String> response) {
     int status = response.statusCode();
@@ -507,7 +505,7 @@ public final class HttpFacilitatorClient implements FacilitatorClient {
   }
 
   /**
-   * TS {@code responseExcerpt}: whitespace collapsed, at most 200 characters.
+   * An excerpt of a response body: whitespace collapsed, at most 200 characters.
    *
    * @param text the body
    * @return the excerpt

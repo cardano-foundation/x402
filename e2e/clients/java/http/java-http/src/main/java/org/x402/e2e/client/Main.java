@@ -36,8 +36,7 @@ import org.x402.mechanisms.cardano.signer.MnemonicClientCardanoSigner;
  *   <li>2xx or 402: {@code {success, data, status_code[, payment_response]}}, exit 0. The harness
  *       itself fails a 402 or a failed settlement.
  *   <li>Any other status (e.g. 503 while the server waits for a facilitator): the same line plus
- *       {@code error}, exit 1. With exit 0 the harness would treat it as a pass (decisions 170,
- *       193).
+ *       {@code error}, exit 1. With exit 0 the harness would treat it as a pass.
  *   <li>The request could not be completed: {@code {success: false, error}}, exit 1.
  * </ul>
  *
@@ -45,7 +44,7 @@ import org.x402.mechanisms.cardano.signer.MnemonicClientCardanoSigner;
  */
 public final class Main {
 
-  /** How long to wait for Blockfrost to list the payment's change output (TS e2e client: 120 s). */
+  /** How long to wait for Blockfrost to list the payment's change output (up to 120 s). */
   private static final Duration WALLET_SETTLE_TIMEOUT = Duration.ofSeconds(120);
 
   private static final Duration WALLET_SETTLE_POLL = Duration.ofSeconds(3);
@@ -106,7 +105,7 @@ public final class Main {
                 .build());
 
     // E2e routes are priced in lovelace (not a default asset) and above the $1 cap, so spend
-    // controls are off, as in the TS e2e client (e2e/clients/typescript/client.ts).
+    // controls are off.
     X402Client client =
         new X402Client()
             .setSpendControls(SpendControls.disabled())
@@ -132,17 +131,17 @@ public final class Main {
       result.put("error", "unexpected HTTP status " + status + " from " + endpointPath);
     }
 
-    settle.ifPresent(s -> awaitWalletSettled(s, blockfrost, network));
+    settle.ifPresent(s -> awaitWalletSettled(s, blockfrost));
     return result;
   }
 
   /**
-   * Waits until Blockfrost lists this payment's change output (TS {@code
-   * awaitCardanoWalletSettled}). Sequential e2e clients are separate processes and Blockfrost does
-   * not see mempool spends, so the next client would otherwise build on the same input.
+   * Waits until Blockfrost lists this payment's change output. Sequential e2e clients are separate
+   * processes and Blockfrost does not see mempool spends, so the next client would otherwise build
+   * on the same input.
    */
   private static void awaitWalletSettled(
-      SettleResponse settle, BlockfrostChainBackend blockfrost, String network) {
+      SettleResponse settle, BlockfrostChainBackend blockfrost) {
     if (settle.network() == null || !settle.network().startsWith("cardano:")) {
       return;
     }
@@ -155,8 +154,8 @@ public final class Main {
     while (System.nanoTime() < deadline) {
       try {
         boolean listed =
-            blockfrost.getAddressUtxos(payer, network).stream()
-                .anyMatch(utxo -> transaction.equalsIgnoreCase(utxo.txHash()));
+            blockfrost.getAll(payer).stream()
+                .anyMatch(utxo -> transaction.equalsIgnoreCase(utxo.getTxHash()));
         if (listed) {
           return;
         }

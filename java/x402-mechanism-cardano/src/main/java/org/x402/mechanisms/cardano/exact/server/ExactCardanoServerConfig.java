@@ -4,7 +4,7 @@ import org.x402.mechanisms.cardano.exact.masumi.InMemoryMasumiTermsStorage;
 import org.x402.mechanisms.cardano.exact.masumi.MasumiTermsStorage;
 
 /**
- * Cardano resource-server configuration (TS {@code ExactCardanoServerConfig}).
+ * Cardano resource-server configuration.
  *
  * @param masumiStorage issued Masumi quotes keyed by {@code termsDigest} (default: in-memory,
  *     single instance only; production deployments need a shared, atomically updating store)

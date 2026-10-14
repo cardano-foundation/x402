@@ -18,7 +18,7 @@ import org.x402.core.types.PaymentRequired;
 import org.x402.core.types.PaymentRequirements;
 import org.x402.core.types.ResourceInfo;
 
-/** TS {@code x402Client} selection pipeline (:777-847) and the built-in policies. */
+/** The client's option selection pipeline and the built-in policies. */
 class ClientSelectionTest {
 
   private static PaymentRequirements req(String scheme, String network, String amount) {

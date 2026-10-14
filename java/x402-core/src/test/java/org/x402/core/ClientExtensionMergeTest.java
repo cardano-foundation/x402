@@ -12,7 +12,7 @@ import org.x402.core.types.PaymentPayload;
 import org.x402.core.types.PaymentRequired;
 import org.x402.core.types.PaymentRequirements;
 
-/** TS {@code mergeExtensions}: builder-code {@code s} concatenates, other leaves keep the server's. */
+/** Extension merge: builder-code {@code s} concatenates, other leaves keep the server's. */
 class ClientExtensionMergeTest {
 
   private PaymentPayload pay(Object serverExt, Object clientExt) {

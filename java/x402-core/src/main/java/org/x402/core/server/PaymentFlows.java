@@ -9,10 +9,10 @@ import org.x402.core.types.PaymentPayload;
 import org.x402.core.types.PaymentRequirements;
 import org.x402.core.types.SettleResponse;
 
-/** Payment-flow resolution and wire rules (TS {@code core/src/server/paymentFlow.ts}). */
+/** Payment-flow resolution and wire rules. */
 public final class PaymentFlows {
 
-  /** SDK-only transfer-method key that never appears on the wire (TS {@code "default"}). */
+  /** SDK-only transfer-method key that never appears on the wire. */
   public static final String SDK_DEFAULT_ASSET_TRANSFER_METHOD = "default";
 
   /** The {@code extra} key naming the transfer method. */
@@ -24,6 +24,26 @@ public final class PaymentFlows {
   private PaymentFlows() {}
 
   /**
+   * A requirement's {@code extra} before wire adjustments: the price's {@code extra}, then the
+   * option's on top.
+   *
+   * @param priceExtra the parsed price's extra, or {@code null}
+   * @param optionExtra the option's extra, or {@code null}
+   * @return the merged map
+   */
+  public static Map<String, Object> mergeExtra(Map<String, Object> priceExtra,
+      Map<String, Object> optionExtra) {
+    Map<String, Object> extra = new LinkedHashMap<>();
+    if (priceExtra != null) {
+      extra.putAll(priceExtra);
+    }
+    if (optionExtra != null) {
+      extra.putAll(optionExtra);
+    }
+    return extra;
+  }
+
+  /**
    * A resolved transfer method and flow.
    *
    * @param assetTransferMethod the transfer method
@@ -32,13 +52,13 @@ public final class PaymentFlows {
   public record Resolved(String assetTransferMethod, PaymentFlow flow) {}
 
   /**
-   * TS {@code resolvePaymentFlow}: the method is {@code extra.assetTransferMethod} or the scheme
+   * Resolves the flow: the method is {@code extra.assetTransferMethod} or the scheme
    * default; the flow is {@code extra.paymentFlow} or that method's default.
    *
    * @param scheme the scheme
    * @param requirements the requirements
    * @return the resolved method and flow
-   * @throws IllegalArgumentException with TS's message when unsupported
+   * @throws IllegalArgumentException when the method or flow is unsupported
    */
   public static Resolved resolve(SchemeNetworkServer scheme, PaymentRequirements requirements) {
     return resolve(scheme, requirements.extra());
@@ -73,7 +93,7 @@ public final class PaymentFlows {
   }
 
   /**
-   * TS's message for an unsupported transfer method.
+   * The message for an unsupported transfer method.
    *
    * @param scheme the scheme
    * @param atm the method
@@ -85,7 +105,7 @@ public final class PaymentFlows {
   }
 
   /**
-   * TS {@code applyPaymentFlowWireExtra}: drops the SDK {@code "default"} method and announces a
+   * Drops the SDK {@code "default"} method and announces a
    * non-authorization flow in {@code extra.paymentFlow}.
    *
    * @param extra the current extra
@@ -105,7 +125,7 @@ public final class PaymentFlows {
   }
 
   /**
-   * TS {@code resolveFailurePathSettlement}: the receipt to send when a handler fails after the
+   * The receipt to send when a handler fails after the
    * payment was verified (and possibly settled before the handler).
    *
    * @param cancelSettlement the cancel dispatcher's result, may be {@code null}

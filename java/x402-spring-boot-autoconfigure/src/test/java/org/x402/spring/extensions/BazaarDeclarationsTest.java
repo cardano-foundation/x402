@@ -61,7 +61,7 @@ class BazaarDeclarationsTest {
     Map<String, Object> input = map(map(bazaar.get("info")).get("input"));
     assertThat(input).containsEntry("method", "GET").containsEntry("bodyType", "text");
     assertThat(String.valueOf(bazaar.get("schema"))).contains("[units, lang]");
-    assertThat(BazaarDeclarations.restore(List.of(Map.of("0", "a")))).isEqualTo(
+    assertThat(org.x402.spring.properties.RawProperties.restoreLists(List.of(Map.of("0", "a")))).isEqualTo(
         List.of(List.of("a")));
   }
 
@@ -74,4 +74,21 @@ class BazaarDeclarationsTest {
     assertThatThrownBy(() -> declarations.customize("r", route(Map.of("input", "units"))))
         .isInstanceOf(X402ConfigurationException.class).hasMessageContaining("object");
   }
+
+  @Test
+  void aReadyDeclarationFromACustomizerPassesThrough() {
+    Object declared = Bazaar.declareDiscoveryExtension(
+        org.x402.extensions.bazaar.HttpDiscoveryConfig.create()).get(Bazaar.KEY);
+
+    RouteConfig out = declarations.customize("r", route(declared));
+
+    assertThat(out.extensions()).containsEntry(Bazaar.KEY, declared);
+  }
+
+  @Test
+  void theYamlConverterRunsBeforeUserCustomizers() {
+    assertThat(org.springframework.core.annotation.OrderUtils.getOrder(BazaarDeclarations.class))
+        .isEqualTo(org.springframework.core.Ordered.HIGHEST_PRECEDENCE);
+  }
 }
+

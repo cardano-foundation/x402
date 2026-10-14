@@ -33,10 +33,11 @@ import org.x402.mechanisms.cardano.exact.masumi.MasumiTermsRecord;
 import org.x402.mechanisms.cardano.exact.masumi.MasumiTermsStorage;
 
 /**
- * Cardano resource-server scheme for {@code exact} (TS {@code exact/server/scheme.ts}): money
+ * Cardano resource-server scheme for {@code exact}: money
  * parsing with USDM as the default asset, the facilitator capability check, Masumi quote issuance
- * and storage, and the Masumi terms binding as an after-verify scheme hook (spec :940-944). The
- * first transaction to claim a served quote owns it; any other transaction is a duplicate.
+ * and storage, and the Masumi terms binding as an after-verify scheme hook (spec section on terms
+ * binding). The first transaction to claim a served quote owns it; any other transaction is a
+ * duplicate.
  */
 public class ExactCardanoServerScheme implements SchemeNetworkServer {
 
@@ -281,8 +282,8 @@ public class ExactCardanoServerScheme implements SchemeNetworkServer {
   }
 
   /**
-   * Binds a verified Masumi payment to the quote it was issued against (TS {@code
-   * bindMasumiTerms}). {@code default} and {@code script} payments pass through.
+   * Binds a verified Masumi payment to the quote it was issued against. {@code default} and {@code
+   * script} payments pass through.
    *
    * @param context the after-verify context
    * @return proceed, or an abort for unknown, altered or already claimed terms
@@ -310,7 +311,7 @@ public class ExactCardanoServerScheme implements SchemeNetworkServer {
     }
 
     // The claim decision happens inside the atomic callback; its result is the authority.
-    // Decision 122 (divergence from TS): a storage failure aborts. Core swallows after-verify
+    // A storage failure aborts. Core swallows after-verify
     // hook exceptions, so a throw would let the handler run on unbound terms.
     MasumiTermsRecord stored;
     try {

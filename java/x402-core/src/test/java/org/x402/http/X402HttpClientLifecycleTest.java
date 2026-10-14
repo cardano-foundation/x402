@@ -12,7 +12,7 @@ import org.x402.core.client.X402Client;
 /**
  * The wrapper delegates the JDK 21+ {@code HttpClient} lifecycle ({@code close}, {@code shutdown},
  * {@code shutdownNow}, {@code awaitTermination}, {@code isTerminated}) even though the module is
- * compiled for Java 17 (decision 039).
+ * compiled for Java 17.
  */
 class X402HttpClientLifecycleTest {
 

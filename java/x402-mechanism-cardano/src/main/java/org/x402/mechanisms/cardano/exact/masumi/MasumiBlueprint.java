@@ -1,5 +1,6 @@
 package org.x402.mechanisms.cardano.exact.masumi;
 
+import com.bloxbean.cardano.client.plutus.spec.PlutusData;
 import java.math.BigInteger;
 import java.util.ArrayList;
 import java.util.HexFormat;
@@ -8,13 +9,13 @@ import java.util.List;
 import java.util.Map;
 import org.x402.mechanisms.cardano.CardanoAddresses;
 import org.x402.mechanisms.cardano.CardanoNetworks;
-import org.x402.mechanisms.cardano.PlutusData;
+import org.x402.mechanisms.cardano.PlutusEncoding;
 import org.x402.mechanisms.cardano.exact.script.FlatApplier;
 import org.x402.mechanisms.cardano.exact.script.ScriptAddresses;
 
 /**
- * Derivation of the deployment-specific {@code vested_pay} escrow address (TS {@code
- * exact/masumi/blueprint.ts}). The verifier derives the address itself from the canonical
+ * Derivation of the deployment-specific {@code vested_pay} escrow address. The verifier derives
+ * the address itself from the canonical
  * compiled validator; {@code payTo} is never trusted or defaulted.
  */
 public final class MasumiBlueprint {
@@ -70,15 +71,15 @@ public final class MasumiBlueprint {
     }
     List<PlutusData> admins = new ArrayList<>();
     for (String vkey : deployment.adminVkeys()) {
-      admins.add(PlutusData.BytesData.ofHex(vkey));
+      admins.add(PlutusEncoding.bytes(vkey));
     }
     byte[] applied =
         FlatApplier.applyParams(
             HexFormat.of().parseHex(MasumiBlueprintCode.compiledCode()),
             List.of(
-                new PlutusData.IntData(new BigInteger(deployment.requiredAdmins())),
-                new PlutusData.ListData(admins),
-                new PlutusData.IntData(new BigInteger(deployment.cooldownPeriod()))));
+                PlutusEncoding.integer(new BigInteger(deployment.requiredAdmins())),
+                PlutusEncoding.list(admins),
+                PlutusEncoding.integer(new BigInteger(deployment.cooldownPeriod()))));
     String hash = HexFormat.of().formatHex(ScriptAddresses.scriptHash("plutusV3", applied));
     synchronized (CACHE) {
       if (CACHE.size() >= MasumiConstants.MAX_SCRIPT_HASH_CACHE_ENTRIES) {

@@ -50,7 +50,8 @@ final class ServletHandlerResolver {
         }
       }
     } catch (Exception e) {
-      // Spring answers this request itself (e.g. 405/415): no handler, so nothing is charged.
+      // Spring answers this request itself (e.g. 405/415): no handler. A path: offer can still
+      // match it in the filter; an @X402Payment offer cannot.
       return new Resolution(null, null);
     }
     return new Resolution(null, null);

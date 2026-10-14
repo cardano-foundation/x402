@@ -1,18 +1,20 @@
 package org.x402.mechanisms.cardano.exact.masumi;
 
+import com.bloxbean.cardano.client.address.Credential;
+import com.bloxbean.cardano.client.plutus.spec.BigIntPlutusData;
+import com.bloxbean.cardano.client.plutus.spec.BytesPlutusData;
+import com.bloxbean.cardano.client.plutus.spec.ConstrPlutusData;
+import com.bloxbean.cardano.client.plutus.spec.PlutusData;
 import java.math.BigInteger;
 import java.util.List;
 import java.util.Objects;
 import org.x402.mechanisms.cardano.CardanoAddresses;
-import org.x402.mechanisms.cardano.CardanoAddresses.Credential;
+import org.x402.mechanisms.cardano.Cbor;
 import org.x402.mechanisms.cardano.CardanoAddresses.Pointer;
-import org.x402.mechanisms.cardano.PlutusData;
-import org.x402.mechanisms.cardano.PlutusData.BytesData;
-import org.x402.mechanisms.cardano.PlutusData.Constr;
-import org.x402.mechanisms.cardano.PlutusData.IntData;
+import org.x402.mechanisms.cardano.PlutusEncoding;
 
 /**
- * Codec for the Masumi {@code vested_pay} lock datum (TS {@code exact/masumi/datum.ts}): the
+ * Codec for the Masumi {@code vested_pay} lock datum: the
  * 19-field {@code Constr 0} built for a fresh lock and parsed back for verification.
  */
 public final class MasumiDatum {
@@ -133,14 +135,8 @@ public final class MasumiDatum {
    * @return true when equal
    */
   public static boolean sameCredentials(AddressCredentials a, AddressCredentials b) {
-    if (!a.payment().hash().equals(b.payment().hash()) || a.payment().isScript() != b.payment().isScript()) {
-      return false;
-    }
-    String aStake = a.stake() == null ? "" : a.stake().hash();
-    String bStake = b.stake() == null ? "" : b.stake().hash();
-    boolean aStakeScript = a.stake() != null && a.stake().isScript();
-    boolean bStakeScript = b.stake() != null && b.stake().isScript();
-    if (!aStake.equals(bStake) || aStakeScript != bStakeScript) {
+    // Credentials compare by type and hash bytes.
+    if (!a.payment().equals(b.payment()) || !Objects.equals(a.stake(), b.stake())) {
       return false;
     }
     return Objects.equals(pointerParts(a.pointer()), pointerParts(b.pointer()));
@@ -154,31 +150,31 @@ public final class MasumiDatum {
   // ---------------------------------------------------------------- build
 
   private static PlutusData credentialToData(Credential c) {
-    return Constr.of(c.isScript() ? 1 : 0, BytesData.ofHex(c.hash()));
+    return PlutusEncoding.constr(CardanoAddresses.isScript(c) ? 1 : 0, BytesPlutusData.of(c.getBytes()));
   }
 
   private static PlutusData addressToData(String bech32) {
     AddressCredentials creds = addressCredentials(bech32);
     PlutusData stake;
     if (creds.stake() != null) {
-      stake = Constr.of(0, Constr.of(0, credentialToData(creds.stake())));
+      stake = PlutusEncoding.constr(0, PlutusEncoding.constr(0, credentialToData(creds.stake())));
     } else if (creds.pointer() != null) {
       stake =
-          Constr.of(
+          PlutusEncoding.constr(
               0,
-              Constr.of(
+              PlutusEncoding.constr(
                   1,
-                  new IntData(creds.pointer().slot()),
-                  new IntData(creds.pointer().txIndex()),
-                  new IntData(creds.pointer().certIndex())));
+                  PlutusEncoding.integer(creds.pointer().slot()),
+                  PlutusEncoding.integer(creds.pointer().txIndex()),
+                  PlutusEncoding.integer(creds.pointer().certIndex())));
     } else {
-      stake = Constr.of(1);
+      stake = PlutusEncoding.constr(1);
     }
-    return Constr.of(0, credentialToData(creds.payment()), stake);
+    return PlutusEncoding.constr(0, credentialToData(creds.payment()), stake);
   }
 
   private static PlutusData optionAddress(String bech32) {
-    return bech32 == null || bech32.isEmpty() ? Constr.of(1) : Constr.of(0, addressToData(bech32));
+    return bech32 == null || bech32.isEmpty() ? PlutusEncoding.constr(1) : PlutusEncoding.constr(0, addressToData(bech32));
   }
 
   /**
@@ -188,45 +184,63 @@ public final class MasumiDatum {
    * @return the datum
    */
   public static PlutusData build(LockInput input) {
-    return Constr.of(
+    return PlutusEncoding.constr(
         0,
         addressToData(input.buyerAddress()),
         optionAddress(input.buyerReturnAddress()),
         addressToData(input.sellerAddress()),
         optionAddress(input.sellerReturnAddress()),
-        BytesData.ofHex(input.referenceKey()),
-        BytesData.ofHex(input.referenceSignature()),
-        BytesData.ofHex(input.sellerNonce()),
-        BytesData.ofHex(input.buyerNonce()),
-        BytesData.ofHex(input.agentIdentifier()),
-        new IntData(input.collateralReturnLovelace()),
-        BytesData.ofHex(input.inputHash()),
-        BytesData.ofHex(""),
-        new IntData(input.payByTime()),
-        new IntData(input.submitResultTime()),
-        new IntData(input.unlockTime()),
-        new IntData(input.externalDisputeUnlockTime()),
-        IntData.of(0),
-        IntData.of(0),
-        Constr.of(0));
+        PlutusEncoding.bytes(input.referenceKey()),
+        PlutusEncoding.bytes(input.referenceSignature()),
+        PlutusEncoding.bytes(input.sellerNonce()),
+        PlutusEncoding.bytes(input.buyerNonce()),
+        PlutusEncoding.bytes(input.agentIdentifier()),
+        PlutusEncoding.integer(input.collateralReturnLovelace()),
+        PlutusEncoding.bytes(input.inputHash()),
+        PlutusEncoding.bytes(""),
+        PlutusEncoding.integer(input.payByTime()),
+        PlutusEncoding.integer(input.submitResultTime()),
+        PlutusEncoding.integer(input.unlockTime()),
+        PlutusEncoding.integer(input.externalDisputeUnlockTime()),
+        BigIntPlutusData.of(0),
+        BigIntPlutusData.of(0),
+        PlutusEncoding.constr(0));
   }
 
   // ---------------------------------------------------------------- parse
 
-  private static Constr constr(PlutusData d) {
-    return d instanceof Constr c ? c : null;
+  private static boolean containsMap(Cbor.Item item) {
+    switch (item.major()) {
+      case MAP:
+        return true;
+      case ARRAY:
+        return item.items().stream().anyMatch(MasumiDatum::containsMap);
+      case TAG:
+        return containsMap(item.tagged());
+      default:
+        return false;
+    }
+  }
+
+  /** A constructor: its index and fields. */
+  private record C(BigInteger index, List<PlutusData> fields) {}
+
+  private static C constr(PlutusData d) {
+    return d instanceof ConstrPlutusData c
+        ? new C(BigInteger.valueOf(c.getAlternative()), PlutusEncoding.fields(c))
+        : null;
   }
 
   private static BigInteger integer(PlutusData d) {
-    return d instanceof IntData i ? i.value() : null;
+    return d instanceof BigIntPlutusData i ? i.getValue() : null;
   }
 
   private static String hex(PlutusData d) {
-    return d instanceof BytesData b ? b.hex() : null;
+    return PlutusEncoding.hex(d);
   }
 
   private static Credential credential(PlutusData d) {
-    Constr c = constr(d);
+    C c = constr(d);
     if (c == null || c.fields().size() != 1 || c.index().compareTo(BigInteger.ONE) > 0 || c.index().signum() < 0) {
       return null;
     }
@@ -234,16 +248,16 @@ public final class MasumiDatum {
     if (hash == null || hash.length() != CREDENTIAL_HASH_HEX_LENGTH) {
       return null;
     }
-    return new Credential(c.index().equals(BigInteger.ONE), hash);
+    return c.index().equals(BigInteger.ONE) ? Credential.fromScript(hash) : Credential.fromKey(hash);
   }
 
   private static AddressCredentials address(PlutusData d) {
-    Constr c = constr(d);
+    C c = constr(d);
     if (c == null || c.index().signum() != 0 || c.fields().size() != 2) {
       return null;
     }
     Credential payment = credential(c.fields().get(0));
-    Constr option = constr(c.fields().get(1));
+    C option = constr(c.fields().get(1));
     if (payment == null || option == null) {
       return null;
     }
@@ -253,7 +267,7 @@ public final class MasumiDatum {
     if (option.index().signum() != 0 || option.fields().size() != 1) {
       return null;
     }
-    Constr ref = constr(option.fields().get(0));
+    C ref = constr(option.fields().get(0));
     if (ref == null) {
       return null;
     }
@@ -279,10 +293,10 @@ public final class MasumiDatum {
   }
 
   /** {@code Some(addr)} → the address; {@code None} → {@code NONE}; else {@code null}. */
-  private static final AddressCredentials NONE = new AddressCredentials(new Credential(false, ""), null, null);
+  private static final AddressCredentials NONE = new AddressCredentials(Credential.fromKey(new byte[0]), null, null);
 
   private static AddressCredentials optionAddress(PlutusData d) {
-    Constr c = constr(d);
+    C c = constr(d);
     if (c == null) {
       return null;
     }
@@ -304,11 +318,16 @@ public final class MasumiDatum {
   public static View parse(byte[] datumCbor) {
     PlutusData data;
     try {
-      data = PlutusData.fromCbor(datumCbor);
+      Cbor.Item item = Cbor.decode(datumCbor);
+      if (containsMap(item)) {
+        // The lock datum has no maps; refusing them here also avoids hashing attacker-chosen keys.
+        return null;
+      }
+      data = PlutusEncoding.decode(item);
     } catch (RuntimeException e) {
       return null;
     }
-    Constr root = constr(data);
+    C root = constr(data);
     if (root == null || root.index().signum() != 0 || root.fields().size() != 19) {
       return null;
     }
@@ -317,7 +336,7 @@ public final class MasumiDatum {
     AddressCredentials buyerReturn = optionAddress(f.get(1));
     AddressCredentials seller = address(f.get(2));
     AddressCredentials sellerReturn = optionAddress(f.get(3));
-    Constr state = constr(f.get(18));
+    C state = constr(f.get(18));
     if (state != null && !state.fields().isEmpty()) {
       return null;
     }

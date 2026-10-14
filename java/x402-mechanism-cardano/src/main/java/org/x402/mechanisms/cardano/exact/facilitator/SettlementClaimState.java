@@ -1,7 +1,7 @@
 package org.x402.mechanisms.cardano.exact.facilitator;
 
 /**
- * The state of a stored settlement claim, as public verify needs it (decisions 013, 125).
+ * The state of a stored settlement claim, as public verify needs it.
  */
 public enum SettlementClaimState {
   /** Claimed, not yet broadcast (or the broadcast outcome is not recorded yet). */

@@ -4,7 +4,7 @@ import org.x402.core.types.PaymentRequirements;
 import org.x402.core.types.ResourceInfo;
 
 /**
- * What the issuer knows about the request a quote is issued for (TS {@code MasumiIssueContext}).
+ * What the issuer knows about the request a quote is issued for.
  *
  * @param requirement the template the route declared
  * @param resourceInfo the protected resource

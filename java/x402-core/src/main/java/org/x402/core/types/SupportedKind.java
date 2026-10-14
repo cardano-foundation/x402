@@ -5,7 +5,7 @@ import com.fasterxml.jackson.annotation.JsonPropertyOrder;
 import java.util.Map;
 
 /**
- * One (version, scheme, network) a facilitator supports (TS {@code SupportedKind}).
+ * One (version, scheme, network) a facilitator supports.
  *
  * @param x402Version the protocol version
  * @param scheme the scheme

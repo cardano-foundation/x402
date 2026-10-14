@@ -1,25 +1,22 @@
 package org.x402.mechanisms.cardano;
 
+import com.bloxbean.cardano.client.address.AddressProvider;
+import com.bloxbean.cardano.client.address.Credential;
+import com.bloxbean.cardano.client.address.CredentialType;
+import com.bloxbean.cardano.client.common.model.Network;
+import com.bloxbean.cardano.client.common.model.Networks;
 import com.bloxbean.cardano.client.crypto.Bech32;
 import java.math.BigInteger;
 import java.util.Arrays;
 import java.util.HexFormat;
 
 /**
- * Shelley address parsing (CIP-19): bech32 ↔ bytes, network tag and credentials. Mirrors what
- * the TS code reads through Evolution's {@code Address} / {@code AddressEras}.
+ * Shelley address parsing (CIP-19): bech32 ↔ bytes, network tag and credentials. Only the parts
+ * verification reads are exposed.
  */
 public final class CardanoAddresses {
 
   private CardanoAddresses() {}
-
-  /**
-   * A payment or stake credential.
-   *
-   * @param isScript whether it is a script hash
-   * @param hash lowercase hex of the 28-byte hash
-   */
-  public record Credential(boolean isScript, String hash) {}
 
   /**
    * A pointer stake reference.
@@ -126,12 +123,12 @@ public final class CardanoAddresses {
     if (type > 7) {
       throw new IllegalArgumentException("address type " + type + " has no payment credential");
     }
-    Credential payment = new Credential((type & 1) == 1, hex(bytes, 1, 29));
+    Credential payment = credential((type & 1) == 1, Arrays.copyOfRange(bytes, 1, 29));
     if (type <= 3) {
       if (bytes.length != 57) {
         throw new IllegalArgumentException("base address must be 57 bytes");
       }
-      return new Parsed(type, networkId, payment, new Credential((type & 2) == 2, hex(bytes, 29, 57)), null);
+      return new Parsed(type, networkId, payment, credential((type & 2) == 2, Arrays.copyOfRange(bytes, 29, 57)), null);
     }
     if (type == 4 || type == 5) {
       int[] cursor = {29};
@@ -151,8 +148,7 @@ public final class CardanoAddresses {
 
   /**
    * Whether an address parses, is on the network, and is an enterprise address with a key
-   * payment credential or a base address with key payment and stake credentials (TS {@code
-   * isKeyCredentialAddressOn}).
+   * payment credential or a base address with key payment and stake credentials.
    *
    * @param value the candidate
    * @param network the network
@@ -167,7 +163,7 @@ public final class CardanoAddresses {
       if (!p.isBase() && !p.isEnterprise()) {
         return false;
       }
-      if (p.payment().isScript() || (p.isBase() && p.stake().isScript())) {
+      if (isScript(p.payment()) || (p.isBase() && isScript(p.stake()))) {
         return false;
       }
       return p.networkId() == CardanoNetworks.networkId(network);
@@ -185,7 +181,7 @@ public final class CardanoAddresses {
   public static String scriptPaymentCredentialHex(String bech32) {
     try {
       Parsed p = parse(bech32);
-      return p.payment().isScript() ? p.payment().hash() : null;
+      return isScript(p.payment()) ? hashHex(p.payment()) : null;
     } catch (RuntimeException e) {
       return null;
     }
@@ -200,7 +196,7 @@ public final class CardanoAddresses {
   public static String paymentKeyHash(String bech32) {
     try {
       Parsed p = parse(bech32);
-      return p.payment().isScript() ? null : p.payment().hash();
+      return isScript(p.payment()) ? null : hashHex(p.payment());
     } catch (RuntimeException e) {
       return null;
     }
@@ -214,15 +210,32 @@ public final class CardanoAddresses {
    * @return the bech32 address
    */
   public static String enterpriseScriptAddress(String network, String scriptHashHex) {
-    byte[] hash = HexFormat.of().parseHex(scriptHashHex);
-    byte[] bytes = new byte[29];
-    bytes[0] = (byte) (0x70 | CardanoNetworks.networkId(network));
-    System.arraycopy(hash, 0, bytes, 1, 28);
-    return toBech32(bytes);
+    Network on = CardanoNetworks.networkId(network) == 1 ? Networks.mainnet() : Networks.testnet();
+    return AddressProvider.getEntAddress(Credential.fromScript(scriptHashHex), on).toBech32();
   }
 
-  private static String hex(byte[] bytes, int from, int to) {
-    return HexFormat.of().formatHex(Arrays.copyOfRange(bytes, from, to));
+  /**
+   * Whether a credential is a script hash.
+   *
+   * @param credential the credential
+   * @return true for a script credential
+   */
+  public static boolean isScript(Credential credential) {
+    return credential.getType() == CredentialType.Script;
+  }
+
+  /**
+   * A credential's 28-byte hash as lowercase hex.
+   *
+   * @param credential the credential
+   * @return the hex hash
+   */
+  public static String hashHex(Credential credential) {
+    return HexFormat.of().formatHex(credential.getBytes());
+  }
+
+  private static Credential credential(boolean script, byte[] hash) {
+    return script ? Credential.fromScript(hash) : Credential.fromKey(hash);
   }
 
   private static BigInteger natural(byte[] bytes, int[] cursor) {

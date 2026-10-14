@@ -1,5 +1,7 @@
 package org.x402.mechanisms.cardano.testing;
 
+import com.bloxbean.cardano.client.plutus.spec.ConstrPlutusData;
+import com.bloxbean.cardano.client.plutus.spec.PlutusData;
 import com.fasterxml.jackson.core.type.TypeReference;
 import java.math.BigInteger;
 import java.util.ArrayList;
@@ -10,7 +12,7 @@ import java.util.function.Consumer;
 import org.x402.core.json.X402Json;
 import org.x402.core.types.PaymentRequirements;
 import org.x402.mechanisms.cardano.DecodedCardanoTransaction;
-import org.x402.mechanisms.cardano.PlutusData;
+import org.x402.mechanisms.cardano.PlutusEncoding;
 import org.x402.mechanisms.cardano.exact.masumi.MasumiCommitmentInput;
 import org.x402.mechanisms.cardano.exact.masumi.MasumiDatum;
 import org.x402.mechanisms.cardano.exact.masumi.MasumiExtra;
@@ -129,10 +131,11 @@ public final class MasumiFixtures {
    * @return the new datum CBOR
    */
   public static byte[] withField(PlutusData datum, int index, PlutusData value) {
-    PlutusData.Constr c = (PlutusData.Constr) datum;
-    List<PlutusData> fields = new ArrayList<>(c.fields());
+    ConstrPlutusData c = (ConstrPlutusData) datum;
+    List<PlutusData> fields = new ArrayList<>(PlutusEncoding.fields(c));
     fields.set(index, value);
-    return new PlutusData.Constr(c.index(), fields).toCbor();
+    return PlutusEncoding.encode(
+        ConstrPlutusData.builder().alternative(c.getAlternative()).data(PlutusEncoding.list(fields)).build());
   }
 
   /**

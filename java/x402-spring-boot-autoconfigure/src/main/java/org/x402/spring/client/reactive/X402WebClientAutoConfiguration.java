@@ -17,7 +17,7 @@ import org.x402.spring.autoconfigure.X402AutoConfiguration;
 import org.x402.spring.properties.X402Properties;
 
 /**
- * WebClient payments (WP6). Independent of the reactive server: a servlet app using {@code
+ * WebClient payments. Independent of the reactive server: a servlet app using {@code
  * WebClient} gets it too. Boot's {@code WebClient.Builder} gets the x402 filter; self-built {@code
  * WebClient} beans are instrumented with {@code mutate().filter(…)}.
  */
@@ -52,7 +52,7 @@ public class X402WebClientAutoConfiguration {
     return new X402WebClientBeanPostProcessor(filter);
   }
 
-  /** Paid requests of Boot-built WebClients never follow redirects (decision 075). */
+  /** Paid requests of Boot-built WebClients never follow redirects. */
   @Configuration(proxyBeanMethods = false)
   @ConditionalOnClass(ClientHttpConnectorBuilder.class)
   static class ConnectorConfiguration {

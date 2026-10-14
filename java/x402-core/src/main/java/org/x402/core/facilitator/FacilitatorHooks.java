@@ -7,7 +7,7 @@ import org.x402.core.types.PaymentRequirements;
 import org.x402.core.types.SettleResponse;
 import org.x402.core.types.VerifyResponse;
 
-/** Facilitator hook types and contexts (TS {@code facilitator/x402Facilitator.ts:20-62}). */
+/** Facilitator hook types and contexts. */
 public final class FacilitatorHooks {
 
   private FacilitatorHooks() {}
@@ -68,7 +68,7 @@ public final class FacilitatorHooks {
   public record SettleFailureContext(
       PaymentPayload paymentPayload, PaymentRequirements requirements, Throwable error) {}
 
-  /** Before verify; an abort answers {@code isValid:false} with the reason (TS :293-300). */
+  /** Before verify; an abort answers {@code isValid:false} with the reason. */
   @FunctionalInterface
   public interface BeforeVerifyHook {
     /**
@@ -91,7 +91,7 @@ public final class FacilitatorHooks {
     void apply(VerifyResultContext context);
   }
 
-  /** When verify throws; may recover with a result (TS :353). */
+  /** When verify throws; may recover with a result. */
   @FunctionalInterface
   public interface OnVerifyFailureHook {
     /**
@@ -103,7 +103,7 @@ public final class FacilitatorHooks {
     Recovery<VerifyResponse> apply(VerifyFailureContext context);
   }
 
-  /** Before settle; an abort throws {@code SettleAbortedException} (TS :415-419). */
+  /** Before settle; an abort throws {@code SettleAbortedException}. */
   @FunctionalInterface
   public interface BeforeSettleHook {
     /**

@@ -4,7 +4,7 @@ import java.util.Map;
 import org.x402.core.client.ClientHooks.SchemeClientHooks;
 import org.x402.core.types.PaymentRequirements;
 
-/** The client side of one payment scheme (TS {@code SchemeNetworkClient}). */
+/** The client side of one payment scheme. */
 public interface SchemeNetworkClient {
 
   /**
@@ -46,7 +46,7 @@ public interface SchemeNetworkClient {
   }
 
   /**
-   * A network's default (USD-pegged) asset (TS {@code DefaultAsset}).
+   * A network's default (USD-pegged) asset.
    *
    * @param asset the asset identifier
    * @param decimals the asset's decimals
@@ -55,7 +55,7 @@ public interface SchemeNetworkClient {
   record DefaultAsset(String asset, int decimals, String symbol) {}
 
   /**
-   * Inputs to payment creation (TS {@code PaymentPayloadContext}).
+   * Inputs to payment creation.
    *
    * @param extensions client extension data
    * @param maxAmountPerPayment the spend cap in atomic units, if any
@@ -67,7 +67,7 @@ public interface SchemeNetworkClient {
   }
 
   /**
-   * The created payment (TS {@code PaymentPayloadResult}).
+   * The created payment.
    *
    * @param x402Version the protocol version
    * @param payload the scheme payload

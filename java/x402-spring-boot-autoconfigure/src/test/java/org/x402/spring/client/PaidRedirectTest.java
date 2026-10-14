@@ -44,8 +44,8 @@ import org.x402.spring.X402ClientCustomizer;
 import org.x402.spring.client.servlet.X402ClientHttpRequestFactoryDecorator;
 
 /**
- * A paid request is never redirected (security review 2026-10-12): an allowed host answering the
- * paid retry with a 3xx to another origin must never get {@code PAYMENT-SIGNATURE} forwarded to the other origin; the
+ * A paid request is never redirected: an allowed host answering the
+ * paid retry with a 3xx to another origin never gets {@code PAYMENT-SIGNATURE} forwarded; the
  * caller gets the 3xx.
  */
 @ExtendWith(OutputCaptureExtension.class)

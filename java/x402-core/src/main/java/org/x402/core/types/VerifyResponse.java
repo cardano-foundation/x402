@@ -6,7 +6,7 @@ import com.fasterxml.jackson.annotation.JsonPropertyOrder;
 import java.util.Map;
 
 /**
- * A facilitator's verify answer (TS {@code VerifyResponse}).
+ * A facilitator's verify answer.
  *
  * @param isValid whether the payment is valid
  * @param invalidReason machine-readable reason when invalid

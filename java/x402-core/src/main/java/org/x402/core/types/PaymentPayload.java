@@ -5,7 +5,7 @@ import com.fasterxml.jackson.annotation.JsonPropertyOrder;
 import java.util.Map;
 
 /**
- * The body of the {@code PAYMENT-SIGNATURE} header (TS {@code PaymentPayload}).
+ * The body of the {@code PAYMENT-SIGNATURE} header.
  *
  * @param x402Version the protocol version, 2
  * @param resource optional resource the payment is for

@@ -4,12 +4,12 @@ import java.math.BigInteger;
 import java.util.ArrayDeque;
 import java.util.ArrayList;
 import java.util.Deque;
+import java.util.Collections;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
 import java.util.Set;
-import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.function.Function;
 import org.x402.core.PaymentFlow;
@@ -38,10 +38,10 @@ import org.x402.core.utils.JsonValues;
 import org.x402.core.utils.Networks;
 
 /**
- * The paying side (TS {@code client/x402Client.ts}): picks one of a 402's options and asks the
+ * The paying side: picks one of a 402's options and asks the
  * matching scheme to sign it.
  *
- * <p>Selection follows TS (:777-847): (1) keep options with a registered network + scheme, (2)
+ * <p>Selection runs in order: (1) keep options with a registered network + scheme, (2)
  * drop unknown {@code paymentFlow} values, (3) spend controls, (4) policies in registration order
  * (an empty result throws), (5) prefer authorization flows, (6) the selector (default: first).
  *
@@ -55,8 +55,8 @@ public final class X402Client {
       PaymentFlow.UPFRONT.wire(), PaymentFlow.ESCROW.wire());
 
   private final PaymentRequirementsSelector selector;
-  private final Map<Integer, Map<String, Map<String, SchemeNetworkClient>>> schemes =
-      new ConcurrentHashMap<>();
+  /** network → scheme → client, replaced whole on each registration (protocol version 2). */
+  private volatile Map<String, Map<String, SchemeNetworkClient>> registered = Map.of();
   private final List<PaymentPolicy> policies = new CopyOnWriteArrayList<>();
   private volatile SpendControls spendControls = SpendControls.defaults();
   private final List<BeforePaymentCreationHook> beforeHooks = new CopyOnWriteArrayList<>();
@@ -86,13 +86,13 @@ public final class X402Client {
    * @param client the scheme
    * @return this client
    */
-  public X402Client register(String network, SchemeNetworkClient client) {
-    Map<String, Map<String, SchemeNetworkClient>> byNetwork =
-        schemes.computeIfAbsent(X402_VERSION, v -> new LinkedHashMap<>());
-    synchronized (byNetwork) {
-      byNetwork.computeIfAbsent(network, n -> new ConcurrentHashMap<>())
-          .put(client.scheme(), client);
-    }
+  public synchronized X402Client register(String network, SchemeNetworkClient client) {
+    Map<String, Map<String, SchemeNetworkClient>> next = new LinkedHashMap<>(registered);
+    Map<String, SchemeNetworkClient> schemes =
+        new LinkedHashMap<>(next.getOrDefault(network, Map.of()));
+    schemes.put(client.scheme(), client);
+    next.put(network, Collections.unmodifiableMap(schemes));
+    registered = Collections.unmodifiableMap(next);
     return this;
   }
 
@@ -172,8 +172,7 @@ public final class X402Client {
   }
 
   /**
-   * Runs the payment-response hooks (manual, then the scheme's) until one recovers (TS {@code
-   * handlePaymentResponse}).
+   * Runs the payment-response hooks (manual, then the scheme's) until one recovers.
    *
    * @param context the response
    * @return {@code true} when a hook recovered
@@ -189,7 +188,7 @@ public final class X402Client {
   }
 
   /**
-   * Selects an option and creates a signed payment for it (TS {@code createPaymentPayload}).
+   * Selects an option and creates a signed payment for it.
    *
    * @param paymentRequired the server's 402
    * @return the payment
@@ -242,12 +241,12 @@ public final class X402Client {
   }
 
   /**
-   * The TS selection pipeline (:777-847).
+   * Runs the selection pipeline described on the class.
    *
    * @param x402Version the protocol version
    * @param requirements the server's options
    * @return the chosen option
-   * @throws X402ClientException with TS's message when every option is filtered out
+   * @throws X402ClientException when every option is filtered out
    */
   public PaymentRequirements selectPaymentRequirements(
       int x402Version, List<PaymentRequirements> requirements) {
@@ -261,7 +260,7 @@ public final class X402Client {
       Map<String, Object> detail = new LinkedHashMap<>();
       detail.put("x402Version", x402Version);
       detail.put("paymentRequirements", requirements);
-      detail.put("x402Versions", List.copyOf(schemes.keySet()));
+      detail.put("x402Versions", registered.isEmpty() ? List.of() : List.of(X402_VERSION));
       detail.put("networks", List.copyOf(byNetwork.keySet()));
       throw new X402ClientException("No network/scheme registered for x402 version: "
           + x402Version + " which comply with the payment requirements. "
@@ -305,24 +304,15 @@ public final class X402Client {
    * @return {@code true} when a payment on that network and scheme could be created
    */
   public boolean hasRegisteredScheme(String network, String scheme) {
-    Map<String, Map<String, SchemeNetworkClient>> byNetwork = schemes.get(2);
-    if (byNetwork == null) {
-      return false;
-    }
-    synchronized (byNetwork) {
-      return Networks.findByNetworkAndScheme(new LinkedHashMap<>(byNetwork), scheme, network)
-          != null;
-    }
+    return Networks.findByNetworkAndScheme(registered, scheme, network) != null;
   }
 
   private Map<String, Map<String, SchemeNetworkClient>> byNetwork(int x402Version) {
-    Map<String, Map<String, SchemeNetworkClient>> byNetwork = schemes.get(x402Version);
-    if (byNetwork == null) {
+    Map<String, Map<String, SchemeNetworkClient>> byNetwork = registered;
+    if (x402Version != X402_VERSION || byNetwork.isEmpty()) {
       throw new X402ClientException("No client registered for x402 version: " + x402Version);
     }
-    synchronized (byNetwork) {
-      return new LinkedHashMap<>(byNetwork);
-    }
+    return byNetwork;
   }
 
   // ---------------------------------------------------------------- spend controls
@@ -459,12 +449,9 @@ public final class X402Client {
   private <H> List<H> hooks(
       List<H> manual, Function<SchemeClientHooks, H> pick, int version, PaymentRequirements r) {
     List<H> out = new ArrayList<>(manual);
-    Map<String, Map<String, SchemeNetworkClient>> byNetwork = schemes.get(version);
-    if (byNetwork != null) {
-      SchemeNetworkClient scheme;
-      synchronized (byNetwork) {
-        scheme = Networks.findByNetworkAndScheme(byNetwork, r.scheme(), r.network());
-      }
+    if (version == X402_VERSION) {
+      SchemeNetworkClient scheme = Networks.findByNetworkAndScheme(registered, r.scheme(),
+          r.network());
       SchemeClientHooks hooks = scheme == null ? null : scheme.schemeHooks();
       H hook = hooks == null ? null : pick.apply(hooks);
       if (hook != null) {
@@ -475,7 +462,7 @@ public final class X402Client {
   }
 
   /**
-   * TS {@code mergeExtensions}: server declarations overlaid by scheme-provided extension data.
+   * Server declarations overlaid by scheme-provided extension data.
    * Objects merge recursively, the server value wins on conflicting leaves, and additive array
    * fields (builder-code {@code s}) are concatenated without duplicates, client first.
    *

@@ -15,8 +15,9 @@ import org.x402.mechanisms.cardano.CardanoAddresses;
 import org.x402.mechanisms.cardano.CardanoPolicies;
 
 /**
- * Closed-object wire schema of the Masumi {@code extra} block (TS {@code exact/masumi/schema.ts}),
- * with TS's rejection details. Structure only: digests, signatures, the escrow address and the
+ * Closed-object wire schema of the Masumi {@code extra} block,
+ * with a specific rejection detail for each failure. Structure only: digests, signatures, the
+ * escrow address and the
  * datum are verified separately.
  */
 public final class MasumiSchema {

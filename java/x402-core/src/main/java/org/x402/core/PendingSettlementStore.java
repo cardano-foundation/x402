@@ -4,8 +4,12 @@ import java.util.Optional;
 
 /**
  * Remembers broadcast-but-unconfirmed transactions so a settle retry reconciles instead of
- * broadcasting again (TS {@code PendingSettlementStore}, Go {@code pending_settlement_store.go}).
+ * broadcasting again.
  * Implementations must be thread-safe; a multi-instance facilitator needs a shared one.
+ *
+ * <p>For scheme authors: a scheme that broadcasts can use it to make settle retries idempotent.
+ * The Cardano scheme does not: it keeps a stronger record of its own ({@code
+ * SettlementClaimStore}), which also guards against settling one transaction twice.
  */
 public interface PendingSettlementStore {
 

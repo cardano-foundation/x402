@@ -3,15 +3,15 @@ package org.x402.core.server;
 import java.util.Objects;
 
 /**
- * Which facilitator verifies and settles a payment (plan Roles §1b, a Java extension; TS always
- * routes by kind). Server-side only: nothing of it appears on the wire.
+ * Which facilitator verifies and settles a payment (by kind, by pin, or by kind
+ * with verify failover). Server-side only: nothing of it appears on the wire.
  */
 public sealed interface FacilitatorRoute
     permits FacilitatorRoute.Auto, FacilitatorRoute.AutoWithVerifyFailover,
         FacilitatorRoute.Pinned {
 
   /**
-   * Route by kind: the first facilitator listing the kind owns it (TS parity).
+   * Route by kind: the first facilitator listing the kind owns it.
    *
    * @return the route
    */

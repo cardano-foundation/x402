@@ -18,16 +18,31 @@ public final class X402ClientHttpRequestFactoryDecorator {
 
   private final X402Client client;
   private final HostPolicy hostPolicy;
+  private final long maxReplayBody;
+
+  /**
+   * Creates the decorator with the default replay limit (1 MB).
+   *
+   * @param client the payment client
+   * @param hostPolicy the hosts allowed to trigger a payment
+   */
+  public X402ClientHttpRequestFactoryDecorator(X402Client client, HostPolicy hostPolicy) {
+    this(client, hostPolicy, X402ClientHttpRequestFactory.DEFAULT_MAX_REPLAY_BODY);
+  }
 
   /**
    * Creates the decorator.
    *
    * @param client the payment client
    * @param hostPolicy the hosts allowed to trigger a payment
+   * @param maxReplayBody the largest request body, in bytes, kept for re-sending with payment;
+   *     a larger body is streamed and its 402 returned unpaid
    */
-  public X402ClientHttpRequestFactoryDecorator(X402Client client, HostPolicy hostPolicy) {
+  public X402ClientHttpRequestFactoryDecorator(X402Client client, HostPolicy hostPolicy,
+      long maxReplayBody) {
     this.client = client;
     this.hostPolicy = hostPolicy;
+    this.maxReplayBody = maxReplayBody;
   }
 
   /**
@@ -43,7 +58,7 @@ public final class X402ClientHttpRequestFactoryDecorator {
    */
   public ClientHttpRequestFactory decorate(ClientHttpRequestFactory factory) {
     return warn(X402ClientHttpRequestFactory.checked(factory, factory, client, hostPolicy,
-        X402ClientHttpRequestFactory.Check.STRICT));
+        X402ClientHttpRequestFactory.Check.STRICT, maxReplayBody));
   }
 
   /**
@@ -58,7 +73,7 @@ public final class X402ClientHttpRequestFactoryDecorator {
   public ClientHttpRequestFactory decorate(ClientHttpRequestFactory factory,
       ClientHttpRequestFactory nonRedirectingFactory) {
     return warn(X402ClientHttpRequestFactory.checked(factory, nonRedirectingFactory, client,
-        hostPolicy, X402ClientHttpRequestFactory.Check.LENIENT));
+        hostPolicy, X402ClientHttpRequestFactory.Check.LENIENT, maxReplayBody));
   }
 
   private static ClientHttpRequestFactory warn(ClientHttpRequestFactory decorated) {

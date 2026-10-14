@@ -5,8 +5,7 @@ import java.util.List;
 import java.util.Map;
 
 /**
- * The structural view of a signed transaction that verification needs (TS {@code
- * DecodedCardanoTransaction}).
+ * The structural view of a signed transaction that verification needs.
  *
  * @param txHash lowercase hex blake2b-256 of the body's wire bytes
  * @param networkId body {@code network_id}, or {@code null} when absent

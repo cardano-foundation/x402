@@ -4,7 +4,7 @@ import java.util.LinkedHashMap;
 import java.util.Map;
 
 /**
- * A schema-validated Masumi {@code extra} block (TS {@code CardanoExtraMasumi}).
+ * A schema-validated Masumi {@code extra} block.
  *
  * @param confirmationPolicy the raw {@code confirmationPolicy}, or {@code null} when absent
  * @param areFeesSponsored {@code false} when present, else {@code null}
@@ -29,7 +29,7 @@ public record MasumiExtra(
   public static final String ASSET_TRANSFER_METHOD = "masumi";
 
   /**
-   * The JSON form in the order TS issues it ({@code issue.ts}), {@code areFeesSponsored} last as
+   * The JSON form in issue order, {@code areFeesSponsored} last as
    * the quote issuer appends it.
    *
    * @return the map

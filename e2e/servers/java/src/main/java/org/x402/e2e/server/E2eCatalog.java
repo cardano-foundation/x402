@@ -19,9 +19,9 @@ import java.util.regex.Pattern;
 import java.util.stream.Collectors;
 
 /**
- * Reads the e2e mechanisms catalog (`e2e/config/mechanisms_*.json`) the same way the Go and
- * Python e2e servers do: the harness passes the directory in {@code E2E_MECHANISMS_CATALOG},
- * otherwise the loader walks up from the working directory to {@code config/mechanisms_global.json}.
+ * Reads the e2e mechanisms catalog (`e2e/config/mechanisms_*.json`): the harness passes the
+ * directory in {@code E2E_MECHANISMS_CATALOG}, otherwise the loader walks up from the working
+ * directory to {@code config/mechanisms_global.json}.
  */
 public final class E2eCatalog {
 

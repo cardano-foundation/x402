@@ -3,7 +3,7 @@ package org.x402.http;
 import java.util.Map;
 
 /**
- * Supplies per-endpoint headers for facilitator calls (TS {@code createAuthHeaders}); called once
+ * Supplies per-endpoint headers for facilitator calls; called once
  * per request so tokens may rotate.
  */
 @FunctionalInterface
@@ -27,7 +27,7 @@ public interface FacilitatorAuthProvider {
   }
 
   /**
-   * Headers per facilitator endpoint (TS shape {@code {verify, settle, supported}}).
+   * Headers for each facilitator endpoint.
    *
    * @param verify headers for {@code POST /verify}, may be {@code null}
    * @param settle headers for {@code POST /settle}, may be {@code null}

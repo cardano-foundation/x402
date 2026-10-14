@@ -6,7 +6,7 @@ import java.util.LinkedHashMap;
 import java.util.Map;
 
 /**
- * One UTxO as the chain layer reports it (TS {@code CardanoUtxoSnapshot}).
+ * One UTxO as the chain layer reports it.
  *
  * @param exists whether the UTxO is currently unspent
  * @param address the owner; implementations should report it even when spent, because a settle

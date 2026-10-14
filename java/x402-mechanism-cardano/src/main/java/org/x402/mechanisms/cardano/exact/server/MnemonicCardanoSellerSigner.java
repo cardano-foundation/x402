@@ -8,7 +8,7 @@ import org.x402.mechanisms.cardano.exact.masumi.MasumiSellerAuthorization;
 
 /**
  * {@link CardanoSellerSigner} backed by a BIP-39 mnemonic: base address of the account, CIP-8
- * signatures with its payment key (TS {@code toMasumiSellerSigner}).
+ * signatures with its payment key.
  */
 public final class MnemonicCardanoSellerSigner implements CardanoSellerSigner {
 

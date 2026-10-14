@@ -16,7 +16,7 @@ import org.x402.core.types.SettleResponse;
 import org.x402.http.X402Headers;
 
 /**
- * The starter contract (plan rules 1–9), run against a real server on both stacks. Subclasses
+ * The starter contract, run against a real server on both stacks. Subclasses
  * supply the stack: {@code @SpringBootTest(webEnvironment = RANDOM_PORT)} over an app importing
  * {@link ContractApp}, plus the fixture hooks below.
  */

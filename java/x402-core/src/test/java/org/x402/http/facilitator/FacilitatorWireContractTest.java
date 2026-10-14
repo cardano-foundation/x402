@@ -32,8 +32,8 @@ import org.x402.http.facilitator.FacilitatorTestSupport.RecordingScheme;
 import org.x402.http.facilitator.FacilitatorTestSupport.Vectors;
 
 /**
- * The plan's normative facilitator wire table (Roles §3) against requests captured from the TS
- * {@code HTTPFacilitatorClient} ({@code vectors/facilitator/http-facilitator-client.json}).
+ * The normative facilitator wire table against requests captured from the TypeScript
+ * facilitator client ({@code vectors/facilitator/http-facilitator-client.json}).
  */
 class FacilitatorWireContractTest {
 
@@ -54,7 +54,7 @@ class FacilitatorWireContractTest {
     return new FacilitatorHttpResponse(served.get("status").asInt(), served.get("body").asText());
   }
 
-  // ------------------------------------------------------------- captured TS requests
+  // ------------------------------------------------------------- captured requests
 
   @Test
   void theDefaultBasePathIsX402AndMatchesTheCapturedPaths() {
@@ -294,7 +294,7 @@ class FacilitatorWireContractTest {
     assertThat(settle.get("extra").toString()).isEqualTo("{\"x\":\"y\"}");
   }
 
-  // ------------------------------------------------------------- TS schema port
+  // ------------------------------------------------------------- settle response schema
 
   @Test
   void theSchemaPortAgreesWithTsOnEveryCapturedSettleAnswer() {

@@ -5,13 +5,13 @@ import java.util.Arrays;
 import java.util.List;
 import java.util.Objects;
 
-/** Payment flows (TS {@code PaymentFlowName}, {@code PaymentFlowPhases}, {@code PaymentFlowConfig}). */
+/** The ways a payment is verified and settled around the protected handler. */
 public enum PaymentFlow {
   /** Verify, run the handler, settle after it. */
   AUTHORIZATION("authorization", true, false, true),
   /** Settle before the handler. */
   UPFRONT("upfront", false, true, false),
-  /** Deposit into an escrow before the handler, charge after it (TS {@code PAYMENT_FLOWS}). */
+  /** Deposit into an escrow before the handler, charge after it. */
   ESCROW("escrow", false, true, true);
 
   private final String wire;
@@ -27,7 +27,7 @@ public enum PaymentFlow {
   }
 
   /**
-   * The TS name.
+   * The name used on the wire.
    *
    * @return the wire name
    */
@@ -64,7 +64,7 @@ public enum PaymentFlow {
   }
 
   /**
-   * Looks up a flow by TS name.
+   * Looks up a flow by its wire name.
    *
    * @param wire the name
    * @return the flow, or {@code null} when unknown
@@ -74,7 +74,7 @@ public enum PaymentFlow {
   }
 
   /**
-   * Flows a transfer method supports, and its default (TS {@code PaymentFlowConfig}).
+   * Flows a transfer method supports, and its default.
    *
    * @param supported supported flows
    * @param defaultFlow the default flow

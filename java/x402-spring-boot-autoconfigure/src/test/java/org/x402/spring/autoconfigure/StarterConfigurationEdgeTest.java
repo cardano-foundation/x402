@@ -180,15 +180,17 @@ class StarterConfigurationEdgeTest {
         .run(ctx -> {
           assertThat(ctx.getBean(org.x402.core.client.X402Client.class).spendControls()
               .maxAmountPerPayment()).isNull();
-          X402Properties.ClientCardano cardano =
-              ctx.getBean(X402Properties.class).client().cardano();
+          org.x402.spring.cardano.X402CardanoProperties.ClientCardano cardano =
+              org.x402.spring.cardano.X402CardanoProperties.bind(ctx.getEnvironment()).client()
+                  .cardano();
           assertThat(cardano.networks().get(0).blockfrost().projectId()).isEqualTo("preprodX");
         });
     runner().withPropertyValues("x402.client.enabled=true",
             "x402.client.spend-controls.allowed-assets[0].network=test:net")
         .run(ctx -> assertThat(ctx).hasFailed().getFailure().rootCause()
             .hasMessageContaining("allowed-assets[0]"));
-    assertThat(new X402Properties.ClientCardano(null, null).networks()).isEmpty();
+    assertThat(new org.x402.spring.cardano.X402CardanoProperties.ClientCardano(null, null)
+        .networks()).isEmpty();
   }
 
   @Test

@@ -21,7 +21,7 @@ import org.x402.core.types.ResourceInfo;
 import org.x402.core.types.SettleResponse;
 import org.x402.core.utils.JsonValues;
 
-/** TS {@code hookPolicy.ts}: what scheme enrichment may change, and the JSON comparisons used. */
+/** What scheme enrichment may change, and the JSON comparisons used. */
 class MutationPolicyTest {
 
   private final FakeServerScheme scheme = new FakeServerScheme();

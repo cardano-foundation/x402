@@ -7,7 +7,7 @@ import org.x402.core.types.PaymentRequired;
 import org.x402.core.types.PaymentRequirements;
 import org.x402.core.types.SettleResponse;
 
-/** Client hook types and contexts (TS {@code client/x402Client.ts:26-78}). */
+/** Client hook types and contexts. */
 public final class ClientHooks {
 
   private ClientHooks() {}
@@ -107,7 +107,7 @@ public final class ClientHooks {
   }
 
   /**
-   * Scheme-scoped client hooks (TS {@code SchemeClientHooks}).
+   * Scheme-scoped client hooks.
    *
    * @param onBeforePaymentCreation optional
    * @param onAfterPaymentCreation optional

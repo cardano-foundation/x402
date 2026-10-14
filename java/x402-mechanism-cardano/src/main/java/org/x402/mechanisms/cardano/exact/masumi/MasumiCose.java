@@ -12,10 +12,10 @@ import org.x402.mechanisms.cardano.CardanoAddresses;
 import org.x402.mechanisms.cardano.Cbor;
 
 /**
- * The seller's CIP-8 authorization over {@code termsDigest} (TS {@code exact/masumi/cose.ts}
- * plus Evolution's {@code COSE.SignData}). Verification re-encodes the decoded protected header
- * map definitely and minimally in its original order, exactly as Evolution builds the
- * Sig_structure; signing produces Evolution's byte layout.
+ * The seller's CIP-8 authorization over {@code termsDigest}. Verification re-encodes the decoded
+ * protected header
+ * map definitely and minimally in its original order to rebuild the Sig_structure the signer
+ * signed; signing produces the CIP-30 {@code signData} byte layout.
  */
 public final class MasumiCose {
 
@@ -23,6 +23,9 @@ public final class MasumiCose {
   private static final BigInteger EDDSA = BigInteger.valueOf(-8);
 
   private MasumiCose() {}
+
+  // Cbor.decode keeps duplicate map entries; lookups here take the last match, and reencodeMap
+  // keeps the last value at the first position.
 
   private static Cbor.Item mapGet(Cbor.Item map, long label) {
     Cbor.Item found = null;
@@ -108,7 +111,7 @@ public final class MasumiCose {
         return false;
       }
       CardanoAddresses.Parsed seller = CardanoAddresses.parse(sellerAddressBech32);
-      if (seller.payment().isScript()) {
+      if (CardanoAddresses.isScript(seller.payment())) {
         return false;
       }
       byte[] digest = HexFormat.of().parseHex(termsDigestHex);
@@ -126,7 +129,7 @@ public final class MasumiCose {
         return false;
       }
       String keyHash = HexFormat.of().formatHex(Blake2bUtil.blake2bHash224(publicKey));
-      if (!keyHash.equals(seller.payment().hash())) {
+      if (!keyHash.equals(CardanoAddresses.hashHex(seller.payment()))) {
         return false;
       }
       byte[] sigStructure = sigStructure(reencodeMap(protectedMap), payload.bytes());
@@ -145,7 +148,7 @@ public final class MasumiCose {
     return true;
   }
 
-  /** Evolution's header map re-encoding: JS Map semantics (last value, first position), definite. */
+  /** Re-encodes a header map definitely; a repeated key keeps its last value, first position. */
   private static byte[] reencodeMap(Cbor.Item map) {
     List<Cbor.Item> keys = new ArrayList<>();
     List<Cbor.Item> values = new ArrayList<>();
@@ -225,7 +228,7 @@ public final class MasumiCose {
   }
 
   /**
-   * CIP-30 {@code signData} with Evolution's encoding: protected {@code {1: -8, "address":
+   * CIP-30 {@code signData}: protected {@code {1: -8, "address":
    * bytes}}, unprotected {@code {"hashed": false}}, attached payload, and a COSE_Key {@code {1:
    * 1, 3: -8, -1: 6, -2: publicKey}}.
    *

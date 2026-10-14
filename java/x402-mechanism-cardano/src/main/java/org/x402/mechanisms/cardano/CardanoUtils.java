@@ -1,10 +1,14 @@
 package org.x402.mechanisms.cardano;
 
+import com.bloxbean.cardano.client.api.model.Amount;
+import com.bloxbean.cardano.client.api.model.ProtocolParams;
+import com.bloxbean.cardano.client.api.model.Utxo;
 import java.math.BigInteger;
+import java.util.LinkedHashMap;
 import java.util.Locale;
 import java.util.Map;
 
-/** Small helpers shared by client, server and facilitator (TS {@code utils.ts}). */
+/** Small helpers shared by client, server and facilitator. */
 public final class CardanoUtils {
 
   private CardanoUtils() {}
@@ -96,7 +100,7 @@ public final class CardanoUtils {
    *
    * @param raw the payload map
    * @return the typed payload
-   * @throws IllegalArgumentException with TS's messages when a field is missing or too large
+   * @throws IllegalArgumentException when a field is missing or too large
    */
   public static ExactCardanoPayload decodePayload(Map<String, ?> raw) {
     Object transaction = raw == null ? null : raw.get("transaction");
@@ -111,5 +115,108 @@ public final class CardanoUtils {
       throw new IllegalArgumentException("Cardano payload is missing a nonce string");
     }
     return new ExactCardanoPayload(tx, n);
+  }
+
+  /**
+   * The lovelace of a UTxO.
+   *
+   * @param utxo the UTxO
+   * @return the lovelace (0 when it lists none)
+   */
+  public static BigInteger lovelace(Utxo utxo) {
+    BigInteger coin = BigInteger.ZERO;
+    for (Amount a : utxo.getAmount() == null ? java.util.List.<Amount>of() : utxo.getAmount()) {
+      if ("lovelace".equals(a.getUnit())) {
+        coin = coin.add(a.getQuantity());
+      }
+    }
+    return coin;
+  }
+
+  /**
+   * The native assets of a UTxO, keyed {@code policy.assetName} in lowercase hex.
+   *
+   * @param utxo the UTxO
+   * @return the assets
+   */
+  public static Map<String, BigInteger> assets(Utxo utxo) {
+    Map<String, BigInteger> assets = new LinkedHashMap<>();
+    for (Amount a : utxo.getAmount() == null ? java.util.List.<Amount>of() : utxo.getAmount()) {
+      String unit = a.getUnit();
+      if (unit != null && !"lovelace".equals(unit) && unit.length() >= 56) {
+        String key = unit.substring(0, 56).toLowerCase(Locale.ROOT) + "."
+            + unit.substring(56).toLowerCase(Locale.ROOT);
+        assets.merge(key, a.getQuantity(), BigInteger::add);
+      }
+    }
+    return assets;
+  }
+
+  /**
+   * A UTxO's {@code txHash#index} reference.
+   *
+   * @param utxo the UTxO
+   * @return the reference
+   */
+  public static String ref(Utxo utxo) {
+    return utxo.getTxHash() + "#" + utxo.getOutputIndex();
+  }
+
+  /**
+   * Checks that protocol parameters carry the fee and min-UTxO values, none negative.
+   *
+   * @param parameters the protocol parameters
+   * @return the same parameters
+   * @throws IllegalArgumentException when a value is missing, malformed or negative
+   */
+  public static ProtocolParams requireComplete(ProtocolParams parameters) {
+    BigInteger coinsPerUtxoByte = coinsPerUtxoByte(parameters);
+    if (coinsPerUtxoByte == null) {
+      throw new IllegalArgumentException("protocol parameters lack coinsPerUtxoSize");
+    }
+    if (coinsPerUtxoByte.signum() < 0 || minFeeA(parameters).signum() < 0
+        || minFeeB(parameters).signum() < 0) {
+      throw new IllegalArgumentException("protocol parameters hold a negative fee or min-UTxO value");
+    }
+    return parameters;
+  }
+
+  /**
+   * The {@code coinsPerUTxOByte} parameter.
+   *
+   * @param parameters the protocol parameters
+   * @return the value, or {@code null} when the backend does not supply it
+   */
+  public static BigInteger coinsPerUtxoByte(ProtocolParams parameters) {
+    String value = parameters.getCoinsPerUtxoSize();
+    return value == null ? null : new BigInteger(value);
+  }
+
+  /**
+   * The fee coefficient per byte ({@code minFeeA}).
+   *
+   * @param parameters the protocol parameters
+   * @return the coefficient
+   * @throws IllegalArgumentException when absent
+   */
+  public static BigInteger minFeeA(ProtocolParams parameters) {
+    if (parameters.getMinFeeA() == null) {
+      throw new IllegalArgumentException("protocol parameters lack minFeeA");
+    }
+    return BigInteger.valueOf(parameters.getMinFeeA());
+  }
+
+  /**
+   * The constant fee ({@code minFeeB}).
+   *
+   * @param parameters the protocol parameters
+   * @return the constant
+   * @throws IllegalArgumentException when absent
+   */
+  public static BigInteger minFeeB(ProtocolParams parameters) {
+    if (parameters.getMinFeeB() == null) {
+      throw new IllegalArgumentException("protocol parameters lack minFeeB");
+    }
+    return BigInteger.valueOf(parameters.getMinFeeB());
   }
 }

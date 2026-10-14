@@ -3,8 +3,8 @@ package org.x402.core.server;
 import java.util.List;
 
 /**
- * A facilitator cannot serve a registered scheme's configuration (TS {@code
- * FacilitatorCapabilityError}). Fatal at startup: it cannot heal by retrying.
+ * A facilitator cannot serve a registered scheme's configuration. Fatal at startup: it cannot heal
+ * by retrying.
  */
 public class FacilitatorCapabilityError extends IllegalStateException {
 

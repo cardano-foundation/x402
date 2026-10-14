@@ -21,7 +21,7 @@ import org.x402.spring.properties.X402Properties;
 /**
  * What the Cardano resource-server wiring derives from the configuration before any offer is
  * resolved: the Cardano networks in use, each network's Masumi settings (the union of its
- * accounts' {@code cardano.masumi} blocks, plan §1a rule 7), the seller per network, and every
+ * accounts' {@code cardano.masumi} blocks), the seller per network, and every
  * escrow address and escrow script hash a plain option must never pay into. Networks are keyed by
  * their canonical id, so CIP-34 aliases count as the same network.
  */
@@ -261,14 +261,5 @@ public final class CardanoServerPlan {
     X402CardanoProperties.CardanoAccount a = account == null ? null
         : cardano.accounts().get(account);
     return a == null ? null : a.cardano();
-  }
-
-  /**
-   * Startup warnings (already logged).
-   *
-   * @return the warnings
-   */
-  public List<String> warnings() {
-    return List.copyOf(warnings);
   }
 }

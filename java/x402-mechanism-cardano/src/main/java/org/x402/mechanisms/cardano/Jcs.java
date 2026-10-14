@@ -13,7 +13,7 @@ import java.util.Objects;
 import org.x402.core.json.X402Json;
 
 /**
- * RFC 8785 JSON canonicalization, byte-identical to TS {@code exact/masumi/jcs.ts}: members
+ * RFC 8785 JSON canonicalization, as the Masumi digests require: members
  * sorted by UTF-16 code units, numbers in ECMAScript {@code Number#toString} form (every number
  * passes through a double, as in JavaScript), JSON string escaping, unpaired surrogates refused.
  * Also the {@code deepEqual} of {@code @x402/core}, which compares canonical JSON.
@@ -39,7 +39,7 @@ public final class Jcs {
   }
 
   /**
-   * TS {@code deepEqual}: equal canonical JSON (key order ignored).
+   * Deep equality of two JSON values: equal canonical JSON (key order ignored).
    *
    * @param a the first value
    * @param b the second value

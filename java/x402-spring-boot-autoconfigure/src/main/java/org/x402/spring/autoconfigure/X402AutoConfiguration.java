@@ -5,7 +5,6 @@ import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
-import java.util.function.Predicate;
 import org.apache.commons.logging.Log;
 import org.apache.commons.logging.LogFactory;
 import org.springframework.beans.factory.ListableBeanFactory;
@@ -23,16 +22,13 @@ import org.springframework.context.annotation.Configuration;
 import org.springframework.core.env.Environment;
 import org.x402.core.FacilitatorClient;
 import org.x402.core.InProcessFacilitatorClient;
-import org.x402.core.SchemeNetworkServer;
 import org.x402.core.client.PaymentPolicies;
 import org.x402.core.client.SpendControls;
 import org.x402.core.client.X402Client;
-import org.x402.core.server.PaymentFlows;
 import org.x402.core.server.X402ResourceServer;
 import org.x402.http.FacilitatorAuthProvider;
 import org.x402.http.HostPolicy;
 import org.x402.http.HttpFacilitatorClient;
-import org.x402.http.PaymentOption;
 import org.x402.http.PaywallConfig;
 import org.x402.http.PaywallProvider;
 import org.x402.http.RouteConfigurationError;
@@ -58,7 +54,7 @@ import org.x402.spring.properties.RawProperties;
 import org.x402.spring.properties.X402Properties;
 
 /**
- * Core x402 beans (WP5): the resource server with its facilitators, the resolved offers, the HTTP
+ * Core x402 beans: the resource server with its facilitators, the resolved offers, the HTTP
  * server, startup sync and health; and the payment client. Every bean backs off when you define
  * your own. {@code x402.enabled=false} disables all of it.
  */
@@ -82,39 +78,6 @@ public class X402AutoConfiguration {
   @ConfigurationPropertiesBinding
   static PriceSpecConverter x402PriceSpecConverter() {
     return new PriceSpecConverter();
-  }
-
-  /**
-   * Whether an offer has an option whose flow settles after the handler (its response must be
-   * buffered, so streaming handlers are refused).
-   *
-   * @param offers the offers
-   * @param server the server with its registered schemes
-   * @return the predicate
-   */
-  public static Predicate<String> settlesAfterHandler(X402Offers offers,
-      X402ResourceServer server) {
-    return name -> {
-      if (offers.offer(name) == null) {
-        return true;
-      }
-      for (PaymentOption option : offers.offer(name).route().accepts()) {
-        SchemeNetworkServer scheme = server.getRegisteredScheme(option.network(),
-            option.scheme());
-        if (scheme == null) {
-          return true;
-        }
-        try {
-          if (PaymentFlows.resolve(scheme, option.extra() == null ? Map.of() : option.extra())
-              .flow().settleAfterHandler()) {
-            return true;
-          }
-        } catch (RuntimeException e) {
-          return true;
-        }
-      }
-      return false;
-    };
   }
 
   /** The resource server (any web application). */
@@ -314,8 +277,7 @@ public class X402AutoConfiguration {
       SpendControls.Builder b = SpendControls.builder().allowedAssets(allowed);
       if (p.maxAmountPerPayment() == null || p.maxAmountPerPayment().isBlank()) {
         LOG.warn("x402.client.spend-controls.max-amount-per-payment is empty: payments in the "
-            + "network's default asset have no USD cap (no USD cap, TS maxAmountPerPayment: "
-            + "false)");
+            + "network's default asset have no USD cap");
         b.noUsdCap();
       } else {
         b.maxAmountPerPayment(p.maxAmountPerPayment());

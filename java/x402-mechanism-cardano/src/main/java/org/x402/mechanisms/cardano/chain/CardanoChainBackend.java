@@ -1,14 +1,16 @@
 package org.x402.mechanisms.cardano.chain;
 
+import com.bloxbean.cardano.client.api.model.ProtocolParams;
+
 /**
- * Chain access for the Cardano facilitator, mirroring TS {@code FacilitatorCardanoSigner}
- * ({@code signer.ts:330-465}) minus {@code getAddresses}: the facilitator's addresses come from
- * the separate, optional signer of {@code ExactCardanoFacilitatorScheme} (decision 045).
+ * Chain access for the Cardano facilitator, without the facilitator's own addresses, which
+ * come from the separate, optional
+ * signer of {@code ExactCardanoFacilitatorScheme}.
  *
- * <p>TS optional members are default methods. Where TS changes behaviour on the mere presence
- * of a member ({@code getTransactionEvidence}, {@code validatePhase1Transaction}, {@code
- * getProtocolParameters}), Java asks a capability method or a {@code null} answer instead
- * (decision 046). Implementations must be thread-safe.
+ * <p>Optional members are default methods. Where the behaviour depends on whether a backend
+ * offers a member ({@code getTransactionEvidence}, {@code validatePhase1Transaction}, {@code
+ * getProtocolParameters}), a capability method or a {@code null} answer makes that explicit.
+ * Implementations must be thread-safe.
  */
 public interface CardanoChainBackend {
 
@@ -31,14 +33,14 @@ public interface CardanoChainBackend {
   long getCurrentSlot(String network);
 
   /**
-   * Live protocol parameters (TS optional {@code getProtocolParameters}). Throws when the read
+   * Live protocol parameters. Throws when the read
    * fails.
    *
    * @param network the x402 network
    * @return the parameters, or {@code null} when this backend does not offer them (the fee
-   *     floor and min-UTxO checks are then skipped, as in TS)
+   *     floor and min-UTxO checks are then skipped)
    */
-  default ProtocolParameters getProtocolParameters(String network) {
+  default ProtocolParams getProtocolParameters(String network) {
     return null;
   }
 
@@ -63,17 +65,8 @@ public interface CardanoChainBackend {
   }
 
   /**
-   * Waits for a submitted transaction (TS optional {@code waitForConfirmation}). The facilitator
-   * scheme does not call it; it is kept for parity.
-   *
-   * @param txHash the transaction id
-   * @param network the x402 network
-   */
-  default void waitForConfirmation(String txHash, String network) {}
-
-  /**
-   * Dry-runs Plutus scripts (TS optional {@code evaluateTransaction}); throws on rejection. The
-   * default does nothing, which is what TS does when the member is absent.
+   * Dry-runs Plutus scripts; throws on rejection. The
+   * default does nothing, so script evaluation is skipped when a backend cannot do it.
    *
    * @param signedTransactionBase64 the transaction
    * @param network the x402 network

@@ -3,5 +3,8 @@
 # then packages this server (Spring Boot jar) with the shared sources in ../../src.
 set -euo pipefail
 cd "$(dirname "$0")"
-mvn -q -f ../../../../../java/pom.xml install -DskipTests
+# setup.sh installs the reactor once and sets X402_JAVA_REACTOR_READY; alone, install it here.
+if [ -z "${X402_JAVA_REACTOR_READY:-}" ]; then
+  mvn -q -f ../../../../../java/pom.xml install -DskipTests
+fi
 mvn -q package -DskipTests

@@ -2,7 +2,7 @@ package org.x402.mechanisms.cardano.exact.masumi;
 
 import java.math.BigInteger;
 
-/** Masumi constants and the deadline / min-UTxO rules (TS {@code exact/masumi/constants.ts}). */
+/** Masumi constants and the deadline / min-UTxO rules. */
 public final class MasumiConstants {
 
   /** The only accepted {@code paymentType}. */

@@ -9,12 +9,12 @@ import org.x402.core.types.PaymentRequired;
 import org.x402.core.types.SettleResponse;
 
 /**
- * Base64(JSON) encoding of the three x402 headers, byte-identical to TS {@code
- * encodePaymentRequiredHeader} and friends ({@code core/src/http/index.ts}).
+ * Base64(JSON) encoding of the three x402 headers, reproducible byte for byte
+ * (compact JSON in declaration order).
  */
 public final class HeaderCodec {
 
-  /** TS {@code Base64EncodedRegex}. */
+  /** The characters a base64 header value may contain. */
   private static final Pattern BASE64 = Pattern.compile("^[A-Za-z0-9+/]*={0,2}$");
 
   private HeaderCodec() {}
@@ -63,7 +63,7 @@ public final class HeaderCodec {
 
   /**
    * Encodes a {@code PAYMENT-RESPONSE} header value, stripping the server-internal {@code
-   * extensionResponses} side channel as TS does.
+   * extensionResponses} side channel, which never goes on the wire.
    *
    * @param settleResponse the value
    * @return the header value

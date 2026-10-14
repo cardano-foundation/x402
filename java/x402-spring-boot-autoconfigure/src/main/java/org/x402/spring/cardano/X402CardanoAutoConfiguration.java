@@ -7,8 +7,8 @@ import org.springframework.boot.autoconfigure.AutoConfiguration;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnBean;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnClass;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnMissingBean;
-import org.springframework.boot.context.properties.EnableConfigurationProperties;
 import org.springframework.context.annotation.Bean;
+import org.springframework.core.env.Environment;
 import org.x402.core.server.X402ResourceServer;
 import org.x402.mechanisms.cardano.CardanoNetworks;
 import org.x402.mechanisms.cardano.exact.masumi.InMemoryMasumiTermsStorage;
@@ -22,16 +22,22 @@ import org.x402.spring.autoconfigure.X402AutoConfiguration;
 import org.x402.spring.properties.X402Properties;
 
 /**
- * Cardano from YAML on the resource-server side (WP13): one {@link GuardedCardanoServerScheme}
+ * Cardano from YAML on the resource-server side: one {@link GuardedCardanoServerScheme}
  * per used Cardano network, registered after every customizer and only where no scheme answers
- * yet (a customizer's {@code cardano:*} or exact registration wins, decision 153), Masumi sellers per network, the in-memory {@link MasumiTermsStorage} (correct for
- * a single instance only), and the {@link CardanoOptionContributor}.
+ * yet (a customizer's {@code cardano:*} or exact registration wins), Masumi sellers per network,
+ * the in-memory {@link MasumiTermsStorage} (correct for a single instance only), and the {@link
+ * CardanoOptionContributor}.
  */
 @AutoConfiguration(after = X402AutoConfiguration.class)
 @ConditionalOnClass(ExactCardanoServerScheme.class)
 @ConditionalOnBean(X402ResourceServer.class)
-@EnableConfigurationProperties(X402CardanoProperties.class)
 public class X402CardanoAutoConfiguration {
+
+  @Bean
+  @ConditionalOnMissingBean
+  X402CardanoProperties x402CardanoProperties(Environment environment) {
+    return X402CardanoProperties.bind(environment);
+  }
 
   @Bean
   @ConditionalOnMissingBean

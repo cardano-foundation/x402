@@ -5,7 +5,7 @@ import java.math.BigInteger;
 import java.util.Map;
 
 /**
- * The confirmation policy carried in {@code extra.confirmationPolicy} (TS {@code policy.ts}): a
+ * The confirmation policy carried in {@code extra.confirmationPolicy}: a
  * closed object whose only member is an integer {@code l1Confirmations} from -1 to 20, default 1.
  */
 public final class CardanoPolicies {

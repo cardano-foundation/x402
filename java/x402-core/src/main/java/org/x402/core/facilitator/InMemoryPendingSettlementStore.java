@@ -10,10 +10,9 @@ import java.util.concurrent.ConcurrentHashMap;
 import org.x402.core.PendingSettlementStore;
 
 /**
- * The default in-memory {@link PendingSettlementStore} (TS {@code InMemoryPendingSettlementStore},
- * {@code facilitator/pendingSettlementStore.ts}). Entries expire {@link #TTL} after they were set
- * (TS {@code PENDING_SETTLEMENT_TTL_MS}); expired entries are pruned on read. Thread-safe; only
- * correct for a single facilitator instance.
+ * The default in-memory {@link PendingSettlementStore}. Entries expire {@link #TTL} after they
+ * were set; expired entries are pruned on read. Thread-safe; only correct for a single
+ * facilitator instance.
  */
 public final class InMemoryPendingSettlementStore implements PendingSettlementStore {
 
@@ -57,7 +56,7 @@ public final class InMemoryPendingSettlementStore implements PendingSettlementSt
   }
 
   /**
-   * The current entries, for diagnostics (TS {@code entriesSnapshot}).
+   * The current entries, for diagnostics.
    *
    * @return key → transaction hash
    */

@@ -3,7 +3,7 @@ package org.x402.core.client;
 import java.util.List;
 import org.x402.core.types.PaymentRequirements;
 
-/** Picks the final option (TS {@code SelectPaymentRequirements}); the default takes the first. */
+/** Picks the final option; the default takes the first. */
 @FunctionalInterface
 public interface PaymentRequirementsSelector {
 

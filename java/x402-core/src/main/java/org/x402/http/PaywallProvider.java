@@ -3,8 +3,8 @@ package org.x402.http;
 import org.x402.core.types.PaymentRequired;
 
 /**
- * Renders the HTML 402 for browsers (TS {@code PaywallProvider}). Without one, a static page
- * without any request-derived content is served (TS :383-401).
+ * Renders the HTML 402 for browsers. Without one, a static page
+ * without any request-derived content is served.
  */
 @FunctionalInterface
 public interface PaywallProvider {

@@ -32,7 +32,7 @@ import org.x402.core.types.PaymentRequirements;
 import org.x402.core.types.SettleResponse;
 import org.x402.core.types.VerifyResponse;
 
-/** Server-wide, extension and client hook semantics (TS {@code x402ResourceServer}, {@code x402Client}). */
+/** Server-wide, extension and client hook semantics. */
 class HooksTest {
 
   private final List<String> calls = new CopyOnWriteArrayList<>();
@@ -275,7 +275,7 @@ class HooksTest {
         Map.entry("broken", 2), Map.entry("unknown", 3));
   }
 
-  // ---- client hooks (TS x402Client :464-488, Go client.go:155-181) ----
+  // ---- client hooks ----
 
   @Test
   void clientBeforeHookMayAbort() {
