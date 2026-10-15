@@ -1,7 +1,11 @@
 package org.x402.mechanisms.cardano.exact.facilitator;
 
+import com.bloxbean.cardano.client.common.model.SlotConfig;
 import java.time.Clock;
 import java.time.Duration;
+import java.util.Set;
+import org.x402.mechanisms.cardano.CardanoConstants;
+import org.x402.mechanisms.cardano.CardanoNetworks;
 import org.x402.mechanisms.cardano.exact.masumi.MasumiDeploymentValidator;
 import org.x402.mechanisms.cardano.exact.masumi.MasumiRegistryValidator;
 
@@ -20,6 +24,19 @@ import org.x402.mechanisms.cardano.exact.masumi.MasumiRegistryValidator;
  *     agentIdentifier} is rejected
  * @param deploymentValidator approves non-canonical Masumi deployments
  * @param clock the clock of the confirmation wait (default {@code Clock.systemUTC()})
+ * @param slotConfig the slot configuration of the network this scheme serves, or {@code null} for
+ *     the network's built-in one (e.g. a private testnet)
+ * @param lookupTimeout how long one verification may spend resolving inputs on chain (default
+ *     10 s); past it the verdict is {@code chain_lookup_failed}
+ * @param maxInputLookups how many inputs one verification may resolve on chain (default 64; 0
+ *     means the default); a transaction with more is {@code chain_lookup_failed} before any lookup
+ * @param masumiAllowedScriptHashes Masumi escrow script hashes accepted on this network; when
+ *     non-empty every other escrow (the canonical one included) is refused and an allowlisted custom
+ *     deployment needs no {@code deploymentValidator} (default empty: the default rules)
+ * @param scriptDatumPolicy how strictly a script payment's datum is checked (default {@link
+ *     ScriptDatumPolicy#REFERENCE})
+ * @param maxTransactionBytes the largest transaction verify accepts (default and upper bound 64 KiB;
+ *     0 means the default); the protocol's {@code maxTxSize} lowers it further
  */
 public record ExactCardanoFacilitatorOptions(
     SettlementClaimStore settlementStore,
@@ -28,10 +45,20 @@ public record ExactCardanoFacilitatorOptions(
     Duration confirmationPoll,
     MasumiRegistryValidator registryValidator,
     MasumiDeploymentValidator deploymentValidator,
-    Clock clock) {
+    Clock clock,
+    SlotConfig slotConfig,
+    Duration lookupTimeout,
+    int maxInputLookups,
+    Set<String> masumiAllowedScriptHashes,
+    ScriptDatumPolicy scriptDatumPolicy,
+    int maxTransactionBytes) {
 
   /** Default confirmation wait. */
   public static final Duration DEFAULT_CONFIRMATION_TIMEOUT = Duration.ofSeconds(75);
+  /** Default bound on the chain lookups of one verification. */
+  public static final Duration DEFAULT_LOOKUP_TIMEOUT = Duration.ofSeconds(10);
+  /** Default bound on the inputs one verification resolves. */
+  public static final int DEFAULT_MAX_INPUT_LOOKUPS = 64;
   /** Default poll interval. */
   public static final Duration DEFAULT_CONFIRMATION_POLL = Duration.ofSeconds(5);
 
@@ -44,6 +71,25 @@ public record ExactCardanoFacilitatorOptions(
             : settlementStore;
     confirmationTimeout = confirmationTimeout == null ? DEFAULT_CONFIRMATION_TIMEOUT : confirmationTimeout;
     confirmationPoll = confirmationPoll == null ? DEFAULT_CONFIRMATION_POLL : confirmationPoll;
+    lookupTimeout = lookupTimeout == null ? DEFAULT_LOOKUP_TIMEOUT : lookupTimeout;
+    maxInputLookups = maxInputLookups == 0 ? DEFAULT_MAX_INPUT_LOOKUPS : maxInputLookups;
+    scriptDatumPolicy = scriptDatumPolicy == null ? ScriptDatumPolicy.REFERENCE : scriptDatumPolicy;
+    maxTransactionBytes = maxTransactionBytes == 0 ? CardanoConstants.MAX_TRANSACTION_BYTES : maxTransactionBytes;
+    if (maxTransactionBytes < 0 || maxTransactionBytes > CardanoConstants.MAX_TRANSACTION_BYTES) {
+      throw new IllegalArgumentException("max transaction bytes must be from 1 to "
+          + CardanoConstants.MAX_TRANSACTION_BYTES);
+    }
+    masumiAllowedScriptHashes =
+        masumiAllowedScriptHashes == null ? Set.of() : Set.copyOf(masumiAllowedScriptHashes);
+    if (slotConfig != null && slotConfig.getSlotLength() <= 0) {
+      throw new IllegalArgumentException("slot length must be positive");
+    }
+    if (maxInputLookups < 0) {
+      throw new IllegalArgumentException("max input lookups must not be negative");
+    }
+    if (lookupTimeout.isNegative() || lookupTimeout.isZero()) {
+      throw new IllegalArgumentException("lookup timeout must be positive");
+    }
     if (confirmationTimeout.isNegative() || confirmationPoll.isNegative()) {
       throw new IllegalArgumentException("confirmation timeout and poll must not be negative");
     }
@@ -51,9 +97,40 @@ public record ExactCardanoFacilitatorOptions(
       // Settle converts both after broadcast, where an overflow must not surface.
       confirmationTimeout.toMillis();
       confirmationPoll.toMillis();
+      lookupTimeout.toNanos();
     } catch (ArithmeticException e) {
       throw new IllegalArgumentException("confirmation timeout and poll must fit in milliseconds", e);
     }
+  }
+
+  /**
+   * The options without a slot-configuration override.
+   *
+   * @param settlementStore the claim store, or {@code null} for the in-memory default
+   * @param acceptMempool whether mempool evidence may settle a {@code -1} policy
+   * @param confirmationTimeout how long one settle waits, or {@code null} for the default
+   * @param confirmationPoll the evidence poll interval, or {@code null} for the default
+   * @param registryValidator the Masumi registry validator, or {@code null}
+   * @param deploymentValidator the Masumi deployment validator, or {@code null}
+   * @param clock the clock, or {@code null} for the system clock
+   */
+  public ExactCardanoFacilitatorOptions(SettlementClaimStore settlementStore, boolean acceptMempool,
+      Duration confirmationTimeout, Duration confirmationPoll,
+      MasumiRegistryValidator registryValidator, MasumiDeploymentValidator deploymentValidator,
+      Clock clock) {
+    this(settlementStore, acceptMempool, confirmationTimeout, confirmationPoll, registryValidator,
+        deploymentValidator, clock, null, null, 0, null, null, 0);
+  }
+
+  /**
+   * The slot configuration of the network this scheme serves: the override, else the network's
+   * built-in one.
+   *
+   * @param network the network
+   * @return the slot configuration
+   */
+  public SlotConfig slotConfigFor(String network) {
+    return slotConfig != null ? slotConfig : CardanoNetworks.slotConfig(network);
   }
 
   /**
@@ -83,6 +160,12 @@ public record ExactCardanoFacilitatorOptions(
     private MasumiRegistryValidator registryValidator;
     private MasumiDeploymentValidator deploymentValidator;
     private Clock clock;
+    private SlotConfig slotConfig;
+    private Set<String> masumiAllowedScriptHashes;
+    private ScriptDatumPolicy scriptDatumPolicy;
+    private int maxTransactionBytes;
+    private Duration lookupTimeout;
+    private int maxInputLookups;
 
     private Builder() {}
 
@@ -164,6 +247,73 @@ public record ExactCardanoFacilitatorOptions(
     }
 
     /**
+     * Sets the slot configuration of the network this scheme serves (e.g. a private testnet);
+     * {@code null} keeps the network's built-in one.
+     *
+     * @param v the slot configuration
+     * @return this builder
+     */
+    public Builder slotConfig(SlotConfig v) {
+      slotConfig = v;
+      return this;
+    }
+
+    /**
+     * Bounds the chain lookups of one verification.
+     *
+     * @param v the bound, or {@code null} for the default (10 s)
+     * @return this builder
+     */
+    public Builder lookupTimeout(Duration v) {
+      lookupTimeout = v;
+      return this;
+    }
+
+    /**
+     * Bounds how many inputs one verification resolves on chain.
+     *
+     * @param v the bound, or 0 for the default (64)
+     * @return this builder
+     */
+    public Builder maxInputLookups(int v) {
+      maxInputLookups = v;
+      return this;
+    }
+
+    /**
+     * Pins the Masumi escrow scripts accepted on this network.
+     *
+     * @param v the script hashes (hex), or empty for the default rules
+     * @return this builder
+     */
+    public Builder masumiAllowedScriptHashes(Set<String> v) {
+      masumiAllowedScriptHashes = v;
+      return this;
+    }
+
+    /**
+     * Sets how strictly a script payment's datum is checked.
+     *
+     * @param v the policy, or {@code null} for {@link ScriptDatumPolicy#REFERENCE}
+     * @return this builder
+     */
+    public Builder scriptDatumPolicy(ScriptDatumPolicy v) {
+      scriptDatumPolicy = v;
+      return this;
+    }
+
+    /**
+     * Bounds the transaction size verify accepts.
+     *
+     * @param v the bound in bytes, or 0 for the default (64 KiB)
+     * @return this builder
+     */
+    public Builder maxTransactionBytes(int v) {
+      maxTransactionBytes = v;
+      return this;
+    }
+
+    /**
      * Builds the options.
      *
      * @return the options
@@ -171,7 +321,8 @@ public record ExactCardanoFacilitatorOptions(
     public ExactCardanoFacilitatorOptions build() {
       return new ExactCardanoFacilitatorOptions(
           settlementStore, acceptMempool, confirmationTimeout, confirmationPoll, registryValidator,
-          deploymentValidator, clock);
+          deploymentValidator, clock, slotConfig, lookupTimeout, maxInputLookups, masumiAllowedScriptHashes,
+          scriptDatumPolicy, maxTransactionBytes);
     }
   }
 }

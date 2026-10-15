@@ -108,4 +108,73 @@ class ExtensionPointFailureTest {
             .confirmationPoll(Duration.ofSeconds(Long.MAX_VALUE)).build())
         .isInstanceOf(IllegalArgumentException.class);
   }
+
+  @Test
+  void chainLookupsBeyondTheBudgetAreALookupFailure() {
+    StubBackend slow = new StubBackend() {
+      @Override
+      public org.x402.mechanisms.cardano.chain.UtxoSnapshot getUtxo(String ref, String network) {
+        try {
+          Thread.sleep(40);
+        } catch (InterruptedException e) {
+          Thread.currentThread().interrupt();
+        }
+        return super.getUtxo(ref, network);
+      }
+    };
+    slow.unspent(HASH + "#0", PAYER, 10_000_000, Map.of());
+    for (int i = 1; i < 6; i++) {
+      slow.unspent(HASH + "#" + i, PAYER, 1_000_000, Map.of());
+    }
+    TxBuilder tx = TxBuilder.create();
+    for (int i = 0; i < 6; i++) {
+      tx.input(HASH, i);
+    }
+    String signed = tx.output(PAY_TO, 2_000_000, Map.of(), null, false)
+        .output(PAYER, 12_800_000, Map.of(), null, false)
+        .fee(200_000).ttl(slow.slot + 300).signWith(TxBuilder.WALLET).build();
+    Map<String, Object> p = new LinkedHashMap<>();
+    p.put("transaction", signed);
+    p.put("nonce", HASH + "#0");
+    var scheme = new ExactCardanoFacilitatorScheme(slow, null, ExactCardanoFacilitatorOptions.builder()
+        .confirmationTimeout(Duration.ofMillis(5)).confirmationPoll(Duration.ofMillis(1))
+        .lookupTimeout(Duration.ofMillis(100)).build());
+
+    VerifyResponse verdict = scheme.verify(new PaymentPayload(2, null, REQ, p, null), REQ,
+        FacilitatorContext.EMPTY);
+
+    assertThat(verdict.invalidReason()).isEqualTo(org.x402.mechanisms.cardano.CardanoErrors.CHAIN_LOOKUP_FAILED);
+  }
+
+  @Test
+  void moreInputsThanTheLookupBudgetAreALookupFailureBeforeAnyLookup() {
+    java.util.concurrent.atomic.AtomicInteger lookups = new java.util.concurrent.atomic.AtomicInteger();
+    StubBackend counting = new StubBackend() {
+      @Override
+      public org.x402.mechanisms.cardano.chain.UtxoSnapshot getUtxo(String ref, String network) {
+        lookups.incrementAndGet();
+        return super.getUtxo(ref, network);
+      }
+    };
+    TxBuilder tx = TxBuilder.create();
+    for (int i = 0; i < 3; i++) {
+      counting.unspent(HASH + "#" + i, PAYER, 5_000_000, Map.of());
+      tx.input(HASH, i);
+    }
+    String signed = tx.output(PAY_TO, 2_000_000, Map.of(), null, false)
+        .output(PAYER, 12_800_000, Map.of(), null, false)
+        .fee(200_000).ttl(counting.slot + 300).signWith(TxBuilder.WALLET).build();
+    Map<String, Object> p = new LinkedHashMap<>();
+    p.put("transaction", signed);
+    p.put("nonce", HASH + "#0");
+    var scheme = new ExactCardanoFacilitatorScheme(counting, null, ExactCardanoFacilitatorOptions.builder()
+        .confirmationTimeout(Duration.ofMillis(5)).confirmationPoll(Duration.ofMillis(1))
+        .maxInputLookups(2).build());
+
+    VerifyResponse verdict = scheme.verify(new PaymentPayload(2, null, REQ, p, null), REQ,
+        FacilitatorContext.EMPTY);
+
+    assertThat(verdict.invalidReason()).isEqualTo(org.x402.mechanisms.cardano.CardanoErrors.CHAIN_LOOKUP_FAILED);
+    assertThat(lookups.get()).isZero();
+  }
 }

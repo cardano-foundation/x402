@@ -1,11 +1,13 @@
 package org.x402.mechanisms.cardano.exact.masumi;
 
+import com.bloxbean.cardano.client.common.model.SlotConfig;
 import java.math.BigInteger;
 import java.time.Clock;
 import java.util.HexFormat;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
+import java.util.Set;
 import org.x402.core.types.PaymentRequirements;
 import org.x402.core.types.ResourceInfo;
 import org.x402.mechanisms.cardano.CardanoAddresses;
@@ -71,6 +73,9 @@ public final class MasumiVerifier {
    * @param maxDeadlineHorizonMs buyer policy: how far past now the last deadline may sit, or
    *     {@code null} to skip (verifiers leave it unset)
    * @param clock the clock for the horizon
+   * @param allowedScriptHashes escrow script hashes accepted on the network; when non-empty every
+   *     other escrow is refused (the canonical one included) and an allowlisted custom deployment
+   *     needs no approval. Empty or {@code null} keeps the default rules.
    */
   public record AuthorizationOptions(
       MasumiRegistryValidator validateRegistryClaim,
@@ -79,11 +84,46 @@ public final class MasumiVerifier {
       Map<String, Object> localCommitmentContent,
       boolean requireAllPartContent,
       BigInteger maxDeadlineHorizonMs,
-      Clock clock) {
+      Clock clock,
+      Set<String> allowedScriptHashes) {
 
     /** No validators, no local content, no horizon. */
     public static final AuthorizationOptions NONE =
         new AuthorizationOptions(null, null, null, null, false, null, Clock.systemUTC());
+
+    /** Lowercases the allowlist. */
+    public AuthorizationOptions {
+      allowedScriptHashes = lowercase(allowedScriptHashes);
+    }
+
+    /**
+     * Options without an allowlist.
+     *
+     * @param validateRegistryClaim see the record
+     * @param resource see the record
+     * @param validateCustomDeployment see the record
+     * @param localCommitmentContent see the record
+     * @param requireAllPartContent see the record
+     * @param maxDeadlineHorizonMs see the record
+     * @param clock see the record
+     */
+    public AuthorizationOptions(MasumiRegistryValidator validateRegistryClaim, ResourceInfo resource,
+        MasumiDeploymentValidator validateCustomDeployment, Map<String, Object> localCommitmentContent,
+        boolean requireAllPartContent, BigInteger maxDeadlineHorizonMs, Clock clock) {
+      this(validateRegistryClaim, resource, validateCustomDeployment, localCommitmentContent,
+          requireAllPartContent, maxDeadlineHorizonMs, clock, Set.of());
+    }
+  }
+
+  private static Set<String> lowercase(Set<String> hashes) {
+    if (hashes == null) {
+      return Set.of();
+    }
+    Set<String> lower = new java.util.HashSet<>();
+    for (String hash : hashes) {
+      lower.add(hash.toLowerCase(Locale.ROOT));
+    }
+    return Set.copyOf(lower);
   }
 
   /**
@@ -94,13 +134,55 @@ public final class MasumiVerifier {
    * @param validateRegistryClaim registry validator, or {@code null}
    * @param resource the protected resource, or {@code null}
    * @param validateCustomDeployment deployment validator, or {@code null}
+   * @param slotConfig the slot configuration of the network, or {@code null} for the built-in one
+   * @param allowedScriptHashes the network's escrow allowlist (see {@link AuthorizationOptions})
    */
   public record LockContext(
       String payer,
       BigInteger coinsPerUtxoByte,
       MasumiRegistryValidator validateRegistryClaim,
       ResourceInfo resource,
-      MasumiDeploymentValidator validateCustomDeployment) {}
+      MasumiDeploymentValidator validateCustomDeployment,
+      SlotConfig slotConfig,
+      Set<String> allowedScriptHashes) {
+
+    /** Lowercases the allowlist. */
+    public LockContext {
+      allowedScriptHashes = lowercase(allowedScriptHashes);
+    }
+
+    /**
+     * A context without an allowlist.
+     *
+     * @param payer the payer
+     * @param coinsPerUtxoByte the protocol parameter, or {@code null}
+     * @param validateRegistryClaim the registry validator, or {@code null}
+     * @param resource the resource
+     * @param validateCustomDeployment the deployment validator, or {@code null}
+     * @param slotConfig the slot configuration, or {@code null}
+     */
+    public LockContext(String payer, BigInteger coinsPerUtxoByte,
+        MasumiRegistryValidator validateRegistryClaim, ResourceInfo resource,
+        MasumiDeploymentValidator validateCustomDeployment, SlotConfig slotConfig) {
+      this(payer, coinsPerUtxoByte, validateRegistryClaim, resource, validateCustomDeployment, slotConfig,
+          Set.of());
+    }
+
+    /**
+     * A context using the network's built-in slot configuration.
+     *
+     * @param payer the payer
+     * @param coinsPerUtxoByte the protocol parameter, or {@code null}
+     * @param validateRegistryClaim the registry validator, or {@code null}
+     * @param resource the resource
+     * @param validateCustomDeployment the deployment validator, or {@code null}
+     */
+    public LockContext(String payer, BigInteger coinsPerUtxoByte,
+        MasumiRegistryValidator validateRegistryClaim, ResourceInfo resource,
+        MasumiDeploymentValidator validateCustomDeployment) {
+      this(payer, coinsPerUtxoByte, validateRegistryClaim, resource, validateCustomDeployment, null);
+    }
+  }
 
   private static Check verifyTermDeadlines(MasumiTerms terms, BigInteger maxDeadlineHorizonMs, Clock clock) {
     BigInteger externalDisputeUnlockTime = new BigInteger(terms.externalDisputeUnlockTime());
@@ -187,7 +269,15 @@ public final class MasumiVerifier {
       return Authorization.fail(CardanoErrors.MASUMI_SELLER_SIGNATURE, null);
     }
 
-    if (extra.deployment() != null) {
+    // Operator policy runs only once the seller is authenticated.
+    Set<String> allowed = options.allowedScriptHashes();
+    String escrowHash = CardanoAddresses.scriptPaymentCredentialHex(requirements.payTo());
+    boolean allowlisted = escrowHash != null && allowed.contains(escrowHash.toLowerCase(Locale.ROOT));
+    if (!allowed.isEmpty() && !allowlisted) {
+      return Authorization.fail(
+          CardanoErrors.MASUMI_CONTRACT_MISMATCH, "escrow script " + escrowHash + " is not on the allowlist");
+    }
+    if (extra.deployment() != null && !allowlisted) {
       if (options.validateCustomDeployment() == null) {
         return Authorization.fail(
             CardanoErrors.MASUMI_DEPLOYMENT, "custom deployment requires explicit application approval");
@@ -344,7 +434,8 @@ public final class MasumiVerifier {
                 null,
                 false,
                 null,
-                Clock.systemUTC()));
+                Clock.systemUTC(),
+                context.allowedScriptHashes()));
     if (!authorization.ok()) {
       return authorization.check();
     }
@@ -374,7 +465,9 @@ public final class MasumiVerifier {
     if (decoded.ttlSlot() == null) {
       return Check.fail(CardanoErrors.MASUMI_DEADLINE, "no validity upper bound");
     }
-    if (CardanoNetworks.slotToPosixMs(requirements.network(), decoded.ttlSlot()).compareTo(view.payByTime()) > 0) {
+    SlotConfig slots = context.slotConfig() != null
+        ? context.slotConfig() : CardanoNetworks.slotConfig(requirements.network());
+    if (CardanoNetworks.slotToPosixMs(slots, decoded.ttlSlot()).compareTo(view.payByTime()) > 0) {
       return Check.fail(CardanoErrors.MASUMI_DEADLINE, "TTL is after pay_by_time");
     }
 

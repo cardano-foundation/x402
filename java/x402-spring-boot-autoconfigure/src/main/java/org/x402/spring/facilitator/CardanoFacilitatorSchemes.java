@@ -3,8 +3,11 @@ package org.x402.spring.facilitator;
 import java.time.Clock;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
+import java.util.LinkedHashSet;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
+import java.util.Set;
 import org.springframework.beans.factory.ObjectProvider;
 import org.x402.mechanisms.cardano.CardanoNetworks;
 import org.x402.mechanisms.cardano.chain.BlockfrostChainBackend;
@@ -53,11 +56,19 @@ public final class CardanoFacilitatorSchemes {
     for (int i = 0; i < entries.size(); i++) {
       X402FacilitatorServerProperties.Network entry = entries.get(i);
       String where = "x402.facilitator-server.cardano.networks[" + i + "]";
-      String network = entry == null ? null : entry.network();
-      if (!CardanoNetworks.isCardanoNetwork(network)) {
-        throw new X402ConfigurationException(where + ".network: " + network
+      String configured = entry == null ? null : entry.network();
+      if (!CardanoNetworks.isCardanoNetwork(configured)) {
+        throw new X402ConfigurationException(where + ".network: " + configured
             + " is not a Cardano network");
       }
+      // A CIP-34 alias configures its canonical network; naming one network twice would give it
+      // two schemes and two backends.
+      String network = CardanoNetworks.normalize(configured);
+      if (schemes.containsKey(network)) {
+        throw new X402ConfigurationException(where + ".network: " + configured + " names " + network
+            + ", which is already configured");
+      }
+      com.bloxbean.cardano.client.common.model.SlotConfig slots = slotConfig(where, entry.slotConfig());
       CardanoChainBackend backend = NetworkBeans.resolve(network, entries.size(), networkBeans,
           b -> b.chainBackend(network), backendBean, "CardanoChainBackend");
       if (backend == null) {
@@ -70,7 +81,10 @@ public final class CardanoFacilitatorSchemes {
               + "set blockfrost.base-url, or define a CardanoChainBackend bean)");
         }
         backend = new BlockfrostChainBackend(BlockfrostChainBackend.Config.builder()
-            .network(network).projectId(projectId).baseUrl(baseUrl).clock(clock).build());
+            .network(network).projectId(projectId).baseUrl(baseUrl).clock(clock)
+            .slotConfig(slots).networkMagic(networkMagic(network, entry.networkMagic()))
+            .maxTipAge(cardano.maxTipAge())
+            .evaluation(entry.evaluation() == null || entry.evaluation()).build());
       }
       CardanoFacilitatorSigner signer = entry.mnemonic() == null || entry.mnemonic().isBlank()
           ? null : CardanoFacilitatorSigner.fromMnemonic(entry.mnemonic(), network);
@@ -78,11 +92,44 @@ public final class CardanoFacilitatorSchemes {
           .settlementStore(store).acceptMempool(cardano.acceptMempool())
           .confirmationTimeout(cardano.confirmationTimeout())
           .confirmationPoll(cardano.confirmationPoll())
-          .registryValidator(registry).deploymentValidator(deployment).clock(clock).build();
+          .registryValidator(registry).deploymentValidator(deployment).clock(clock)
+          .slotConfig(slots).lookupTimeout(cardano.lookupTimeout())
+          .maxInputLookups(cardano.maxInputLookups())
+          .scriptDatumPolicy(cardano.scriptDatumPolicy())
+          .maxTransactionBytes(cardano.maxTxBytes())
+          .masumiAllowedScriptHashes(scriptHashes(where, entry.masumiAllowedScriptHashes())).build();
       backends.put(network, backend);
       options.put(network, opts);
       schemes.put(network, new ExactCardanoFacilitatorScheme(backend, signer, opts));
     }
+  }
+
+  private static Integer networkMagic(String network, Integer configured) {
+    if (configured != null) {
+      return configured;
+    }
+    String n = CardanoNetworks.normalize(network);
+    if (CardanoNetworks.MAINNET.equals(n)) {
+      return 764_824_073;
+    }
+    if (CardanoNetworks.PREPROD.equals(n)) {
+      return 1;
+    }
+    return CardanoNetworks.PREVIEW.equals(n) ? 2 : null;
+  }
+
+  private static com.bloxbean.cardano.client.common.model.SlotConfig slotConfig(String where,
+      X402FacilitatorServerProperties.SlotConfig c) {
+    if (c == null || (c.zeroTime() == null && c.zeroSlot() == null && c.slotLength() == null)) {
+      return null;
+    }
+    if (c.zeroTime() == null || c.zeroSlot() == null || c.slotLength() == null
+        || c.slotLength() <= 0 || c.zeroSlot() < 0) {
+      throw new X402ConfigurationException(where + ".slot-config needs zero-time, zero-slot and a "
+          + "positive slot-length");
+    }
+    return new com.bloxbean.cardano.client.common.model.SlotConfig(
+        c.slotLength(), c.zeroSlot(), c.zeroTime());
   }
 
   /**
@@ -102,6 +149,22 @@ public final class CardanoFacilitatorSchemes {
    */
   public ExactCardanoFacilitatorScheme forNetwork(String network) {
     return schemes.get(network);
+  }
+
+  /** The allowlist as lowercase 28-byte hex hashes; anything else fails startup. */
+  private static Set<String> scriptHashes(String where, List<String> hashes) {
+    Set<String> result = new LinkedHashSet<>();
+    if (hashes == null) {
+      return result;
+    }
+    for (String hash : hashes) {
+      if (hash == null || !hash.matches("[0-9a-fA-F]{56}")) {
+        throw new X402ConfigurationException(where + ".masumi-allowed-script-hashes: " + hash
+            + " is not a 28-byte hex script hash");
+      }
+      result.add(hash.toLowerCase(Locale.ROOT));
+    }
+    return result;
   }
 
   /**

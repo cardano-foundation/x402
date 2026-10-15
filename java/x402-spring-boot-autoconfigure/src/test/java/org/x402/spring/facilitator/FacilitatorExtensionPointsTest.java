@@ -29,6 +29,7 @@ import org.x402.http.facilitator.FacilitatorHttpHandler;
 import org.x402.mechanisms.cardano.chain.BlockfrostChainBackend;
 import org.x402.mechanisms.cardano.chain.CardanoChainBackend;
 import org.x402.mechanisms.cardano.exact.facilitator.ExactCardanoFacilitatorOptions;
+import org.x402.mechanisms.cardano.exact.facilitator.ScriptDatumPolicy;
 import org.x402.mechanisms.cardano.exact.facilitator.InMemorySettlementClaimStore;
 import org.x402.mechanisms.cardano.exact.facilitator.SettlementClaimStore;
 import org.x402.mechanisms.cardano.exact.masumi.MasumiDeploymentValidator;
@@ -204,5 +205,81 @@ class FacilitatorExtensionPointsTest {
     new ApplicationContextRunner()
         .withConfiguration(AutoConfigurations.of(X402FacilitatorServerAutoConfiguration.class))
         .run(ctx -> assertThat(ctx).doesNotHaveBean(X402Facilitator.class));
+  }
+
+  @Test
+  void aSlotConfigReachesTheNetworksOptions() {
+    runner().withPropertyValues(
+            "x402.facilitator-server.cardano.networks[0].slot-config.zero-time=1000000",
+            "x402.facilitator-server.cardano.networks[0].slot-config.zero-slot=10",
+            "x402.facilitator-server.cardano.networks[0].slot-config.slot-length=2000")
+        .run(ctx -> {
+          assertThat(ctx).hasNotFailed();
+          var slots = options(ctx).slotConfigFor(PREPROD);
+          assertThat(slots.getZeroTime()).isEqualTo(1_000_000L);
+          assertThat(slots.getZeroSlot()).isEqualTo(10L);
+          assertThat(slots.getSlotLength()).isEqualTo(2000);
+        });
+  }
+
+  @Test
+  void evaluationCanBeTurnedOffPerNetwork() {
+    runner().run(ctx -> assertThat(((BlockfrostChainBackend) ctx.getBean(CardanoFacilitatorSchemes.class)
+        .backend(PREPROD)).config().evaluation()).isTrue());
+    runner().withPropertyValues("x402.facilitator-server.cardano.networks[0].evaluation=false")
+        .run(ctx -> assertThat(((BlockfrostChainBackend) ctx.getBean(CardanoFacilitatorSchemes.class)
+            .backend(PREPROD)).config().evaluation()).isFalse());
+  }
+
+  @Test
+  void aMasumiAllowlistReachesTheNetworksOptions() {
+    String hash = "AB".repeat(28);
+    runner().withPropertyValues("x402.facilitator-server.cardano.networks[0].masumi-allowed-script-hashes=" + hash)
+        .run(ctx -> assertThat(options(ctx).masumiAllowedScriptHashes()).containsExactly("ab".repeat(28)));
+    runner().run(ctx -> assertThat(options(ctx).masumiAllowedScriptHashes()).isEmpty());
+  }
+
+  @Test
+  void aMalformedMasumiScriptHashFailsStartup() {
+    runner().withPropertyValues("x402.facilitator-server.cardano.networks[0].masumi-allowed-script-hashes=abc")
+        .run(ctx -> assertThat(ctx).hasFailed());
+  }
+
+  @Test
+  void theScriptDatumPolicyBindsFromItsKebabName() {
+    runner().run(ctx -> assertThat(options(ctx).scriptDatumPolicy()).isEqualTo(ScriptDatumPolicy.REFERENCE));
+    runner().withPropertyValues("x402.facilitator-server.cardano.script-datum-policy=v3-optional")
+        .run(ctx -> assertThat(options(ctx).scriptDatumPolicy()).isEqualTo(ScriptDatumPolicy.V3_OPTIONAL));
+  }
+
+  @Test
+  void aCip34AliasConfiguresTheCanonicalNetworkAndRoutesBothForms() {
+    new ApplicationContextRunner()
+        .withConfiguration(AutoConfigurations.of(X402FacilitatorServerAutoConfiguration.class))
+        .withPropertyValues(
+            "x402.facilitator-server.enabled=true",
+            "x402.facilitator-server.cardano.networks[0].network=cip34:0-1",
+            "x402.facilitator-server.cardano.networks[0].blockfrost.project-id=k")
+        .run(ctx -> {
+          assertThat(ctx).hasNotFailed();
+          assertThat(ctx.getBean(CardanoFacilitatorSchemes.class).networks()).containsExactly(PREPROD);
+          assertThat(ctx.getBean(X402Facilitator.class).getSupported().kinds())
+              .extracting(k -> k.network()).contains(PREPROD, "cip34:0-1");
+        });
+  }
+
+  @Test
+  void aNetworkConfiguredByIdAndAliasFailsStartup() {
+    runner().withPropertyValues(
+            "x402.facilitator-server.cardano.networks[1].network=cip34:0-1",
+            "x402.facilitator-server.cardano.networks[1].blockfrost.project-id=k2")
+        .run(ctx -> assertThat(ctx).hasFailed());
+  }
+
+  @Test
+  void aPartialSlotConfigFailsStartup() {
+    runner().withPropertyValues(
+            "x402.facilitator-server.cardano.networks[0].slot-config.slot-length=2000")
+        .run(ctx -> assertThat(ctx).hasFailed());
   }
 }

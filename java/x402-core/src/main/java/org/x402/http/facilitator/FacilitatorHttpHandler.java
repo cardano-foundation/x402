@@ -1,7 +1,9 @@
 package org.x402.http.facilitator;
 
 import com.fasterxml.jackson.core.JsonProcessingException;
+import com.fasterxml.jackson.core.StreamReadConstraints;
 import com.fasterxml.jackson.databind.JsonNode;
+import com.fasterxml.jackson.databind.ObjectMapper;
 import java.io.IOException;
 import java.util.Locale;
 import java.util.Map;
@@ -263,6 +265,23 @@ public final class FacilitatorHttpHandler {
     }
   }
 
+  /**
+   * Parses request bodies: the shared x402 configuration with bounds on nesting (64), string
+   * length (200 000) and number length (1000), so a hostile body costs bounded work. The shared
+   * mapper, used for responses and provider answers, is unchanged.
+   */
+  private static final ObjectMapper REQUEST_MAPPER = requestMapper();
+
+  private static ObjectMapper requestMapper() {
+    ObjectMapper mapper = X402Json.mapper().copy();
+    mapper.getFactory().setStreamReadConstraints(StreamReadConstraints.builder()
+        .maxNestingDepth(64)
+        .maxStringLength(200_000)
+        .maxNumberLength(1000)
+        .build());
+    return mapper;
+  }
+
   /** A parsed verify/settle body. */
   private record PaidRequest(PaymentPayload payload, PaymentRequirements requirements) {
 
@@ -272,7 +291,7 @@ public final class FacilitatorHttpHandler {
       }
       JsonNode root;
       try {
-        root = X402Json.mapper().readTree(body);
+        root = REQUEST_MAPPER.readTree(body);
       } catch (JsonProcessingException e) {
         throw new BadRequestException("Invalid JSON body");
       } catch (IOException e) {
@@ -304,7 +323,7 @@ public final class FacilitatorHttpHandler {
         throw new BadRequestException("Invalid " + field + ": must be a JSON object");
       }
       try {
-        return X402Json.convert(node, type);
+        return REQUEST_MAPPER.convertValue(node, type);
       } catch (IllegalArgumentException e) {
         throw new BadRequestException("Invalid " + field + ": does not match "
             + type.getSimpleName());

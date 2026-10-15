@@ -96,8 +96,10 @@ class ReplayGuardTest {
 
     SettleResponse replay = settle(scheme);
 
-    assertThat(replay.success()).isFalse();
-    assertThat(replay.errorReason()).isEqualTo("duplicate_settlement");
+    // Deliberate requirement change (D1, user-approved 2026-10-14): was duplicate_settlement; a
+    // same-binding replay of a settled payment succeeds again on freshly read evidence and is
+    // never broadcast again.
+    assertThat(replay.success()).isTrue();
     assertThat(store.claimSettlement(new SettlementClaim(hash, "probe", null, null))).isEqualTo(SettlementClaimResult.SETTLED);
     assertThat(chain.submissions()).containsExactly(tx);
   }
@@ -111,8 +113,10 @@ class ReplayGuardTest {
     assertThat(verify(scheme).invalidReason()).isEqualTo("duplicate_settlement");
 
     store.markSubmitted(hash, "worker-a");
-    // Deliberate requirement change (replay-guard amendment): was duplicate_settlement; a
-    // submitted claim now verifies as broadcast so the spec's paid retry after pending works.
+    // A submitted claim verifies as broadcast (the spec's paid retry after pending) only with
+    // proof of the broadcast; without ledger or mempool evidence it stays pending.
+    assertThat(verify(scheme).invalidReason()).isEqualTo("settlement_pending");
+    chain.include(tx, 0);
     assertThat(verify(scheme).isValid()).isTrue();
   }
 
@@ -158,11 +162,14 @@ class ReplayGuardTest {
       if (response.success()) {
         successes++;
       } else {
-        assertThat(response.errorReason()).isEqualTo("duplicate_settlement");
+        // Deliberate requirement change (D1/D3, user-approved 2026-10-14): was
+        // duplicate_settlement; a retry that loses the race is pending, never a duplicate.
+        assertThat(response.errorReason()).isEqualTo("settlement_pending");
       }
     }
     pool.shutdown();
-    assertThat(successes).isEqualTo(1);
+    // Was exactly one success; every retry re-read the evidence, so each may report it (D1).
+    assertThat(successes).isGreaterThanOrEqualTo(1);
     assertThat(chain.submissions()).containsExactly(tx);
   }
 

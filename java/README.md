@@ -553,8 +553,12 @@ Rate limiting is up to you, too.
 
 ### Replays and several instances
 
-- **A landed payment cannot be replayed.** The duplicate-settlement guard claims each transaction before it is broadcast. A transaction this facilitator reported as settled stays settled: verifying or settling it again gives `duplicate_settlement`. Unlike the TS facilitator, public verify never accepts a transaction just because it is already on chain. A client resuming after `settlement_pending` with the same signature gets the same transaction resumed, never a second one.
-- **The default claim store is in memory: one instance only.** It holds at most 4096 claims, and keeps submitted and settled ones until the transaction's validity window has passed (plus 120 s). When it is full and nothing can be evicted, new settles are refused (`capacity-exceeded`, reported as a failed settle). For production, use a shared, persistent store. Running several facilitator instances behind a load balancer needs a **shared `SettlementClaimStore` bean** (JDBC, Redis): `claimSettlement`, `markSubmitted`, `markSettled`, `markRejected`, `releaseClaim` and `claimState`, each atomic across instances. Without one, two instances can each accept the same in-flight transaction.
+- **One transaction pays for one thing.** Settle claims each transaction before broadcasting it, bound to its requirements and resource URL (without the confirmation policy). The same transaction under other requirements or another resource gets `duplicate_settlement`. Verifying a settled transaction again gives `duplicate_settlement`; public verify never accepts a transaction just because it is on chain.
+- **A transaction is broadcast at most once.** After verification, the claim passes a broadcast fence; from then on it is never handed to another caller. A retry after `settlement_pending` (same signature, same requirements) resumes observing that transaction and never sends it again. A retry of a settled payment answers success again only after re-reading the ledger evidence at the requested depth: after a rollback it is pending.
+- **An unclear outcome is pending, never failed.** A submission whose outcome is unknown, another settle of the same transaction in progress, or a store that could not record the result answer `settlement_pending`, so the client retries instead of paying again. Only when the backend proves the transaction never left the process (Blockfrost's provider check failed before the request) is the claim released, and the retry broadcasts it.
+- **The default claim store is in memory: one instance only.** It holds at most 4096 claims, and keeps broadcast and settled ones until the transaction's validity window has passed (plus 120 s). When it is full and nothing can be evicted, new settles are refused (`capacity-exceeded`, reported as a failed settle). Several facilitator instances need a **shared `SettlementClaimStore` bean** (JDBC, Redis) whose operations are atomic across instances. Implement `claimDetails` and `beginSubmission` too: without them a settled payment is never replayed, and a claim left by a crash after the broadcast stays pending. A store that reclaims stale claims must implement `beginSubmission`, and a delegating store must forward every method.
+- **A `SettlementOverrides` amount that varies per request** changes the binding, so a retry of the same payment becomes a duplicate.
+- **Use one network name per payment.** The binding covers the network string as sent, so a settle under `cip34:0-1` and its retry under `cardano:preprod` are two bindings: the retry is a duplicate.
 
 ### What you can replace
 
@@ -661,7 +665,16 @@ Every key with its default is in one file: [`application-reference.yml`](../exam
 | `x402.facilitator-server.cardano.accept-mempool` | `false` | |
 | `x402.facilitator-server.cardano.confirmation-timeout` | `75s` | Warns above 85 s. |
 | `x402.facilitator-server.cardano.confirmation-poll` | `5s` | |
-| `x402.facilitator-server.cardano.networks[].{network, blockfrost.project-id, blockfrost.base-url, mnemonic}` | base URL per network | One facilitator scheme per network. |
+| `x402.facilitator-server.cardano.max-tip-age` | `5m` | Chain reads are refused when the provider's latest block is older (or more than 30 s ahead). |
+| `x402.facilitator-server.cardano.lookup-timeout` | `10s` | Budget for the chain lookups of one verification. |
+| `x402.facilitator-server.cardano.max-input-lookups` | `64` | A transaction with more inputs is a lookup failure before any lookup. |
+| `x402.facilitator-server.cardano.max-tx-bytes` | `65536` | The largest transaction verify accepts; the protocol's `maxTxSize` lowers it further. |
+| `x402.facilitator-server.cardano.script-datum-policy` | `reference` | `reference` refuses only a Plutus V1 inline datum; `strict` needs the datum kind each Plutus version can spend; `v3-optional` also lets Plutus V3 go without one. |
+| `x402.facilitator-server.cardano.networks[].{network, blockfrost.project-id, blockfrost.base-url, mnemonic}` | base URL per network | One facilitator scheme per network. A CIP-34 alias configures its canonical network; naming one network twice fails startup. |
+| `x402.facilitator-server.cardano.networks[].network-magic` | `764824073`, `1`, `2` | The genesis magic the provider must report. |
+| `x402.facilitator-server.cardano.networks[].slot-config.{zero-time, zero-slot, slot-length}` | built in | Private networks; all three together. |
+| `x402.facilitator-server.cardano.networks[].evaluation` | `true` | `false` for a provider without transaction evaluation (yaci-store): verify skips the dry-run. |
+| `x402.facilitator-server.cardano.networks[].masumi-allowed-script-hashes` | empty | When set, Masumi escrows not on the list are refused (the canonical one included), and listed custom deployments need no `MasumiDeploymentValidator`. |
 
 `x402.routes.*.extensions.bazaar` accepts `discoverable`, `method`, `input`, `input-schema`, `path-params`, `path-params-schema`, `body-type` and `output.{example, schema}`.
 
@@ -675,7 +688,15 @@ The wire format (headers, JSON, status codes, route syntax) follows TS. Behaviou
 | Pinning an option to a facilitator, verify failover | not available | available (server-side only, invisible on the wire) |
 | Settle after a facilitator error | may move on to the next facilitator | never; settle goes to the verifier |
 | Facilitator HTTP server | hand-written in each example | `x402.facilitator-server.*` |
-| Already-settled Cardano transaction sent again | public verify accepts it once it is on chain | `duplicate_settlement` |
+| Already-settled Cardano transaction sent again | public verify accepts it once it is on chain | verify: `duplicate_settlement`; settle with the same requirements and resource: success again after re-reading the evidence; otherwise `duplicate_settlement` |
+| Cardano submission with an unknown outcome (transport error, wrong hash echoed) | `exact_cardano_settlement_failed` | `settlement_pending`; the retry resumes and never rebroadcasts |
+| Second settle of a transaction already being settled | `duplicate_settlement` | `settlement_pending` |
+| Retry of a broadcast payment, verify | ledger evidence alone counts | needs ledger or mempool evidence, then re-checks recipient, amount, asset and the payer recorded at broadcast; the nonce owner must have signed |
+| "Expired" answer for a pending settlement | wall clock past the TTL | only once the provider's latest block is past the TTL and a successful read shows the transaction absent |
+| Definitive Cardano rejection | provider error text | only an HTTP 400 whose every ledger rule is decided by the transaction itself; `BadInputsUTxO` never is |
+| Blockfrost provider on another network or with a stale tip | used | refused before any read or submission |
+| `payTo`, change outputs, aux data, required signers, body fields, size | not checked | `payTo` and every output on the requirements' network, min-UTxO on every output, required signers witnessed, only plain-payment body fields without a full validator, protocol `maxTxSize`, auxiliary data committed and metadata-only, `maxTimeoutSeconds > 0` |
+| Facilitator request body | unbounded | nesting 64, strings 200 000, numbers 1000 digits |
 | Masumi terms storage fails | the payment proceeds | the payment is refused |
 | Cardano transaction without a TTL | accepted | refused (`ttl_too_far`): `maxTimeoutSeconds` cannot bound it, and its claim could never expire |
 | Cardano input not signed by its owner | accepted by verify (the node rejects it later) | refused (`phase1_invalid`); script-, Byron- or unknown-owned inputs need a complete phase-1 validator |

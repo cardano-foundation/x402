@@ -187,7 +187,9 @@ class StoreFailureOutcomesTest {
 
     SettleResponse response = settle(scheme(chain), p);
 
-    assertThat(response.errorReason()).isEqualTo(CardanoErrors.SETTLEMENT_FAILED);
+    // Deliberate requirement change (D2, user-approved 2026-10-14): was SETTLEMENT_FAILED; an
+    // unknown submit outcome is pending even when the store write fails.
+    assertThat(response.errorReason()).isEqualTo(CardanoErrors.SETTLEMENT_PENDING);
   }
 
   @Test
@@ -199,7 +201,8 @@ class StoreFailureOutcomesTest {
       throw new IllegalStateException("classifier bug");
     })), p);
 
-    assertThat(response.errorReason()).isEqualTo(CardanoErrors.SETTLEMENT_FAILED);
+    // Deliberate requirement change (D2, user-approved 2026-10-14): was SETTLEMENT_FAILED.
+    assertThat(response.errorReason()).isEqualTo(CardanoErrors.SETTLEMENT_PENDING);
     assertThat(store.claimState(p.hash())).contains(SettlementClaimState.SUBMITTED);
   }
 }

@@ -286,6 +286,67 @@
       "name": "x402.facilitator-server.cardano.networks[].mnemonic",
       "type": "java.lang.String",
       "description": "Optional facilitator mnemonic (address shown in /supported); provider-only without it."
+    },
+    {
+      "name": "x402.facilitator-server.cardano.networks[].slot-config.zero-time",
+      "type": "java.lang.Long",
+      "description": "POSIX milliseconds of zero-slot; with zero-slot and slot-length, replaces the network's built-in slot configuration (e.g. a private testnet)."
+    },
+    {
+      "name": "x402.facilitator-server.cardano.networks[].slot-config.zero-slot",
+      "type": "java.lang.Long",
+      "description": "First slot of the slot configuration."
+    },
+    {
+      "name": "x402.facilitator-server.cardano.networks[].slot-config.slot-length",
+      "type": "java.lang.Integer",
+      "description": "Milliseconds per slot."
+    },
+    {
+      "name": "x402.facilitator-server.cardano.networks[].network-magic",
+      "type": "java.lang.Integer",
+      "description": "Genesis network magic the provider must report; defaults to the public network's (764824073, 1, 2)."
+    },
+    {
+      "name": "x402.facilitator-server.cardano.networks[].evaluation",
+      "type": "java.lang.Boolean",
+      "defaultValue": true,
+      "description": "Whether the provider offers transaction evaluation; false (e.g. yaci-store) skips verify's dry-run."
+    },
+    {
+      "name": "x402.facilitator-server.cardano.networks[].masumi-allowed-script-hashes",
+      "type": "java.util.List<java.lang.String>",
+      "description": "Masumi escrow script hashes (28-byte hex) accepted on the network; when set, every other escrow, the canonical one included, is refused."
+    },
+    {
+      "name": "x402.facilitator-server.cardano.max-tx-bytes",
+      "type": "java.lang.Integer",
+      "defaultValue": 65536,
+      "description": "The largest transaction verify accepts, in bytes (at most 65536); the protocol's maxTxSize lowers it further."
+    },
+    {
+      "name": "x402.facilitator-server.cardano.script-datum-policy",
+      "type": "org.x402.mechanisms.cardano.exact.facilitator.ScriptDatumPolicy",
+      "defaultValue": "reference",
+      "description": "How strictly a script payment's datum is checked: reference (refuses only a Plutus V1 inline datum), strict, or v3-optional."
+    },
+    {
+      "name": "x402.facilitator-server.cardano.max-tip-age",
+      "type": "java.time.Duration",
+      "defaultValue": "5m",
+      "description": "How far a provider's latest block may lag the wall clock before chain reads are refused."
+    },
+    {
+      "name": "x402.facilitator-server.cardano.lookup-timeout",
+      "type": "java.time.Duration",
+      "defaultValue": "10s",
+      "description": "Bound on the chain lookups of one verification; past it the verdict is chain_lookup_failed."
+    },
+    {
+      "name": "x402.facilitator-server.cardano.max-input-lookups",
+      "type": "java.lang.Integer",
+      "defaultValue": 64,
+      "description": "How many inputs one verification resolves on chain; a transaction with more is chain_lookup_failed."
     }
   ]
 }

@@ -30,9 +30,6 @@
     <property name="eachLine" value="true"/>
   </module>
 
-  <!-- Documentation -->
-  <module name="JavadocPackage"/>
-
   <module name="TreeWalker">
     <!-- Blocks -->
     <module name="AvoidNestedBlocks"/>

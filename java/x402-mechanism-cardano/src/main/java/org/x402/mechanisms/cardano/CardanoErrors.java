@@ -63,6 +63,8 @@ public final class CardanoErrors {
   /** Script address reconstruction failed. */
   public static final String SCRIPT_ADDRESS_MISMATCH =
       "invalid_exact_cardano_payload_script_address_mismatch";
+  /** The script payment's locked output carries no datum its script can spend (policy-dependent). */
+  public static final String SCRIPT_DATUM_MISSING = "invalid_exact_cardano_payload_script_datum_missing";
   /** The transaction carries no witness. */
   public static final String TRANSACTION_UNSIGNED = "invalid_exact_cardano_payload_unsigned";
   /** A vkey witness does not verify. */
@@ -127,6 +129,9 @@ public final class CardanoErrors {
   /** The derived escrow does not equal payTo. */
   public static final String MASUMI_DEPLOYMENT =
       "invalid_exact_cardano_requirements_masumi_deployment";
+  /** The escrow script is not on the facilitator's allowlist for the network. */
+  public static final String MASUMI_CONTRACT_MISMATCH =
+      "invalid_exact_cardano_requirements_masumi_contract_mismatch";
   /** More or less than one escrow output. */
   public static final String MASUMI_ESCROW_OUTPUT_COUNT =
       "invalid_exact_cardano_payload_masumi_escrow_output_count";

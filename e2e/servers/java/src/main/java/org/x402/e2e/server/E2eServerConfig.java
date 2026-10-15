@@ -8,6 +8,8 @@ import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.function.Function;
+import org.x402.e2e.server.accounts.E2eNetworkAccounts;
+import org.x402.e2e.server.accounts.impl.CardanoE2eAccounts;
 
 /**
  * Turns the e2e catalog and the harness environment into Spring properties for the x402 starter
@@ -15,16 +17,18 @@ import java.util.function.Function;
  * catalog lists for the Java SDK.
  *
  * <ul>
- *   <li>One account per (network, transfer method): {@code cardano} (SERVER_CARDANO_ADDRESS),
- *       {@code cardano-masumi} (derived escrow, seller mnemonic), {@code cardano-script}
- *       (SERVER_CARDANO_SCRIPT_ADDRESS, else the always-succeeds fixture). The transfer method sits
- *       on the account; CARDANO_L1_CONFIRMATIONS becomes each account's {@code
- *       cardano.l1-confirmations}.
+ *   <li>One account per (network, transfer method), e.g. {@code cardano}, {@code cardano-script}.
+ *       The transfer method sits on the account. By default an account pays to {@code
+ *       SERVER_<ID>_ADDRESS}; a network that needs more adds an {@link E2eNetworkAccounts}
+ *       implementation to {@link #networkAccounts} (Cardano: {@link CardanoE2eAccounts}).
  *   <li>One offer per catalog route with one {@code accepts} entry. The catalog {@code extra}
  *       (script block, {@code paymentFlow}, requirements/scheme extra) goes into that entry's
  *       {@code extra}; there is no offer-level {@code extra}.
- *   <li>{@link #ANNOTATED_PATH} is served by an {@code @X402Payment} controller (no {@code path:});
- *       every other route gets {@code path: "GET <path>"} and a catalog-driven handler.
+ *   <li>The first mounted plain route (scheme {@code exact}, no transfer method or {@code
+ *       default}) is served by an {@code @X402Payment} controller as offer {@link #ANNOTATED_OFFER}
+ *       at {@link #ANNOTATED_PATH_PROPERTY} (no {@code path:}), so the annotation path runs on
+ *       whichever network is configured. Every other route gets {@code path: "GET <path>"} and a
+ *       catalog-driven handler.
  * </ul>
  */
 public final class E2eServerConfig {
@@ -32,25 +36,17 @@ public final class E2eServerConfig {
   /** The fixed success body message of every paid route. */
   public static final String PROTECTED_ROUTE_MESSAGE = "Protected endpoint accessed successfully";
 
-  /** The route served by the annotated controller, so the annotation path runs in e2e. */
-  public static final String ANNOTATED_PATH = "/exact/cardano/default";
+  /** The offer name of the annotated route, used by {@code @X402Payment}. */
+  public static final String ANNOTATED_OFFER = "e2e-annotated";
 
-  /** The offer name of {@link #ANNOTATED_PATH} ({@link #offerName}), used by {@code @X402Payment}. */
-  public static final String ANNOTATED_OFFER = "exact-cardano-default";
+  /** Property holding the annotated route's path, used by the controller's {@code @GetMapping}. */
+  public static final String ANNOTATED_PATH_PROPERTY = "e2e.annotated-path";
 
   /** Property listing the paths that need the catalog-driven handler (comma-separated). */
   public static final String CATALOG_PATHS_PROPERTY = "e2e.catalog-paths";
 
-  /** Property set to {@code true} when {@link #ANNOTATED_PATH} is served. */
+  /** Property set to {@code true} when an annotated route is served. */
   public static final String ANNOTATED_ROUTE_PROPERTY = "e2e.annotated-route";
-
-  /** always-succeeds Plutus V3 fixture. */
-  static final String ALWAYS_SUCCEEDS_SCRIPT = "4d01000033222220051200120011";
-
-  static final String ALWAYS_SUCCEEDS_DATUM = "d8799f182aff";
-
-  static final String ALWAYS_SUCCEEDS_ADDRESS =
-      "addr_test1wp8l7eylksmjas7ypzm0q35dwnjdxxvsfn0z0lflqzgs55stpd682";
 
   private final Map<String, Object> properties;
   private final List<String> mountedPaths;
@@ -81,19 +77,21 @@ public final class E2eServerConfig {
   public static E2eServerConfig build(Function<String, String> env) {
     E2eCatalog catalog = E2eCatalog.load(env);
     Map<String, Object> p = new LinkedHashMap<>();
-    p.put("server.port", envOr(env, "PORT", "4021"));
+    p.put("server.port", E2eEnv.envOr(env, "PORT", "4021"));
 
     String facilitatorUrl = env.apply("FACILITATOR_URL");
-    if (E2eCatalog.isBlank(facilitatorUrl)) {
+    if (E2eEnv.isBlank(facilitatorUrl)) {
       throw new IllegalStateException("FACILITATOR_URL environment variable is required");
     }
     p.put("x402.facilitators[0].url", facilitatorUrl.trim());
     String mock = env.apply("MOCK_FACILITATOR_URL");
-    if (!E2eCatalog.isBlank(mock)) {
+    if (!E2eEnv.isBlank(mock)) {
       p.put("x402.facilitators[1].url", mock.trim());
     }
 
-    Integer l1Confirmations = l1Confirmations(env.apply("CARDANO_L1_CONFIRMATIONS"));
+    // Built before the loop so their env is validated even when none of their routes is mounted.
+    Map<String, E2eNetworkAccounts> networkAccounts = networkAccounts(env);
+    String annotatedPath = null;
     List<String> mounted = new ArrayList<>();
     List<String> catalogPaths = new ArrayList<>();
     List<String> skipped = new ArrayList<>();
@@ -103,7 +101,7 @@ public final class E2eServerConfig {
       E2eCatalog.Network network = catalog.network(route.network());
       String serverPayTo = env.apply("SERVER_" + route.network().toUpperCase(Locale.ROOT)
           + "_ADDRESS");
-      if (E2eCatalog.isBlank(serverPayTo)) {
+      if (E2eEnv.isBlank(serverPayTo)) {
         skipped.add(route.path() + " (no SERVER_" + route.network().toUpperCase(Locale.ROOT)
             + "_ADDRESS)");
         continue;
@@ -112,38 +110,31 @@ public final class E2eServerConfig {
         throw new IllegalStateException("route " + route.path()
             + ": settlementOverride is not supported by the Java e2e server");
       }
-      String caip2 = envOr(env, route.network().toUpperCase(Locale.ROOT) + "_NETWORK",
+      String caip2 = E2eEnv.envOr(env, route.network().toUpperCase(Locale.ROOT) + "_NETWORK",
           network.testnetCaip2());
-      boolean cardano = "cardano".equals(route.network());
-      String method = route.assetTransferMethod();
-      String sellerMnemonic = env.apply("SERVER_CARDANO_SELLER_MNEMONIC");
-      if (cardano && "masumi".equals(method) && E2eCatalog.isBlank(sellerMnemonic)) {
-        skipped.add(route.path() + " (no SERVER_CARDANO_SELLER_MNEMONIC)");
+      E2eNetworkAccounts hooks =
+          networkAccounts.getOrDefault(route.network(), E2eNetworkAccounts.DEFAULT);
+      String skipReason = hooks.skipReason(route);
+      if (skipReason != null) {
+        skipped.add(route.path() + " (" + skipReason + ")");
         continue;
       }
+      String method = route.assetTransferMethod();
 
       String account = method == null || "default".equals(method)
           ? route.network() : route.network() + "-" + method;
       if (accounts.putIfAbsent(account, Boolean.TRUE) == null) {
         String a = "x402.accounts." + account + ".";
         p.put(a + "network", caip2);
-        if (cardano && "masumi".equals(method)) {
-          // No pay-to: the starter derives the canonical escrow address of the network.
-          p.put(a + "cardano.masumi.seller-mnemonic", sellerMnemonic.trim());
-        } else if (cardano && "script".equals(method)) {
-          p.put(a + "pay-to", envOr(env, "SERVER_CARDANO_SCRIPT_ADDRESS", ALWAYS_SUCCEEDS_ADDRESS));
-        } else {
-          p.put(a + "pay-to", serverPayTo.trim());
-        }
+        hooks.putAccount(p, a, method, serverPayTo.trim());
         if (method != null && !"default".equals(method)) {
           p.put(a + "extra.assetTransferMethod", method);
         }
-        if (cardano && l1Confirmations != null) {
-          p.put(a + "cardano.l1-confirmations", l1Confirmations);
-        }
       }
 
-      String offer = offerName(route.path());
+      boolean annotated = annotatedPath == null && "exact".equals(route.scheme())
+          && (method == null || "default".equals(method));
+      String offer = annotated ? ANNOTATED_OFFER : offerName(route.path());
       String o = "x402.routes." + offer + ".";
       String accept = o + "accepts[0].";
       p.put(accept + "account", account);
@@ -157,13 +148,7 @@ public final class E2eServerConfig {
       if (route.requirementsExtra() != null) {
         flatten(p, accept + "extra", route.requirementsExtra());
       }
-      if (cardano && "script".equals(method)) {
-        p.put(accept + "extra.script.type", "plutusV3");
-        p.put(accept + "extra.script.code", envOr(env, "SERVER_CARDANO_SCRIPT_CODE",
-            ALWAYS_SUCCEEDS_SCRIPT));
-        p.put(accept + "extra.datum", envOr(env, "SERVER_CARDANO_SCRIPT_DATUM",
-            ALWAYS_SUCCEEDS_DATUM));
-      }
+      hooks.putAcceptExtra(p, accept, method);
       if (route.paymentFlow() != null && !"authorization".equals(route.paymentFlow())) {
         p.put(accept + "extra.paymentFlow", route.paymentFlow());
       }
@@ -178,8 +163,10 @@ public final class E2eServerConfig {
         putBazaar(p, o + "extensions.bazaar.");
       }
 
-      if (ANNOTATED_PATH.equals(route.path())) {
+      if (annotated) {
+        annotatedPath = route.path();
         p.put(ANNOTATED_ROUTE_PROPERTY, "true");
+        p.put(ANNOTATED_PATH_PROPERTY, route.path());
       } else {
         p.put(o + "path", "GET " + route.path());
         catalogPaths.add(route.path());
@@ -188,6 +175,17 @@ public final class E2eServerConfig {
     }
     p.put(CATALOG_PATHS_PROPERTY, String.join(",", catalogPaths));
     return new E2eServerConfig(Map.copyOf(p), List.copyOf(mounted), List.copyOf(skipped));
+  }
+
+  /**
+   * The networks that need more than a pay-to address, by catalog network id. Add a network here
+   * with its {@link E2eNetworkAccounts} implementation.
+   *
+   * @param env environment lookup
+   * @return the accounts by network id
+   */
+  private static Map<String, E2eNetworkAccounts> networkAccounts(Function<String, String> env) {
+    return Map.of("cardano", new CardanoE2eAccounts(env));
   }
 
   /**
@@ -250,9 +248,9 @@ public final class E2eServerConfig {
       return;
     }
     String amount = price.amountEnv() == null ? null : env.apply(price.amountEnv());
-    amount = E2eCatalog.isBlank(amount) ? price.amount() : amount.trim();
+    amount = E2eEnv.isBlank(amount) ? price.amount() : amount.trim();
     String asset = price.assetEnv() == null ? null : env.apply(price.assetEnv());
-    asset = E2eCatalog.isBlank(asset) ? price.asset() : asset.trim();
+    asset = E2eEnv.isBlank(asset) ? price.asset() : asset.trim();
     if (amount == null || asset == null) {
       throw new IllegalStateException("route " + route.path() + ": price has no amount/asset");
     }
@@ -293,27 +291,5 @@ public final class E2eServerConfig {
     } else if (!node.isNull()) {
       p.put(prefix, node.asText());
     }
-  }
-
-  static Integer l1Confirmations(String raw) {
-    if (E2eCatalog.isBlank(raw)) {
-      return null;
-    }
-    String v = raw.trim();
-    if (!v.matches("^-?(0|[1-9]\\d?)$")) {
-      throw new IllegalStateException(
-          "CARDANO_L1_CONFIRMATIONS must be a plain integer from -1 to 20, got \"" + v + "\"");
-    }
-    int n = Integer.parseInt(v);
-    if (n < -1 || n > 20) {
-      throw new IllegalStateException(
-          "CARDANO_L1_CONFIRMATIONS must be an integer from -1 to 20, got \"" + v + "\"");
-    }
-    return n;
-  }
-
-  private static String envOr(Function<String, String> env, String key, String fallback) {
-    String v = env.apply(key);
-    return E2eCatalog.isBlank(v) ? fallback : v.trim();
   }
 }

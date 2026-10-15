@@ -12,7 +12,7 @@ import org.x402.spring.annotation.X402Payment;
 @ConditionalOnProperty(name = E2eServerConfig.ANNOTATED_ROUTE_PROPERTY, havingValue = "true")
 class AnnotatedRouteController {
 
-  @GetMapping(E2eServerConfig.ANNOTATED_PATH)
+  @GetMapping("${" + E2eServerConfig.ANNOTATED_PATH_PROPERTY + "}")
   @X402Payment(E2eServerConfig.ANNOTATED_OFFER)
   Map<String, Object> paid() {
     return E2eServerConfig.successBody();

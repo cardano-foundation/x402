@@ -22,7 +22,8 @@ import org.x402.mechanisms.cardano.chain.UtxoSnapshot;
  * A small programmable ledger for settlement-flow tests. It models a node with a mempool: a
  * transaction resubmitted while still in the mempool is "already known" (accepted again, same
  * hash); once {@linkplain #include included} its inputs are spent and a resubmission is rejected.
- * Blockfrost-like evidence reports {@code unknown} for mempool transactions.
+ * Evidence reports {@code mempool} for a transaction the node holds, until it is included or its
+ * TTL passes (a node drops it then), like Blockfrost's {@code /mempool}.
  */
 public final class FakeChain implements CardanoChainBackend {
 
@@ -39,12 +40,24 @@ public final class FakeChain implements CardanoChainBackend {
     /** The node definitively rejects it. */
     THROW_DEFINITIVE,
     /** The submitter reports a different transaction hash. */
-    WRONG_HASH
+    WRONG_HASH,
+    /** The backend refuses before sending: provably nothing reached a node. */
+    NEVER_SENT
+  }
+
+  /** The error of {@link SubmitMode#NEVER_SENT}. */
+  public static final class NeverSentError extends IllegalStateException {
+    private static final long serialVersionUID = 1L;
+
+    NeverSentError() {
+      super("provider guard failed before sending");
+    }
   }
 
   private final Map<String, UtxoSnapshot> utxos = new LinkedHashMap<>();
   private final Map<String, SettlementEvidence> included = new HashMap<>();
   private final Set<String> mempool = new HashSet<>();
+  private final java.util.Map<String, java.math.BigInteger> ttlByHash = new java.util.HashMap<>();
   private final List<String> submissions = Collections.synchronizedList(new ArrayList<>());
   private long currentSlot;
   private ProtocolParams protocolParameters;
@@ -136,6 +149,17 @@ public final class FakeChain implements CardanoChainBackend {
   }
 
   /**
+   * Rolls an included transaction back: the ledger no longer shows it (its inputs stay spent).
+   *
+   * @param transactionBase64 the signed transaction
+   */
+  public synchronized void rollback(String transactionBase64) {
+    String hash = CardanoTransactionDecoder.decode(transactionBase64).txHash();
+    included.remove(hash);
+    mempool.remove(hash);
+  }
+
+  /**
    * Every transaction handed to {@link #submitTransaction}, in order.
    *
    * @return the submissions
@@ -166,7 +190,11 @@ public final class FakeChain implements CardanoChainBackend {
   @Override
   public synchronized SubmissionResult submitTransaction(String tx, String network) {
     submissions.add(tx);
-    String hash = CardanoTransactionDecoder.decode(tx).txHash();
+    DecodedCardanoTransaction decodedTx = CardanoTransactionDecoder.decode(tx);
+    String hash = decodedTx.txHash();
+    if (decodedTx.ttlSlot() != null) {
+      ttlByHash.put(hash, decodedTx.ttlSlot());
+    }
     if (included.containsKey(hash)) {
       throw new IllegalStateException("BadInputsUTxO: inputs already spent");
     }
@@ -181,6 +209,8 @@ public final class FakeChain implements CardanoChainBackend {
         throw new IllegalStateException("read timed out");
       case THROW_DEFINITIVE:
         throw new IllegalArgumentException("definitive: ValueNotConservedUTxO");
+      case NEVER_SENT:
+        throw new NeverSentError();
       case WRONG_HASH:
         mempool.add(hash);
         return new SubmissionResult("00".repeat(32), SettlementEvidence.Status.MEMPOOL);
@@ -191,6 +221,11 @@ public final class FakeChain implements CardanoChainBackend {
         mempool.add(hash);
         return new SubmissionResult(hash, SettlementEvidence.Status.MEMPOOL);
     }
+  }
+
+  @Override
+  public boolean isSubmissionNeverSent(Throwable error) {
+    return error instanceof NeverSentError;
   }
 
   @Override
@@ -207,6 +242,13 @@ public final class FakeChain implements CardanoChainBackend {
   @Override
   public synchronized SettlementEvidence getTransactionEvidence(String txHash, String network) {
     SettlementEvidence evidence = included.get(txHash);
-    return evidence == null ? SettlementEvidence.unknown() : evidence;
+    if (evidence != null) {
+      return evidence;
+    }
+    // Like Blockfrost's /mempool: a transaction the node accepted is visible until included.
+    java.math.BigInteger ttl = ttlByHash.get(txHash);
+    boolean held = mempool.contains(txHash)
+        && (ttl == null || ttl.compareTo(java.math.BigInteger.valueOf(currentSlot)) >= 0);
+    return held ? new SettlementEvidence(SettlementEvidence.Status.MEMPOOL, -1) : SettlementEvidence.unknown();
   }
 }

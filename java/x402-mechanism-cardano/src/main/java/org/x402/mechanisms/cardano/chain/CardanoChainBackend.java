@@ -10,13 +10,18 @@ import com.bloxbean.cardano.client.api.model.ProtocolParams;
  * <p>Optional members are default methods. Where the behaviour depends on whether a backend
  * offers a member ({@code getTransactionEvidence}, {@code validatePhase1Transaction}, {@code
  * getProtocolParameters}), a capability method or a {@code null} answer makes that explicit.
- * Implementations must be thread-safe.
+ * Implementations must be thread-safe, and every call must end within a bounded time (an HTTP
+ * request timeout, say): verification checks its lookup budget only between calls, so a call
+ * that blocks forever blocks the verification with it.
  */
 public interface CardanoChainBackend {
 
   /**
    * Looks up one UTxO. Returns {@code exists = false} when it is spent or never existed, and
-   * throws when the lookup itself fails.
+   * throws when the lookup itself fails. For a spent UTxO, return its owner address when the
+   * provider knows it: settle's resume of a payment that already landed resolves the payer from
+   * the spent nonce, and without an owner (and no payer recorded by the claim store) it stays
+   * pending.
    *
    * @param ref the reference {@code txHash#index}
    * @param network the x402 network
@@ -72,6 +77,44 @@ public interface CardanoChainBackend {
    * @param network the x402 network
    */
   default void evaluateTransaction(String signedTransactionBase64, String network) {}
+
+  /**
+   * Whether an error thrown by {@link #submitTransaction} proves that no node received the
+   * transaction: the backend failed before any byte of the request left the process (e.g. its own
+   * provider identity or tip check). Transport, timeout and provider errors after the request was
+   * sent must answer {@code false}. Judge the given error itself, not its causes: a wrapper may
+   * hide a later attempt that did send. The default is {@code false}.
+   *
+   * @param error the error {@code submitTransaction} threw
+   * @return {@code true} only when the transaction provably never left the process
+   */
+  default boolean isSubmissionNeverSent(Throwable error) {
+    return false;
+  }
+
+  /**
+   * The slot up to which this backend's chain data is known to be complete. A settlement is
+   * reported expired only once this slot is past the transaction's validity window, so an indexer
+   * that lags the wall clock never turns a payment that may still land into "expired". The
+   * default is {@link #getCurrentSlot}.
+   *
+   * @param network the x402 network
+   * @return the indexed slot
+   */
+  default long getIndexedSlot(String network) {
+    return getCurrentSlot(network);
+  }
+
+  /**
+   * Checks, without relying on cached answers, that the backend can serve the network now. Used
+   * by health indicators and readiness gates. The default reads the protocol parameters.
+   *
+   * @param network the x402 network
+   * @throws RuntimeException when the backend cannot serve the network
+   */
+  default void checkHealth(String network) {
+    getProtocolParameters(network);
+  }
 
   /**
    * Whether {@link #getTransactionEvidence} is implemented. Without it the facilitator cannot

@@ -275,4 +275,16 @@ class MasumiVerifierTest {
     assertThat(authorize(withIdentifier, MasumiVerifier.AuthorizationOptions.NONE).reason())
         .isEqualTo("invalid_exact_cardano_requirements_masumi_identifier");
   }
+
+  @Test
+  void theDeadlineCheckUsesTheNetworksSlotConfig() {
+    byte[] d = PlutusEncoding.encode(datum);
+    DecodedCardanoTransaction tx = MasumiFixtures.lock(quote.payTo(), d, 5_000_000, Map.of(), false,
+        MasumiFixtures.ttlBeforePayBy(), List.of(MasumiFixtures.BUYER_KEY_HASH));
+    var twoSecondSlots = new com.bloxbean.cardano.client.common.model.SlotConfig(2000, 86_400L, 1_655_769_600_000L);
+
+    assertFails(MasumiVerifier.verifyLock(quote.extra(), quote, tx,
+            new MasumiVerifier.LockContext(MasumiFixtures.BUYER, CPUB, null, null, null, twoSecondSlots)),
+        "invalid_exact_cardano_payload_masumi_deadline", "TTL is after pay_by_time");
+  }
 }

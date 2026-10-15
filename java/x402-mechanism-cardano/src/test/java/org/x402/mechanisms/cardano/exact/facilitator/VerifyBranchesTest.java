@@ -264,7 +264,18 @@ class VerifyBranchesTest {
 
     backend.utxos.put(NONCE, UtxoSnapshot.spent(PAYER));
     PaymentRequirements more = new PaymentRequirements("exact", NETWORK, "lovelace", "3000000", PAY_TO, 600, Map.of());
-    SettleResponse underpaid = scheme.settle(payload(more, tx, NONCE), more);
+    // Deliberate requirement change (I8, user-approved 2026-10-14): the claim is bound to its
+    // requirements, so a settle under other requirements is a duplicate before any re-check.
+    assertThat(scheme.settle(payload(more, tx, NONCE), more).errorReason()).isEqualTo("duplicate_settlement");
+    // The re-check itself still runs for a claim stored without a binding.
+    var unbound = new InMemorySettlementClaimStore();
+    String hash = org.x402.mechanisms.cardano.CardanoTransactionDecoder.decode(tx).txHash();
+    unbound.claimSettlement(new SettlementClaim(hash, "earlier", null, null));
+    unbound.markSubmitted(hash, "earlier");
+    var unboundScheme = new ExactCardanoFacilitatorScheme(backend, null, ExactCardanoFacilitatorOptions.builder()
+        .settlementStore(unbound).confirmationTimeout(Duration.ofMillis(3)).confirmationPoll(Duration.ofMillis(1))
+        .build());
+    SettleResponse underpaid = unboundScheme.settle(payload(more, tx, NONCE), more);
     assertThat(underpaid.errorReason()).isEqualTo("invalid_exact_cardano_payload_amount_insufficient");
 
     backend.slotError = new IllegalStateException("tip unknown");

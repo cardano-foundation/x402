@@ -7,27 +7,25 @@ import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
 import java.nio.charset.StandardCharsets;
-import java.time.Duration;
 import java.util.LinkedHashMap;
+import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import java.util.stream.Stream;
 import org.x402.core.client.SpendControls;
 import org.x402.core.client.X402Client;
 import org.x402.core.json.X402Json;
 import org.x402.core.types.SettleResponse;
+import org.x402.e2e.client.networks.E2eClientNetwork;
+import org.x402.e2e.client.networks.impl.CardanoClientNetwork;
 import org.x402.http.X402HttpClient;
-import org.x402.mechanisms.cardano.CardanoNetworks;
-import org.x402.mechanisms.cardano.chain.BlockfrostChainBackend;
-import org.x402.mechanisms.cardano.exact.client.ExactCardanoClientScheme;
-import org.x402.mechanisms.cardano.signer.ClientCardanoSignerConfig;
-import org.x402.mechanisms.cardano.signer.MnemonicClientCardanoSigner;
 
 /**
- * One-shot x402 e2e client (Java v2 SDK, Cardano only).
+ * One-shot x402 e2e client (Java v2 SDK).
  *
- * <p>Env: {@code RESOURCE_SERVER_URL}, {@code ENDPOINT_PATH}, {@code CLIENT_CARDANO_MNEMONIC},
- * {@code BLOCKFROST_PROJECT_ID}, optional {@code CARDANO_NETWORK} (harness-injected, default
- * {@code cardano:preprod}) and {@code CARDANO_RPC_URL} (Blockfrost base URL, default per network).
+ * <p>Env: {@code RESOURCE_SERVER_URL}, {@code ENDPOINT_PATH}, plus each network's own keys: a
+ * network is registered only when they are set (Cardano: {@link CardanoClientNetwork}). At least
+ * one network must be configured.
  *
  * <p>Prints exactly one JSON line on stdout. {@code success} is true only for a 2xx answer (and a
  * successful settlement when a {@code PAYMENT-RESPONSE} is present).
@@ -43,11 +41,6 @@ import org.x402.mechanisms.cardano.signer.MnemonicClientCardanoSigner;
  * <p>Everything else goes to stderr.
  */
 public final class Main {
-
-  /** How long to wait for Blockfrost to list the payment's change output (up to 120 s). */
-  private static final Duration WALLET_SETTLE_TIMEOUT = Duration.ofSeconds(120);
-
-  private static final Duration WALLET_SETTLE_POLL = Duration.ofSeconds(3);
 
   private Main() {}
 
@@ -84,32 +77,16 @@ public final class Main {
   private static Map<String, Object> run() throws Exception {
     String baseUrl = requireEnv("RESOURCE_SERVER_URL");
     String endpointPath = requireEnv("ENDPOINT_PATH");
-    String mnemonic = requireEnv("CLIENT_CARDANO_MNEMONIC");
-    String projectId = requireEnv("BLOCKFROST_PROJECT_ID");
-    String network = envOr("CARDANO_NETWORK", CardanoNetworks.PREPROD);
-    String rpcUrl = envOr("CARDANO_RPC_URL", BlockfrostChainBackend.defaultBaseUrl(network));
+    List<E2eClientNetwork> networks =
+        Stream.of(CardanoClientNetwork.fromEnv()).flatMap(Optional::stream).toList();
+    if (networks.isEmpty()) {
+      throw new IllegalStateException(
+          "no network configured (Cardano: CLIENT_CARDANO_MNEMONIC and BLOCKFROST_PROJECT_ID)");
+    }
 
-    BlockfrostChainBackend blockfrost =
-        new BlockfrostChainBackend(
-            BlockfrostChainBackend.Config.builder()
-                .network(network)
-                .baseUrl(rpcUrl)
-                .projectId(projectId)
-                .build());
-    MnemonicClientCardanoSigner signer =
-        new MnemonicClientCardanoSigner(
-            ClientCardanoSignerConfig.builder()
-                .mnemonic(mnemonic)
-                .network(network)
-                .walletProvider(blockfrost)
-                .build());
-
-    // E2e routes are priced in lovelace (not a default asset) and above the $1 cap, so spend
-    // controls are off.
-    X402Client client =
-        new X402Client()
-            .setSpendControls(SpendControls.disabled())
-            .register("cardano:*", new ExactCardanoClientScheme(signer));
+    // E2e routes are priced in non-default assets and above the $1 cap, so spend controls are off.
+    X402Client client = new X402Client().setSpendControls(SpendControls.disabled());
+    networks.forEach(network -> network.register(client));
 
     X402HttpClient http = X402HttpClient.wrap(HttpClient.newHttpClient(), client);
     // No per-request timeout: X402HttpClient applies its 240 s default.
@@ -131,47 +108,29 @@ public final class Main {
       result.put("error", "unexpected HTTP status " + status + " from " + endpointPath);
     }
 
-    settle.ifPresent(s -> awaitWalletSettled(s, blockfrost));
+    settle.ifPresent(s -> afterSettle(networks, s));
     return result;
   }
 
-  /**
-   * Waits until Blockfrost lists this payment's change output. Sequential e2e clients are separate
-   * processes and Blockfrost does not see mempool spends, so the next client would otherwise build
-   * on the same input.
-   */
-  private static void awaitWalletSettled(
-      SettleResponse settle, BlockfrostChainBackend blockfrost) {
-    if (settle.network() == null || !settle.network().startsWith("cardano:")) {
+  /** Runs the settling network's {@link E2eClientNetwork#afterSettle}; never throws. */
+  private static void afterSettle(List<E2eClientNetwork> networks, SettleResponse settle) {
+    String network = settle.network();
+    int colon = network == null ? -1 : network.indexOf(':');
+    if (colon <= 0) {
       return;
     }
-    String transaction = settle.transaction();
-    String payer = settle.payer();
-    if (transaction == null || transaction.isEmpty() || payer == null || payer.isEmpty()) {
-      return;
-    }
-    long deadline = System.nanoTime() + WALLET_SETTLE_TIMEOUT.toNanos();
-    while (System.nanoTime() < deadline) {
-      try {
-        boolean listed =
-            blockfrost.getAll(payer).stream()
-                .anyMatch(utxo -> transaction.equalsIgnoreCase(utxo.getTxHash()));
-        if (listed) {
+    String namespace = network.substring(0, colon);
+    try {
+      for (E2eClientNetwork candidate : networks) {
+        if (candidate.namespace().equals(namespace)) {
+          candidate.afterSettle(settle);
           return;
         }
-      } catch (RuntimeException e) {
-        // Transient Blockfrost/network error: keep polling until the deadline.
-        System.err.println("[java-http] wallet settle poll failed: " + e.getMessage());
       }
-      try {
-        Thread.sleep(WALLET_SETTLE_POLL.toMillis());
-      } catch (InterruptedException e) {
-        Thread.currentThread().interrupt();
-        return;
-      }
+    } catch (Throwable e) {
+      // The payment has settled; a failed wait must not turn the result into a failure.
+      System.err.println("[java-http] after-settle on " + network + " failed: " + e);
     }
-    System.err.println("[java-http] change output of " + transaction + " not listed after "
-        + WALLET_SETTLE_TIMEOUT.toSeconds() + " s");
   }
 
   private static Object parseBody(String body) {
@@ -204,10 +163,5 @@ public final class Main {
       throw new IllegalStateException(name + " is required");
     }
     return value.trim();
-  }
-
-  private static String envOr(String name, String fallback) {
-    String value = System.getenv(name);
-    return value == null || value.isBlank() ? fallback : value.trim();
   }
 }

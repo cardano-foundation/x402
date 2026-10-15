@@ -82,6 +82,21 @@ class CardanoFacilitatorVectorsTest {
       expected.put("invalidReason", "invalid_exact_cardano_payload_nonce_not_on_chain");
       expected.put("payer", fixture.get("expected").get("payer").asText());
     }
+    if ("11g-settle-submit-failed".equals(id)) {
+      // Deliberate requirement change (D2, user-approved 2026-10-14): the fixture expects an
+      // unknown submit outcome to fail; it is pending (the claim is kept, the retry resumes), so a
+      // client is never told to pay again for a payment that may still land.
+      String txId = expected.get("transaction").asText();
+      expected.put("errorReason", "settlement_pending");
+      expected.put("errorMessage", "the submission outcome is unknown; retry to resume: "
+          + expected.get("errorMessage").asText());
+      // The payer is the nonce UTxO's owner, as recorded in the fixture's chain.
+      String nonce = fixture.get("payload").get("payload").get("nonce").asText();
+      expected.put("payer", fixture.get("chain").get("utxos").get(nonce).get("address").asText());
+      ObjectNode pendingExtra = expected.putObject("extra");
+      pendingExtra.put("status", "pending");
+      pendingExtra.put("transactionId", txId);
+    }
     if (DECODE_FAILED.equals(expected.path("invalidReason").asText())) {
       // The message is the CBOR library's own text; only the reason is normative.
       expected.remove("invalidMessage");

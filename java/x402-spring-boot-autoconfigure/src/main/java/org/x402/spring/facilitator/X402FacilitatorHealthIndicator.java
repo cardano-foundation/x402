@@ -34,7 +34,7 @@ public final class X402FacilitatorHealthIndicator extends AbstractHealthIndicato
       CardanoChainBackend backend = schemes.backend(network);
       Map<String, Object> detail = new LinkedHashMap<>();
       try {
-        backend.getProtocolParameters(network);
+        backend.checkHealth(network);
         detail.put("status", "UP");
       } catch (RuntimeException e) {
         detail.put("status", "DOWN");

@@ -86,6 +86,8 @@ public final class CardanoTransactionDecoder {
       throw new IllegalArgumentException("is_valid must be a boolean");
     }
     boolean isValid = flag.isSimple(21);
+    List<Integer> bodyKeys = bodyKeys(body);
+    checkAuxiliaryData(body.get(7), tx.items().get(3));
 
     byte[] bodyHash = Blake2bUtil.blake2bHash256(body.raw());
     List<String> inputs = inputs(body.get(0));
@@ -130,7 +132,125 @@ public final class CardanoTransactionDecoder {
         w.scriptCount,
         w.redeemerCount,
         w.signaturesValid,
-        isValid);
+        isValid,
+        bodyKeys,
+        requiredSigners(body.get(14)));
+  }
+
+  /**
+   * The body's keys. Each must be a plain unsigned integer: a tagged or otherwise encoded key is
+   * not found by a lookup, so a field behind it would escape every check.
+   */
+  private static List<Integer> bodyKeys(Cbor.Item body) {
+    List<Integer> keys = new ArrayList<>();
+    for (Map.Entry<Cbor.Item, Cbor.Item> entry : body.entries()) {
+      Cbor.Item key = entry.getKey();
+      if (key.major() != Cbor.Major.UNSIGNED || key.integer().bitLength() > 31) {
+        throw new IllegalArgumentException("transaction body keys must be unsigned integers");
+      }
+      keys.add(key.integer().intValue());
+    }
+    keys.sort(null);
+    return keys;
+  }
+
+  private static List<String> requiredSigners(Cbor.Item item) {
+    List<String> signers = new ArrayList<>();
+    if (item == null) {
+      return signers;
+    }
+    for (Cbor.Item signer : array(item, "required signers")) {
+      if (signer.major() != Cbor.Major.BYTES || signer.bytes().length != 28) {
+        throw new IllegalArgumentException("a required signer must be a 28-byte key hash");
+      }
+      signers.add(HEX.formatHex(signer.bytes()));
+    }
+    return signers;
+  }
+
+  /** How deeply metadata may nest. */
+  private static final int MAX_METADATA_DEPTH = 64;
+
+  /** The largest metadata byte or text string. */
+  private static final int MAX_METADATA_STRING = 64;
+
+  /**
+   * Auxiliary data and its body commitment (field 7) come together: the commitment is untagged
+   * bytes(32) equal to the blake2b-256 of the auxiliary data's exact wire bytes. Only metadata is
+   * accepted, either as a plain map or as a tag 259 map holding only field 0; auxiliary scripts are
+   * refused.
+   */
+  private static void checkAuxiliaryData(Cbor.Item commitment, Cbor.Item auxiliary) {
+    boolean present = !auxiliary.isSimple(22);
+    if (commitment == null && !present) {
+      return;
+    }
+    if (commitment == null || !present) {
+      throw new IllegalArgumentException("auxiliary data and its hash must both be present");
+    }
+    if (commitment.major() != Cbor.Major.BYTES || commitment.bytes().length != 32) {
+      throw new IllegalArgumentException("the auxiliary data hash must be 32 bytes");
+    }
+    if (!java.security.MessageDigest.isEqual(commitment.bytes(), Blake2bUtil.blake2bHash256(auxiliary.raw()))) {
+      throw new IllegalArgumentException("auxiliary data hash mismatch");
+    }
+    Cbor.Item metadata = auxiliary;
+    if (metadata.major() == Cbor.Major.TAG) {
+      Cbor.Item fields = metadata.tagged();
+      if (!metadata.integer().equals(BigInteger.valueOf(259)) || fields.major() != Cbor.Major.MAP) {
+        throw new IllegalArgumentException("unsupported auxiliary data envelope");
+      }
+      fields.requireUniqueKeys("auxiliary data");
+      Cbor.Item inner = fields.get(0);
+      if (fields.entries().size() != 1 || inner == null) {
+        throw new IllegalArgumentException("auxiliary data may carry metadata only");
+      }
+      metadata = inner;
+    }
+    if (metadata.major() != Cbor.Major.MAP) {
+      throw new IllegalArgumentException("unsupported auxiliary data envelope");
+    }
+    metadata.requireUniqueKeys("metadata");
+    for (Map.Entry<Cbor.Item, Cbor.Item> entry : metadata.entries()) {
+      Cbor.Item label = entry.getKey();
+      if (label.major() != Cbor.Major.UNSIGNED || label.integer().bitLength() > 64) {
+        throw new IllegalArgumentException("invalid metadata label");
+      }
+      checkMetadatum(entry.getValue(), 0);
+    }
+  }
+
+  private static void checkMetadatum(Cbor.Item item, int depth) {
+    if (depth > MAX_METADATA_DEPTH) {
+      throw new IllegalArgumentException("metadata nests too deeply");
+    }
+    switch (item.major()) {
+      case UNSIGNED, NEGATIVE -> {
+        // Plain CBOR integers span exactly the metadata range; big-number tags are refused below.
+      }
+      case BYTES -> {
+        if (item.bytes().length > MAX_METADATA_STRING) {
+          throw new IllegalArgumentException("metadata bytes exceed 64 bytes");
+        }
+      }
+      case TEXT -> {
+        if (item.text().getBytes(java.nio.charset.StandardCharsets.UTF_8).length > MAX_METADATA_STRING) {
+          throw new IllegalArgumentException("metadata text exceeds 64 bytes");
+        }
+      }
+      case ARRAY -> {
+        for (Cbor.Item child : item.items()) {
+          checkMetadatum(child, depth + 1);
+        }
+      }
+      case MAP -> {
+        for (Map.Entry<Cbor.Item, Cbor.Item> entry : item.entries()) {
+          checkMetadatum(entry.getKey(), depth + 1);
+          checkMetadatum(entry.getValue(), depth + 1);
+        }
+      }
+      default -> throw new IllegalArgumentException("invalid transaction metadatum");
+    }
   }
 
   private static BigInteger unsigned(Cbor.Item item, String what) {
@@ -184,12 +304,20 @@ public final class CardanoTransactionDecoder {
     Cbor.Item value;
     Cbor.Item datumOption = null;
     boolean referenceScript = false;
+    boolean datumHash = false;
     if (output.major() == Cbor.Major.ARRAY) {
       if (output.items().size() < 2 || output.items().size() > 3) {
         throw new IllegalArgumentException("invalid legacy output");
       }
       address = output.items().get(0);
       value = output.items().get(1);
+      if (output.items().size() == 3) {
+        Cbor.Item hash = output.items().get(2);
+        if (hash.major() != Cbor.Major.BYTES || hash.bytes().length != 32) {
+          throw new IllegalArgumentException("a legacy output's datum hash must be 32 bytes");
+        }
+        datumHash = true;
+      }
     } else if (output.major() == Cbor.Major.MAP) {
       output.requireUniqueKeys("transaction output");
       address = output.get(0);
@@ -249,6 +377,13 @@ public final class CardanoTransactionDecoder {
       if (!kind.equals(BigInteger.ZERO) && !kind.equals(BigInteger.ONE)) {
         throw new IllegalArgumentException("invalid datum option kind");
       }
+      if (kind.equals(BigInteger.ZERO)) {
+        Cbor.Item hash = datumOption.items().get(1);
+        if (hash.major() != Cbor.Major.BYTES || hash.bytes().length != 32) {
+          throw new IllegalArgumentException("a datum hash must be 32 bytes");
+        }
+        datumHash = true;
+      }
       if (kind.equals(BigInteger.ONE)) {
         Cbor.Item wrapped = datumOption.items().get(1);
         if (wrapped.major() != Cbor.Major.TAG
@@ -262,7 +397,7 @@ public final class CardanoTransactionDecoder {
       }
     }
     return new DecodedCardanoTransaction.Output(
-        bech32, coin, assets, datum, output.size(), referenceScript);
+        bech32, coin, assets, datum, output.size(), referenceScript, datumHash);
   }
 
   private static final class Witnesses {

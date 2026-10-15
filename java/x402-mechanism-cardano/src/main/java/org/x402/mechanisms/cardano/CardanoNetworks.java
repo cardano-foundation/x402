@@ -50,6 +50,22 @@ public final class CardanoNetworks {
   }
 
   /**
+   * The CIP-34 alias of a network.
+   *
+   * @param network a canonical id or an alias
+   * @return the alias, or {@code null} for an unsupported network
+   */
+  public static String cip34Alias(String network) {
+    String canonical = normalize(network);
+    for (Map.Entry<String, String> alias : ALIASES.entrySet()) {
+      if (alias.getValue().equals(canonical)) {
+        return alias.getKey();
+      }
+    }
+    return null;
+  }
+
+  /**
    * Whether the identifier names a supported Cardano network (aliases included).
    *
    * @param network the network identifier
@@ -100,7 +116,17 @@ public final class CardanoNetworks {
    * @return the wall-clock time of the slot
    */
   public static BigInteger slotToPosixMs(String network, BigInteger slot) {
-    SlotConfig c = slotConfig(network);
+    return slotToPosixMs(slotConfig(network), slot);
+  }
+
+  /**
+   * POSIX milliseconds of an absolute slot under a given slot configuration.
+   *
+   * @param c the slot configuration
+   * @param slot the absolute slot
+   * @return the wall-clock time of the slot
+   */
+  public static BigInteger slotToPosixMs(SlotConfig c, BigInteger slot) {
     return BigInteger.valueOf(c.getZeroTime())
         .add(slot.subtract(BigInteger.valueOf(c.getZeroSlot())).multiply(BigInteger.valueOf(c.getSlotLength())));
   }
@@ -124,7 +150,17 @@ public final class CardanoNetworks {
    * @return the slot
    */
   public static long posixMsToSlot(String network, long posixMs) {
-    SlotConfig c = slotConfig(network);
+    return posixMsToSlot(slotConfig(network), posixMs);
+  }
+
+  /**
+   * The absolute slot containing a POSIX time under a given slot configuration.
+   *
+   * @param c the slot configuration
+   * @param posixMs the time in milliseconds
+   * @return the slot
+   */
+  public static long posixMsToSlot(SlotConfig c, long posixMs) {
     return c.getZeroSlot() + Math.floorDiv(posixMs - c.getZeroTime(), c.getSlotLength());
   }
 }

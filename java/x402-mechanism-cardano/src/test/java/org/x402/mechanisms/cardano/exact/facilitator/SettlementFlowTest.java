@@ -90,7 +90,9 @@ class SettlementFlowTest {
     SettleResponse response = settle(scheme, p);
 
     assertThat(response.success()).isFalse();
-    assertThat(response.errorReason()).isEqualTo("duplicate_settlement");
+    // Deliberate requirement change (D3, user-approved 2026-10-14): was duplicate_settlement; a
+    // claim in flight elsewhere is pending, so the retry may still succeed.
+    assertThat(response.errorReason()).isEqualTo("settlement_pending");
     assertThat(response.transaction()).isEqualTo(p.hash());
     assertThat(chain.submissions()).isEmpty();
   }
@@ -133,8 +135,11 @@ class SettlementFlowTest {
     var scheme = new ExactCardanoFacilitatorScheme(chain, null, fast().build());
 
     SettleResponse first = settle(scheme, p);
-    assertThat(first.errorReason()).isEqualTo("exact_cardano_settlement_failed");
-    assertThat(first.errorMessage()).isEqualTo("connection reset | socket closed");
+    // Deliberate requirement change (D2, user-approved 2026-10-14): was
+    // exact_cardano_settlement_failed; an unknown submit outcome is pending.
+    assertThat(first.errorReason()).isEqualTo("settlement_pending");
+    assertThat(first.errorMessage())
+        .isEqualTo("the submission outcome is unknown; retry to resume: connection reset | socket closed");
 
     SettleResponse retry = settle(scheme, p);
     assertThat(retry.isPending()).isTrue();
@@ -169,9 +174,11 @@ class SettlementFlowTest {
 
     SettleResponse response = scheme.settle(payload, zeroDepth, FacilitatorContext.EMPTY);
 
-    assertThat(response.errorReason()).isEqualTo("exact_cardano_settlement_failed");
-    assertThat(response.errorMessage())
-        .isEqualTo("submitter returned transaction " + "00".repeat(32) + ", expected " + p.hash());
+    // Deliberate requirement change (wrong hash, user-approved 2026-10-14): was
+    // exact_cardano_settlement_failed; the outcome is unknown, so it is pending.
+    assertThat(response.errorReason()).isEqualTo("settlement_pending");
+    assertThat(response.errorMessage()).isEqualTo("the submission outcome is unknown; retry to resume: "
+        + "submitter returned transaction " + "00".repeat(32) + ", expected " + p.hash());
     assertThat(scheme.settle(payload, zeroDepth, FacilitatorContext.EMPTY).errorReason())
         .isNotEqualTo("duplicate_settlement");
     assertThat(chain.submissions()).hasSize(1);

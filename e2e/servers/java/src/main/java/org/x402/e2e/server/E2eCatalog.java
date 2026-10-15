@@ -107,11 +107,11 @@ public final class E2eCatalog {
           continue;
         }
         String requiresEnv = text(def, "requiresEnv");
-        if (requiresEnv != null && isBlank(env.apply(requiresEnv))) {
+        if (requiresEnv != null && E2eEnv.isBlank(env.apply(requiresEnv))) {
           continue;
         }
         String requiresEnvAbsent = text(def, "requiresEnvAbsent");
-        if (requiresEnvAbsent != null && !isBlank(env.apply(requiresEnvAbsent))) {
+        if (requiresEnvAbsent != null && !E2eEnv.isBlank(env.apply(requiresEnvAbsent))) {
           continue;
         }
         JsonNode price = def.path("price");
@@ -160,7 +160,7 @@ public final class E2eCatalog {
 
   private static Path catalogDir(Function<String, String> env) {
     String injected = env.apply("E2E_MECHANISMS_CATALOG");
-    if (!isBlank(injected)) {
+    if (!E2eEnv.isBlank(injected)) {
       Path dir = Path.of(injected);
       if (!Files.isDirectory(dir)) {
         throw new IllegalStateException("E2E_MECHANISMS_CATALOG does not point at a directory: "
@@ -192,12 +192,8 @@ public final class E2eCatalog {
     return v == null || v.isNull() ? null : v.asText();
   }
 
-  static boolean isBlank(String s) {
-    return s == null || s.isBlank();
-  }
-
   private static Set<String> csv(String raw) {
-    if (isBlank(raw)) {
+    if (E2eEnv.isBlank(raw)) {
       return Set.of();
     }
     return Arrays.stream(raw.split(",")).map(String::trim).filter(s -> !s.isEmpty())

@@ -154,12 +154,16 @@ class FacilitatorHardeningTest {
         assertThat(Modifier.isFinal(m.getModifiers())).as(m.toString()).isTrue();
       }
     }
-    assertThat(
-            ExactCardanoFacilitatorScheme.class
-                .getDeclaredMethod("verifyBroadcast", PaymentPayload.class, PaymentRequirements.class)
-                .getModifiers()
-            & (Modifier.PUBLIC | Modifier.PROTECTED))
-        .isZero();
+    // Deliberate change (user-approved 2026-10-14): was a lookup of the two-argument form; A11
+    // added the recorded payer, so every verifyBroadcast must stay internal, whatever its parameters.
+    int found = 0;
+    for (Method m : ExactCardanoFacilitatorScheme.class.getDeclaredMethods()) {
+      if (m.getName().equals("verifyBroadcast")) {
+        found++;
+        assertThat(m.getModifiers() & (Modifier.PUBLIC | Modifier.PROTECTED)).as(m.toString()).isZero();
+      }
+    }
+    assertThat(found).isPositive();
   }
 
   /** A custom evidence-capable backend that answers {@code null} instead of "unknown". */
@@ -221,7 +225,9 @@ class FacilitatorHardeningTest {
     SettleResponse failed = fast(failing).settle(payload(req, tx), req, FacilitatorContext.EMPTY);
 
     assertThat(failed.success()).isFalse();
-    assertThat(failed.errorReason()).isEqualTo("exact_cardano_settlement_failed");
+    // Deliberate requirement change (D2, user-approved 2026-10-14): an unknown submit outcome was
+    // exact_cardano_settlement_failed; it is pending.
+    assertThat(failed.errorReason()).isEqualTo("settlement_pending");
   }
 
   /** A lovelace payment whose first output also carries the given multi-asset map. */

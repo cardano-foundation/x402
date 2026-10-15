@@ -29,6 +29,7 @@ public final class TxBuilder {
   private final List<byte[]> outputs = new ArrayList<>();
   private final TreeMap<Integer, byte[]> extraBody = new TreeMap<>();
   private final Map<Integer, byte[]> witnessFields = new LinkedHashMap<>();
+  private byte[] auxiliaryData;
   private final List<Account> signers = new ArrayList<>();
   private final List<byte[][]> rawWitnesses = new ArrayList<>();
   private long fee = 200_000;
@@ -238,6 +239,17 @@ public final class TxBuilder {
   }
 
   /**
+   * Sets the raw auxiliary data (the fourth element); {@code null} writes CBOR null as before.
+   *
+   * @param cbor the encoded auxiliary data
+   * @return this builder
+   */
+  public TxBuilder auxiliaryData(byte[] cbor) {
+    this.auxiliaryData = cbor;
+    return this;
+  }
+
+  /**
    * Sets the ledger is_valid flag; {@code null} writes a 3-element (pre-Alonzo) envelope.
    *
    * @param valid the flag
@@ -316,7 +328,11 @@ public final class TxBuilder {
     if (isValid != null) {
       tx.raw(isValid ? 0xf5 : 0xf4);
     }
-    tx.raw(0xf6);
+    if (auxiliaryData == null) {
+      tx.raw(0xf6);
+    } else {
+      tx.raw(auxiliaryData);
+    }
     return Base64.getEncoder().encodeToString(tx.toByteArray());
   }
 

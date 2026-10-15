@@ -4,6 +4,7 @@ import java.time.Duration;
 import java.util.List;
 import org.springframework.boot.context.properties.ConfigurationProperties;
 import org.springframework.boot.context.properties.bind.DefaultValue;
+import org.x402.mechanisms.cardano.exact.facilitator.ScriptDatumPolicy;
 import org.x402.spring.cardano.X402CardanoProperties;
 
 /**
@@ -30,11 +31,22 @@ public record X402FacilitatorServerProperties(
    *     85 s)
    * @param confirmationPoll interval between confirmation checks (default 5 s)
    * @param networks one scheme, backend and optional signer per network
+   * @param maxTipAge how far a provider's tip may lag before reads are refused (default 5m)
+   * @param lookupTimeout bound on the chain lookups of one verification (default 10s)
+   * @param maxInputLookups how many inputs one verification resolves on chain (default 64)
+   * @param scriptDatumPolicy how strictly a script payment's datum is checked: {@code reference}
+   *     (default), {@code strict} or {@code v3-optional}
+   * @param maxTxBytes the largest transaction verify accepts (default 65536, at most 65536)
    */
   public record Cardano(
       boolean acceptMempool,
       @DefaultValue("75s") Duration confirmationTimeout,
       @DefaultValue("5s") Duration confirmationPoll,
+      @DefaultValue("5m") Duration maxTipAge,
+      @DefaultValue("10s") Duration lookupTimeout,
+      @DefaultValue("64") int maxInputLookups,
+      @DefaultValue("reference") ScriptDatumPolicy scriptDatumPolicy,
+      @DefaultValue("65536") int maxTxBytes,
       List<Network> networks) {
 
     /** Normalizes an absent list. */
@@ -50,7 +62,25 @@ public record X402FacilitatorServerProperties(
    * @param blockfrost the Blockfrost backend
    * @param mnemonic optional facilitator mnemonic (only shown as an address in /supported);
    *     provider-only without it
+   * @param slotConfig the network's slot configuration (e.g. a private testnet), or {@code null}
+   *     for the built-in one
+   * @param networkMagic the genesis network magic the provider must report; defaults to the
+   *     public network's (764824073, 1, 2), required to check a private network
+   * @param evaluation whether the provider offers transaction evaluation; {@code false} (e.g.
+   *     yaci-store) skips verify's dry-run (default {@code true})
+   * @param masumiAllowedScriptHashes Masumi escrow script hashes accepted on this network; when set,
+   *     every other escrow (the canonical one included) is refused
    */
   public record Network(String network, X402CardanoProperties.Blockfrost blockfrost,
-      String mnemonic) {}
+      String mnemonic, SlotConfig slotConfig, Integer networkMagic, Boolean evaluation,
+      List<String> masumiAllowedScriptHashes) {}
+
+  /**
+   * A Shelley-era slot configuration; all three values are required together.
+   *
+   * @param zeroTime POSIX milliseconds of {@code zeroSlot}
+   * @param zeroSlot the first slot of the configuration
+   * @param slotLength milliseconds per slot
+   */
+  public record SlotConfig(Long zeroTime, Long zeroSlot, Integer slotLength) {}
 }

@@ -13,7 +13,7 @@ import reactor.core.publisher.Mono;
 @ConditionalOnProperty(name = E2eServerConfig.ANNOTATED_ROUTE_PROPERTY, havingValue = "true")
 class AnnotatedRouteController {
 
-  @GetMapping(E2eServerConfig.ANNOTATED_PATH)
+  @GetMapping("${" + E2eServerConfig.ANNOTATED_PATH_PROPERTY + "}")
   @X402Payment(E2eServerConfig.ANNOTATED_OFFER)
   Mono<Map<String, Object>> paid() {
     return Mono.fromSupplier(E2eServerConfig::successBody);

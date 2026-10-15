@@ -172,7 +172,9 @@ class ClaimCapacityTest {
         .submitMode(FakeChain.SubmitMode.THROW_TRANSPORT);
     var scheme = new ExactCardanoFacilitatorScheme(chain, null, fast(new InMemorySettlementClaimStore(1, FIXED)).build());
 
-    assertThat(settle(scheme, p).errorReason()).isEqualTo(CardanoErrors.SETTLEMENT_FAILED);
+    // Deliberate requirement change (D2, user-approved 2026-10-14): an unknown submit outcome
+    // was exact_cardano_settlement_failed; it is pending (the claim is kept either way).
+    assertThat(settle(scheme, p).errorReason()).isEqualTo(CardanoErrors.SETTLEMENT_PENDING);
     chain.submitMode(FakeChain.SubmitMode.ACCEPT);
     SettleResponse next = settle(scheme, other);
 
@@ -188,7 +190,9 @@ class ClaimCapacityTest {
         .submitMode(FakeChain.SubmitMode.THROW_TRANSPORT);
     var scheme = new ExactCardanoFacilitatorScheme(chain, null, fast(new InMemorySettlementClaimStore(1, FIXED)).build());
 
-    assertThat(settle(scheme, p).errorReason()).isEqualTo(CardanoErrors.SETTLEMENT_FAILED);
+    // Deliberate requirement change (D2, user-approved 2026-10-14): an unknown submit outcome
+    // was exact_cardano_settlement_failed; it is pending (the claim is kept either way).
+    assertThat(settle(scheme, p).errorReason()).isEqualTo(CardanoErrors.SETTLEMENT_PENDING);
     assertThat(settle(scheme, p).success()).isFalse();
     chain.submitMode(FakeChain.SubmitMode.ACCEPT);
     SettleResponse next = settle(scheme, other);
@@ -205,7 +209,9 @@ class ClaimCapacityTest {
         .submitMode(FakeChain.SubmitMode.THROW_TRANSPORT);
     var scheme = new ExactCardanoFacilitatorScheme(chain, null, fast(new InMemorySettlementClaimStore(1, FIXED)).build());
 
-    assertThat(settle(scheme, p).errorReason()).isEqualTo(CardanoErrors.SETTLEMENT_FAILED);
+    // Deliberate requirement change (D2, user-approved 2026-10-14): an unknown submit outcome
+    // was exact_cardano_settlement_failed; it is pending (the claim is kept either way).
+    assertThat(settle(scheme, p).errorReason()).isEqualTo(CardanoErrors.SETTLEMENT_PENDING);
     chain.include(p.tx(), 0);
     assertThat(settle(scheme, p).isPending()).isTrue();
     SettleResponse next = settle(scheme, other);

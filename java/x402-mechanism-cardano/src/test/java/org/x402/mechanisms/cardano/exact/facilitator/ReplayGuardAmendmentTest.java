@@ -115,7 +115,9 @@ class ReplayGuardAmendmentTest {
     assertThat(settle(s, p).success()).isTrue();
 
     assertThat(verify(s, p).invalidReason()).isEqualTo("duplicate_settlement");
-    assertThat(settle(s, p).errorReason()).isEqualTo("duplicate_settlement");
+    // Deliberate requirement change (D1, user-approved 2026-10-14): was duplicate_settlement; a
+    // same-binding settle replay succeeds again on re-read evidence, never rebroadcasting.
+    assertThat(settle(s, p).success()).isTrue();
     assertThat(chain.submissions()).containsExactly(p.tx());
   }
 
@@ -146,11 +148,13 @@ class ReplayGuardAmendmentTest {
       if (response != null && response.success()) {
         successes++;
       } else if (response != null) {
-        assertThat(response.errorReason()).isEqualTo("duplicate_settlement");
+        // Deliberate requirement change (D1, user-approved 2026-10-14): was duplicate_settlement.
+        assertThat(response.isPending()).as(response.errorReason()).isTrue();
       }
     }
     pool.shutdown();
-    assertThat(successes).isEqualTo(1);
+    // Was exactly one success; every settle re-read the evidence, so each may report it (D1).
+    assertThat(successes).isGreaterThanOrEqualTo(1);
     assertThat(chain.submissions()).containsExactly(p.tx());
   }
 
@@ -227,7 +231,10 @@ class ReplayGuardAmendmentTest {
     assertThat(pressure.success()).isFalse();
     assertThat(pressure.errorReason()).isEqualTo("exact_cardano_settlement_failed");
     assertThat(verify(s, p).invalidReason()).isEqualTo("duplicate_settlement");
-    assertThat(settle(s, p).errorReason()).isEqualTo("duplicate_settlement");
+    // Deliberate requirement change (D1, user-approved 2026-10-14): was duplicate_settlement; the
+    // replay re-reads the mempool evidence and succeeds without rebroadcasting.
+    assertThat(settle(s, p).success()).isTrue();
+    assertThat(chain.submissions()).containsExactly(p.tx());
 
     storeClock.millis = p.ttlMs() + 120_000;
     assertThat(store.claimSettlement(new SettlementClaim(other.hash(), "o", null, null))).isEqualTo(SettlementClaimResult.FRESH);
