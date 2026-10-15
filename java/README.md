@@ -10,7 +10,7 @@ Cardano `exact` (transfer methods `default`, `masumi` and `script`) is the first
 | `x402-mechanism-cardano` | Cardano `exact`: client (transaction builder, wallet signer), server (prices, Masumi quotes) and facilitator (verify, settle). |
 | `x402-extensions` | The bazaar discovery declaration (server side). |
 | `x402-spring-boot-autoconfigure` | `@X402Payment`, the `x402.*` configuration, WebMvc and WebFlux filters, client interceptors, the facilitator server. |
-| `x402-spring-boot-starter` | The one dependency to add: autoconfigure + core + Cardano + extensions. |
+| `x402-spring-boot-starter` | autoconfigure + core + extensions. Add the mechanisms you use (`x402-mechanism-cardano`, …) next to it. |
 
 The v1 SDK (EVM `exact`, servlet filter) lives unchanged in [`legacy/`](legacy/README.md).
 
@@ -38,7 +38,7 @@ Runnable examples: [`examples/java`](../examples/java/README.md).
 
 ## Quick start: protect a Spring endpoint
 
-**1. Add the starter** (it brings the Cardano mechanism along):
+**1. Add the starter and the mechanisms you use.** The starter brings no payment mechanism, so you only pull in the chains you accept:
 
 ```xml
 <dependency>
@@ -46,7 +46,14 @@ Runnable examples: [`examples/java`](../examples/java/README.md).
   <artifactId>x402-spring-boot-starter</artifactId>
   <version>2.0.0-SNAPSHOT</version>
 </dependency>
+<dependency>
+  <groupId>org.x402</groupId>
+  <artifactId>x402-mechanism-cardano</artifactId>
+  <version>2.0.0-SNAPSHOT</version>
+</dependency>
 ```
+
+Each mechanism's Spring wiring switches on when its jar is on the classpath. If your configuration names a network whose mechanism is missing (an account on `cardano:preprod` without `x402-mechanism-cardano`, for example), startup fails and names the dependency to add.
 
 **2. Annotate the handler.** The value names an offer under `x402.routes`:
 
@@ -79,6 +86,7 @@ x402:
 Unpaid requests get `402` with a `PAYMENT-REQUIRED` header. A request carrying a valid `PAYMENT-SIGNATURE` is verified by the facilitator, runs your handler, is settled, and gets your response plus a `PAYMENT-RESPONSE` header.
 
 What the starter checks at startup:
+- Every network in the configuration (accounts, options, `x402.client.*`, the facilitator server) has its mechanism on the classpath.
 - `@X402Payment("x")` without `x402.routes.x` fails, listing the known offers.
 - On a class, `@X402Payment` covers every handler method; a method-level annotation overrides it.
 - The offer is taken from the handler Spring actually dispatches to, so a more specific free handler (`/items/free` next to a paid `/items/{id}`) stays free. CORS pre-flight is never charged; `HEAD` on a paid `GET` handler is charged, because Spring runs the handler.
@@ -504,7 +512,7 @@ With the Spring clients, the request carrying `PAYMENT-SIGNATURE` never follows 
 
 ## Running a facilitator
 
-The Java starter includes a facilitator server. With the starter on the classpath, this YAML serves `GET /x402/supported`, `POST /x402/verify` and `POST /x402/settle` for Cardano preprod:
+The Java starter includes a facilitator server. With the starter and `x402-mechanism-cardano` on the classpath, this YAML serves `GET /x402/supported`, `POST /x402/verify` and `POST /x402/settle` for Cardano preprod:
 
 ```yaml
 x402:

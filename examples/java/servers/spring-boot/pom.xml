@@ -26,10 +26,16 @@
   </properties>
 
   <dependencies>
-    <!-- One dependency for x402: the starter brings core, Cardano and the bazaar extension. -->
+    <!-- x402: the starter (core, Spring wiring, bazaar extension) plus the Cardano mechanism. -->
     <dependency>
       <groupId>org.x402</groupId>
       <artifactId>x402-spring-boot-starter</artifactId>
+      <version>${x402.version}</version>
+    </dependency>
+    <!-- The payment mechanism: the starter brings none, you add the chains you accept. -->
+    <dependency>
+      <groupId>org.x402</groupId>
+      <artifactId>x402-mechanism-cardano</artifactId>
       <version>${x402.version}</version>
     </dependency>
     <dependency>

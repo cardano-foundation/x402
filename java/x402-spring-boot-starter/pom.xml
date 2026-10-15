@@ -13,7 +13,7 @@
 
   <artifactId>x402-spring-boot-starter</artifactId>
   <name>x402-spring-boot-starter</name>
-  <description>Spring Boot starter for x402: auto-configuration plus the Cardano mechanism and extensions.</description>
+  <description>Spring Boot starter for x402: auto-configuration, core and extensions. Add the payment mechanisms you use (e.g. x402-mechanism-cardano) as their own dependencies.</description>
 
   <dependencies>
     <!-- Boot's starter convention: core Boot support (auto-configuration, logging). -->
@@ -29,13 +29,13 @@
       <groupId>org.x402</groupId>
       <artifactId>x402-core</artifactId>
     </dependency>
-    <dependency>
-      <groupId>org.x402</groupId>
-      <artifactId>x402-mechanism-cardano</artifactId>
-    </dependency>
+    <!-- Chain-agnostic and core-only, so it is bundled: a YAML extension block must never be
+         passed through unprocessed for lack of a jar. -->
     <dependency>
       <groupId>org.x402</groupId>
       <artifactId>x402-extensions</artifactId>
     </dependency>
+    <!-- No payment mechanism: add the ones you use (org.x402:x402-mechanism-cardano, ...).
+         Configuration naming a missing one fails at startup (X402MechanismCheck). -->
   </dependencies>
 </project>

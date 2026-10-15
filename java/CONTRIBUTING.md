@@ -8,7 +8,7 @@
 | `x402-mechanism-cardano` | Cardano `exact` scheme: client, server (Masumi terms binding), facilitator |
 | `x402-extensions` | Bazaar discovery declarations |
 | `x402-spring-boot-autoconfigure` | Spring Boot auto-configuration (WebMvc, WebFlux, clients, facilitator server) |
-| `x402-spring-boot-starter` | The one dependency applications add |
+| `x402-spring-boot-starter` | What applications add, next to the mechanisms they use (no mechanism bundled; `X402MechanismCheck` fails startup for a configured but missing one) |
 | `legacy/` | The v1 SDK, unchanged, built on its own |
 | `tools/ts-vectors/` | Exports TypeScript reference behaviour as JSON fixtures for the tests |
 

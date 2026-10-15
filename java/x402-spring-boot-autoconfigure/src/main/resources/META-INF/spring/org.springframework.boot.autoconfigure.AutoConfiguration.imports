@@ -7,3 +7,4 @@ org.x402.spring.cardano.X402CardanoAutoConfiguration
 org.x402.spring.client.cardano.X402CardanoClientAutoConfiguration
 org.x402.spring.extensions.X402BazaarAutoConfiguration
 org.x402.spring.facilitator.X402FacilitatorServerAutoConfiguration
+org.x402.spring.autoconfigure.X402MechanismCheckAutoConfiguration

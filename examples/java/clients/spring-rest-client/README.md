@@ -1,6 +1,6 @@
 # x402 Spring client example (`RestClient`, `@HttpExchange`)
 
-A Spring Boot command-line app that pays x402 endpoints on Cardano preprod. The code is plain Spring; x402 comes from the starter and [`application.yml`](src/main/resources/application.yml).
+A Spring Boot command-line app that pays x402 endpoints on Cardano preprod. The code is plain Spring; x402 comes from the starter, the `x402-mechanism-cardano` dependency and [`application.yml`](src/main/resources/application.yml).
 
 ## The configuration
 

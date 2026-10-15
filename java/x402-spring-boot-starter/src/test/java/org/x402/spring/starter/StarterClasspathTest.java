@@ -1,13 +1,17 @@
 package org.x402.spring.starter;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 import java.io.IOException;
 import java.io.InputStream;
 import java.nio.charset.StandardCharsets;
 import org.junit.jupiter.api.Test;
 
-/** The one dependency applications add brings the x402 auto-configuration and Cardano along. */
+/**
+ * The starter brings the x402 auto-configuration and extensions, but no payment mechanism:
+ * applications add the chains they use.
+ */
 class StarterClasspathTest {
 
   @Test
@@ -28,9 +32,10 @@ class StarterClasspathTest {
   }
 
   @Test
-  void theCardanoMechanismAndExtensionsComeWithIt() throws ClassNotFoundException {
-    assertThat(Class.forName(
-        "org.x402.mechanisms.cardano.exact.server.ExactCardanoServerScheme")).isNotNull();
+  void theStarterBringsExtensionsButNoMechanism() throws ClassNotFoundException {
     assertThat(Class.forName("org.x402.extensions.bazaar.Bazaar")).isNotNull();
+    assertThatThrownBy(() -> Class.forName(
+        "org.x402.mechanisms.cardano.exact.server.ExactCardanoServerScheme"))
+        .isInstanceOf(ClassNotFoundException.class);
   }
 }

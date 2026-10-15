@@ -31,6 +31,12 @@
       <artifactId>x402-spring-boot-starter</artifactId>
       <version>${x402.version}</version>
     </dependency>
+    <!-- The payment mechanism: the starter brings none, you add the chains you accept. -->
+    <dependency>
+      <groupId>org.x402</groupId>
+      <artifactId>x402-mechanism-cardano</artifactId>
+      <version>${x402.version}</version>
+    </dependency>
     <!-- A command-line app: RestClient without a web server. -->
     <dependency>
       <groupId>org.springframework.boot</groupId>
