@@ -1,13 +1,15 @@
 package org.x402.spring.autoconfigure;
 
 import java.util.ArrayList;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Set;
 import java.util.TreeSet;
 import java.util.function.Predicate;
-import java.util.regex.Pattern;
+import org.springframework.boot.context.properties.bind.Bindable;
 import org.springframework.boot.context.properties.bind.Binder;
 import org.springframework.boot.context.properties.source.ConfigurationPropertyName;
+import org.springframework.boot.context.properties.source.ConfigurationPropertyName.Form;
 import org.springframework.boot.context.properties.source.ConfigurationPropertySource;
 import org.springframework.boot.context.properties.source.ConfigurationPropertySources;
 import org.springframework.boot.context.properties.source.IterableConfigurationPropertySource;
@@ -40,13 +42,12 @@ public final class X402MechanismCheck {
 
   static final List<Mechanism> MECHANISMS = List.of(
       new Mechanism("Cardano", "org.x402:x402-mechanism-cardano",
-          "org.x402.mechanisms.cardano.CardanoNetworks",
+          "org.x402.mechanisms.cardano.exact.server.ExactCardanoServerScheme",
           n -> n.startsWith("cardano:") || n.startsWith("cip34:"),
           "x402.client.cardano.networks", "x402.facilitator-server.cardano.networks"));
 
-  private static final Pattern ACCOUNT_NETWORK = Pattern.compile("x402\\.accounts\\.[^.]+\\.network");
-  private static final Pattern OPTION_NETWORK =
-      Pattern.compile("x402\\.routes\\.[^.]+\\.accepts\\[\\d+]\\.network");
+  private static final ConfigurationPropertyName ACCOUNTS = ConfigurationPropertyName.of("x402.accounts");
+  private static final ConfigurationPropertyName ROUTES = ConfigurationPropertyName.of("x402.routes");
 
   private X402MechanismCheck() {}
 
@@ -76,31 +77,53 @@ public final class X402MechanismCheck {
   }
 
   private static List<String> uses(Environment environment, Binder binder, Mechanism m) {
-    Set<String> uses = new TreeSet<>();
+    // Only what would actually be wired: a resource server (x402.enabled, default on), a client
+    // (x402.client.enabled, default off), a facilitator (x402.facilitator-server.enabled).
+    boolean server = binder.bind("x402.enabled", Boolean.class).orElse(true);
+    boolean client = binder.bind("x402.client.enabled", Boolean.class).orElse(false);
     boolean facilitator = binder.bind("x402.facilitator-server.enabled", Boolean.class)
         .orElse(false);
-    // Property names, not typed binding: binding part of an indexed entry fails on its other keys.
-    for (String name : propertyNames(environment)) {
-      if (ACCOUNT_NETWORK.matcher(name).matches() || OPTION_NETWORK.matcher(name).matches()) {
-        String network = binder.bind(name, String.class).orElse(null);
+    ConfigurationPropertyName clientNetworks = ConfigurationPropertyName.of(m.clientNetworks());
+    ConfigurationPropertyName facilitatorNetworks =
+        ConfigurationPropertyName.of(m.facilitatorNetworks());
+    Set<String> uses = new TreeSet<>();
+    // Property names compared as ConfigurationPropertyName, as the binder does: dashes, case,
+    // camelCase, environment variables and bracketed map keys all match.
+    for (ConfigurationPropertyName name : propertyNames(environment)) {
+      if (server && (isAccountNetwork(name) || isOptionNetwork(name))) {
+        String network = binder.bind(name, Bindable.of(String.class)).orElse(null);
         if (network != null && m.network().test(network.strip())) {
-          uses.add(name);
+          uses.add(name.toString());
         }
-      } else if (name.startsWith(m.clientNetworks() + "[")) {
+      } else if (client && clientNetworks.isAncestorOf(name)) {
         uses.add(m.clientNetworks());
-      } else if (facilitator && name.startsWith(m.facilitatorNetworks() + "[")) {
+      } else if (facilitator && facilitatorNetworks.isAncestorOf(name)) {
         uses.add(m.facilitatorNetworks());
       }
     }
     return new ArrayList<>(uses);
   }
 
-  private static Set<String> propertyNames(Environment environment) {
-    Set<String> names = new TreeSet<>();
+  /** {@code x402.accounts.<name>.network}. */
+  private static boolean isAccountNetwork(ConfigurationPropertyName name) {
+    return ACCOUNTS.isAncestorOf(name) && name.getNumberOfElements() == 4
+        && "network".equals(name.getElement(3, Form.UNIFORM));
+  }
+
+  /** {@code x402.routes.<name>.accepts[<i>].network}. */
+  private static boolean isOptionNetwork(ConfigurationPropertyName name) {
+    return ROUTES.isAncestorOf(name) && name.getNumberOfElements() == 6
+        && "accepts".equals(name.getElement(3, Form.UNIFORM)) && name.isNumericIndex(4)
+        && "network".equals(name.getElement(5, Form.UNIFORM));
+  }
+
+  /** Names from every source that can list them; a custom unlisted source is not seen. */
+  private static Set<ConfigurationPropertyName> propertyNames(Environment environment) {
+    ConfigurationPropertyName root = ConfigurationPropertyName.of("x402");
+    Set<ConfigurationPropertyName> names = new LinkedHashSet<>();
     for (ConfigurationPropertySource source : ConfigurationPropertySources.get(environment)) {
       if (source instanceof IterableConfigurationPropertySource iterable) {
-        iterable.stream().map(ConfigurationPropertyName::toString)
-            .filter(n -> n.startsWith("x402.")).forEach(names::add);
+        iterable.stream().filter(root::isAncestorOf).forEach(names::add);
       }
     }
     return names;

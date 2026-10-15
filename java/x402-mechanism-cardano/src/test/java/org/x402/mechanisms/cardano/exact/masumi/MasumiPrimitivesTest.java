@@ -15,9 +15,9 @@ import java.util.HexFormat;
 import java.util.List;
 import java.util.Map;
 import org.junit.jupiter.api.Test;
-import org.x402.mechanisms.cardano.CardanoAddresses;
-import org.x402.mechanisms.cardano.Cbor;
-import org.x402.mechanisms.cardano.PlutusEncoding;
+import org.x402.mechanisms.cardano.utils.CardanoAddresses;
+import org.x402.mechanisms.cardano.utils.Cbor;
+import org.x402.mechanisms.cardano.utils.PlutusEncoding;
 import org.x402.mechanisms.cardano.testing.MasumiFixtures;
 import org.x402.mechanisms.cardano.testing.TxBuilder;
 

@@ -22,7 +22,7 @@ import org.x402.core.server.X402ResourceServer;
 import org.x402.core.types.PaymentRequired;
 import org.x402.http.PaymentOption;
 import org.x402.http.X402HttpResourceServer;
-import org.x402.mechanisms.cardano.CardanoNetworks;
+import org.x402.mechanisms.cardano.utils.CardanoNetworks;
 import org.x402.mechanisms.cardano.exact.masumi.MasumiBlueprint;
 import org.x402.mechanisms.cardano.exact.masumi.MasumiDeployment;
 import org.x402.mechanisms.cardano.exact.server.CardanoSellerSigner;

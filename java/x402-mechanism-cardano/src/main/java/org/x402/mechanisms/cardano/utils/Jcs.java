@@ -1,4 +1,4 @@
-package org.x402.mechanisms.cardano;
+package org.x402.mechanisms.cardano.utils;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import java.math.BigDecimal;

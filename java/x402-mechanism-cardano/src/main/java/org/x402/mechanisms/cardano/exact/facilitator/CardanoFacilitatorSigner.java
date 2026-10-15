@@ -1,7 +1,7 @@
 package org.x402.mechanisms.cardano.exact.facilitator;
 
 import java.util.List;
-import org.x402.mechanisms.cardano.MnemonicAccounts;
+import org.x402.mechanisms.cardano.utils.MnemonicAccounts;
 
 /**
  * The facilitator's own addresses for {@code /supported} (the chain backend does not

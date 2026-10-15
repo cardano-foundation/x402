@@ -7,7 +7,7 @@ import java.time.Clock;
 import java.util.Map;
 import java.util.Objects;
 import java.util.function.Function;
-import org.x402.mechanisms.cardano.CardanoNetworks;
+import org.x402.mechanisms.cardano.utils.CardanoNetworks;
 import org.x402.mechanisms.cardano.chain.BlockfrostChainBackend;
 import org.x402.mechanisms.cardano.exact.client.MasumiBuyerInput;
 import org.x402.mechanisms.cardano.exact.masumi.MasumiConstants;

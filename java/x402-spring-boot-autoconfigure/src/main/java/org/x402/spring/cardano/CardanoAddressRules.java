@@ -1,8 +1,8 @@
 package org.x402.spring.cardano;
 
 import java.util.Set;
-import org.x402.mechanisms.cardano.CardanoAddresses;
-import org.x402.mechanisms.cardano.CardanoNetworks;
+import org.x402.mechanisms.cardano.utils.CardanoAddresses;
+import org.x402.mechanisms.cardano.utils.CardanoNetworks;
 
 /** The receiver checks, shared by startup and the per-request guard. */
 final class CardanoAddressRules {

@@ -14,9 +14,9 @@ import java.util.Map;
 import org.junit.jupiter.api.Test;
 import org.x402.core.types.PaymentRequirements;
 import org.x402.core.types.ResourceInfo;
-import org.x402.mechanisms.cardano.CardanoAddresses;
-import org.x402.mechanisms.cardano.DecodedCardanoTransaction;
-import org.x402.mechanisms.cardano.PlutusEncoding;
+import org.x402.mechanisms.cardano.utils.CardanoAddresses;
+import org.x402.mechanisms.cardano.utils.DecodedCardanoTransaction;
+import org.x402.mechanisms.cardano.utils.PlutusEncoding;
 import org.x402.mechanisms.cardano.testing.MasumiFixtures;
 import org.x402.mechanisms.cardano.testing.TxBuilder;
 

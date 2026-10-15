@@ -9,7 +9,7 @@ import java.util.List;
 import java.util.Locale;
 import java.util.Objects;
 import org.x402.core.types.PaymentRequirements;
-import org.x402.mechanisms.cardano.CardanoConstants;
+import org.x402.mechanisms.cardano.utils.CardanoConstants;
 
 /**
  * Issues a Masumi {@code PaymentRequirements}: request

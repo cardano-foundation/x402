@@ -8,10 +8,10 @@ import com.bloxbean.cardano.client.plutus.spec.PlutusData;
 import java.math.BigInteger;
 import java.util.List;
 import java.util.Objects;
-import org.x402.mechanisms.cardano.CardanoAddresses;
-import org.x402.mechanisms.cardano.Cbor;
-import org.x402.mechanisms.cardano.CardanoAddresses.Pointer;
-import org.x402.mechanisms.cardano.PlutusEncoding;
+import org.x402.mechanisms.cardano.utils.CardanoAddresses;
+import org.x402.mechanisms.cardano.utils.Cbor;
+import org.x402.mechanisms.cardano.utils.CardanoAddresses.Pointer;
+import org.x402.mechanisms.cardano.utils.PlutusEncoding;
 
 /**
  * Codec for the Masumi {@code vested_pay} lock datum: the

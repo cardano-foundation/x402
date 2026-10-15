@@ -46,7 +46,7 @@ class MechanismOnClasspathTest {
   @Test
   void aCardanoServerWithoutTheMechanismFailsAndNamesTheDependency() {
     server().withClassLoader(WITHOUT_CARDANO).run(ctx -> assertThat(ctx).getFailure()
-        .rootCause().hasMessageContaining("x402-mechanism-cardano"));
+            .hasStackTraceContaining("x402-mechanism-cardano"));
   }
 
   @Test
@@ -68,10 +68,11 @@ class MechanismOnClasspathTest {
             X402CardanoClientAutoConfiguration.class))
         .withClassLoader(WITHOUT_CARDANO)
         .withPropertyValues(
+            "x402.client.enabled=true",
             "x402.client.cardano.networks[0].network=cardano:preprod",
             "x402.client.cardano.networks[0].mnemonic=placeholder")
         .run(ctx -> assertThat(ctx).getFailure()
-            .rootCause().hasMessageContaining("x402-mechanism-cardano"));
+            .hasStackTraceContaining("x402-mechanism-cardano"));
   }
 
   @Test
@@ -85,6 +86,35 @@ class MechanismOnClasspathTest {
             "x402.facilitator-server.cardano.networks[0].network=cardano:preprod",
             "x402.facilitator-server.cardano.networks[0].blockfrost.project-id=placeholder")
         .run(ctx -> assertThat(ctx).getFailure()
-            .rootCause().hasMessageContaining("x402-mechanism-cardano"));
+            .hasStackTraceContaining("x402-mechanism-cardano"));
+  }
+
+  @Test
+  void relaxedSpellingsAreRecognised() {
+    ApplicationContextRunner runner = new ApplicationContextRunner()
+        .withConfiguration(AutoConfigurations.of(X402MechanismCheckAutoConfiguration.class))
+        .withClassLoader(WITHOUT_CARDANO);
+    // camelCase, as YAML may write it; the environment-variable form binds to the same name.
+    runner.withPropertyValues("x402.facilitatorServer.enabled=true",
+            "x402.facilitatorServer.cardano.networks[0].network=cardano:preprod")
+        .run(ctx -> assertThat(ctx).getFailure()
+            .hasStackTraceContaining("x402-mechanism-cardano"));
+    // A bracketed map key.
+    runner.withPropertyValues("x402.accounts[seller].network=cardano:preprod")
+        .run(ctx -> assertThat(ctx).getFailure()
+            .hasStackTraceContaining("x402-mechanism-cardano"));
+  }
+
+  @Test
+  void configurationThatWiresNothingIsNotChecked() {
+    new ApplicationContextRunner()
+        .withConfiguration(AutoConfigurations.of(X402MechanismCheckAutoConfiguration.class))
+        .withClassLoader(WITHOUT_CARDANO)
+        .withPropertyValues(
+            "x402.enabled=false",
+            "x402.accounts.seller.network=cardano:preprod",
+            "x402.client.cardano.networks[0].network=cardano:preprod",
+            "x402.facilitator-server.cardano.networks[0].network=cardano:preprod")
+        .run(ctx -> assertThat(ctx).hasNotFailed());
   }
 }

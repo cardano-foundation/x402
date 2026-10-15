@@ -1,4 +1,4 @@
-package org.x402.mechanisms.cardano;
+package org.x402.mechanisms.cardano.utils;
 
 import com.bloxbean.cardano.client.crypto.Blake2bUtil;
 import com.bloxbean.cardano.client.crypto.api.impl.EdDSASigningProvider;

@@ -1,4 +1,4 @@
-package org.x402.mechanisms.cardano;
+package org.x402.mechanisms.cardano.utils;
 
 import java.math.BigInteger;
 import java.util.List;

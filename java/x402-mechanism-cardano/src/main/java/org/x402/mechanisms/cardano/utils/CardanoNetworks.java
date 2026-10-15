@@ -1,4 +1,4 @@
-package org.x402.mechanisms.cardano;
+package org.x402.mechanisms.cardano.utils;
 
 import com.bloxbean.cardano.client.common.model.SlotConfig;
 import com.bloxbean.cardano.client.common.model.SlotConfigs;

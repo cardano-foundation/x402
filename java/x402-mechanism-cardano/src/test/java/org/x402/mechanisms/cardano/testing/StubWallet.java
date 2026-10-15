@@ -11,7 +11,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.concurrent.atomic.AtomicInteger;
-import org.x402.mechanisms.cardano.CardanoUtils;
+import org.x402.mechanisms.cardano.utils.CardanoUtils;
 import org.x402.mechanisms.cardano.chain.UtxoSnapshot;
 
 /** A wallet provider serving fixed UTxOs and counting every call. */

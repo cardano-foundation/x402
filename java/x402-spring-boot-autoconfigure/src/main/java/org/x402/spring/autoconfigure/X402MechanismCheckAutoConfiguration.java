@@ -1,10 +1,9 @@
 package org.x402.spring.autoconfigure;
 
-import org.springframework.boot.LazyInitializationExcludeFilter;
+import org.springframework.beans.factory.config.BeanFactoryPostProcessor;
 import org.springframework.boot.autoconfigure.AutoConfiguration;
 import org.springframework.context.annotation.Bean;
 import org.springframework.core.env.Environment;
-import org.springframework.core.io.ResourceLoader;
 
 /**
  * Runs {@link X402MechanismCheck} at startup, whatever else is enabled: a configured mechanism
@@ -13,21 +12,16 @@ import org.springframework.core.io.ResourceLoader;
 @AutoConfiguration
 public class X402MechanismCheckAutoConfiguration {
 
-  /** Marker bean; creating it runs the check. */
-  public static final class MechanismsChecked {
-    private MechanismsChecked() {}
-  }
-
+  /**
+   * The check, as a bean factory post-processor: it runs before any bean is created, so no other
+   * configuration can fail first on the missing classes and hide its message.
+   *
+   * @param environment the application's environment
+   * @return the post-processor
+   */
   @Bean
-  MechanismsChecked x402MechanismsChecked(Environment environment, ResourceLoader resources) {
-    // The application context's class loader, which is the one that loads mechanism classes.
-    X402MechanismCheck.check(environment, resources.getClassLoader());
-    return new MechanismsChecked();
-  }
-
-  /** Keeps the check eager under {@code spring.main.lazy-initialization}. */
-  @Bean
-  static LazyInitializationExcludeFilter x402MechanismCheckEager() {
-    return LazyInitializationExcludeFilter.forBeanTypes(MechanismsChecked.class);
+  static BeanFactoryPostProcessor x402MechanismCheck(Environment environment) {
+    return beanFactory -> X402MechanismCheck.check(environment,
+        beanFactory.getBeanClassLoader());
   }
 }

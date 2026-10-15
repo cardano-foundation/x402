@@ -11,8 +11,8 @@ import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import java.util.regex.Pattern;
-import org.x402.mechanisms.cardano.CardanoAddresses;
-import org.x402.mechanisms.cardano.CardanoPolicies;
+import org.x402.mechanisms.cardano.utils.CardanoAddresses;
+import org.x402.mechanisms.cardano.utils.CardanoPolicies;
 
 /**
  * Closed-object wire schema of the Masumi {@code extra} block,

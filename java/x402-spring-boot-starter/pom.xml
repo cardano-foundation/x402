@@ -37,5 +37,12 @@
     </dependency>
     <!-- No payment mechanism: add the ones you use (org.x402:x402-mechanism-cardano, ...).
          Configuration naming a missing one fails at startup (X402MechanismCheck). -->
+
+    <!-- Tests run on the starter's real classpath, which has no mechanism. -->
+    <dependency>
+      <groupId>org.springframework.boot</groupId>
+      <artifactId>spring-boot-test</artifactId>
+      <scope>test</scope>
+    </dependency>
   </dependencies>
 </project>

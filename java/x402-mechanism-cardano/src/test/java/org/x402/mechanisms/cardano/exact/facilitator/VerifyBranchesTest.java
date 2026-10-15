@@ -20,6 +20,8 @@ import org.x402.mechanisms.cardano.chain.SettlementEvidence;
 import org.x402.mechanisms.cardano.chain.UtxoSnapshot;
 import org.x402.mechanisms.cardano.testing.StubBackend;
 import org.x402.mechanisms.cardano.testing.TxBuilder;
+import org.x402.mechanisms.cardano.utils.CardanoTransactionDecoder;
+import org.x402.mechanisms.cardano.utils.Cbor;
 
 /**
  * Verification and settlement branches the exported fixtures do not reach, on hand-built signed
@@ -169,7 +171,7 @@ class VerifyBranchesTest {
   @Test
   void balanceChangingBodiesNeedACompletePhase1Validator() {
     byte[] mint =
-        new org.x402.mechanisms.cardano.Cbor.Writer()
+        new Cbor.Writer()
             .header(5, 1)
             .bytes(java.util.HexFormat.of().parseHex(TxBuilder.hash28(0x01)))
             .header(5, 1)
@@ -269,7 +271,7 @@ class VerifyBranchesTest {
     assertThat(scheme.settle(payload(more, tx, NONCE), more).errorReason()).isEqualTo("duplicate_settlement");
     // The re-check itself still runs for a claim stored without a binding.
     var unbound = new InMemorySettlementClaimStore();
-    String hash = org.x402.mechanisms.cardano.CardanoTransactionDecoder.decode(tx).txHash();
+    String hash = CardanoTransactionDecoder.decode(tx).txHash();
     unbound.claimSettlement(new SettlementClaim(hash, "earlier", null, null));
     unbound.markSubmitted(hash, "earlier");
     var unboundScheme = new ExactCardanoFacilitatorScheme(backend, null, ExactCardanoFacilitatorOptions.builder()
@@ -285,7 +287,7 @@ class VerifyBranchesTest {
         .isEqualTo("the chain lookup failed while resuming a broadcast transaction: tip unknown");
     backend.slotError = null;
 
-    backend.evidence.put(org.x402.mechanisms.cardano.CardanoTransactionDecoder.decode(tx).txHash(),
+    backend.evidence.put(CardanoTransactionDecoder.decode(tx).txHash(),
         new SettlementEvidence(SettlementEvidence.Status.MEMPOOL, -1));
     assertThat(scheme.settle(payload(req, tx, NONCE), req).isPending()).isTrue();
     assertThat(backend.submitted).hasSize(1);
@@ -305,7 +307,7 @@ class VerifyBranchesTest {
           @Override
           public org.x402.mechanisms.cardano.chain.SubmissionResult submitTransaction(String tx, String network) {
             return new org.x402.mechanisms.cardano.chain.SubmissionResult(
-                org.x402.mechanisms.cardano.CardanoTransactionDecoder.decode(tx).txHash(),
+                CardanoTransactionDecoder.decode(tx).txHash(),
                 SettlementEvidence.Status.CONFIRMED);
           }
         };

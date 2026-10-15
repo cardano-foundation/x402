@@ -19,7 +19,7 @@ import org.x402.core.types.PaymentPayload;
 import org.x402.core.types.PaymentRequirements;
 import org.x402.core.types.SettleResponse;
 import org.x402.core.types.VerifyResponse;
-import org.x402.mechanisms.cardano.CardanoTransactionDecoder;
+import org.x402.mechanisms.cardano.utils.CardanoTransactionDecoder;
 import org.x402.mechanisms.cardano.testing.FakeChain;
 import org.x402.mechanisms.cardano.testing.Vectors;
 

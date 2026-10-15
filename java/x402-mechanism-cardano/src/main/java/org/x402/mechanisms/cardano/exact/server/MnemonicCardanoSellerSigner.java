@@ -2,7 +2,7 @@ package org.x402.mechanisms.cardano.exact.server;
 
 import com.bloxbean.cardano.client.account.Account;
 import java.util.HexFormat;
-import org.x402.mechanisms.cardano.MnemonicAccounts;
+import org.x402.mechanisms.cardano.utils.MnemonicAccounts;
 import org.x402.mechanisms.cardano.exact.masumi.MasumiCose;
 import org.x402.mechanisms.cardano.exact.masumi.MasumiSellerAuthorization;
 

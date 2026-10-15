@@ -10,7 +10,7 @@ import org.springframework.boot.autoconfigure.condition.ConditionalOnMissingBean
 import org.springframework.context.annotation.Bean;
 import org.springframework.core.env.Environment;
 import org.x402.core.server.X402ResourceServer;
-import org.x402.mechanisms.cardano.CardanoNetworks;
+import org.x402.mechanisms.cardano.utils.CardanoNetworks;
 import org.x402.mechanisms.cardano.exact.masumi.InMemoryMasumiTermsStorage;
 import org.x402.mechanisms.cardano.exact.masumi.MasumiTermsStorage;
 import org.x402.mechanisms.cardano.exact.server.CardanoSellerSigner;

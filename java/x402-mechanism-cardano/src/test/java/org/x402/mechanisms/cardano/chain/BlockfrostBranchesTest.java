@@ -16,6 +16,7 @@ import java.time.Duration;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.RegisterExtension;
 import org.x402.mechanisms.cardano.testing.TxBuilder;
+import org.x402.mechanisms.cardano.utils.CardanoTransactionDecoder;
 
 /** Blockfrost backend edge cases. */
 class BlockfrostBranchesTest {
@@ -89,7 +90,7 @@ class BlockfrostBranchesTest {
     wm.stubFor(post(urlPathEqualTo("/utils/txs/evaluate/utxos")).willReturn(aResponse().withStatus(500)));
     assertThatThrownBy(() -> backend().evaluateTransaction(tx, "cardano:preprod")).hasMessageStartingWith("Blockfrost evaluateTx failed: 500");
 
-    String hash = org.x402.mechanisms.cardano.CardanoTransactionDecoder.decode(tx).txHash();
+    String hash = CardanoTransactionDecoder.decode(tx).txHash();
     wm.stubFor(post("/tx/submit").willReturn(okJson("\"" + hash + "\"")));
     wm.stubFor(get("/txs/" + hash).willReturn(aResponse().withStatus(500)));
     assertThat(backend().submitTransaction(tx, "cardano:preprod").status()).isEqualTo(SettlementEvidence.Status.MEMPOOL);

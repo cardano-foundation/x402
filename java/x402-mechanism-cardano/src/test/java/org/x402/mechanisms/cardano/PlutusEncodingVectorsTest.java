@@ -16,6 +16,7 @@ import org.junit.jupiter.api.Test;
 import org.x402.core.json.X402Json;
 import org.x402.mechanisms.cardano.exact.script.ScriptAddresses;
 import org.x402.mechanisms.cardano.testing.Vectors;
+import org.x402.mechanisms.cardano.utils.PlutusEncoding;
 
 /**
  * Plutus data encodings and parameterised script hashes, compared with vectors the TypeScript

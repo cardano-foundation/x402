@@ -12,7 +12,7 @@ import org.x402.core.FacilitatorContext;
 import org.x402.core.types.PaymentPayload;
 import org.x402.core.types.PaymentRequirements;
 import org.x402.core.types.VerifyResponse;
-import org.x402.mechanisms.cardano.CardanoErrors;
+import org.x402.mechanisms.cardano.utils.CardanoErrors;
 import org.x402.mechanisms.cardano.chain.CardanoChainBackend;
 import org.x402.mechanisms.cardano.chain.SettlementEvidence;
 import org.x402.mechanisms.cardano.chain.SubmissionResult;

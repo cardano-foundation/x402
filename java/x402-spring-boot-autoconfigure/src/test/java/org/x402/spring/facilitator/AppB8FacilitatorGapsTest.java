@@ -15,7 +15,7 @@ import org.springframework.boot.actuate.health.Health;
 import org.springframework.boot.actuate.health.Status;
 import org.springframework.boot.autoconfigure.AutoConfigurations;
 import org.springframework.boot.test.context.runner.ApplicationContextRunner;
-import org.x402.mechanisms.cardano.CardanoNetworks;
+import org.x402.mechanisms.cardano.utils.CardanoNetworks;
 
 /**
  * Work package B8-gaps, Spring part: the app's provider-identity and readiness tests

@@ -5,7 +5,7 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import org.springframework.beans.factory.ObjectProvider;
-import org.x402.mechanisms.cardano.CardanoNetworks;
+import org.x402.mechanisms.cardano.utils.CardanoNetworks;
 import org.x402.mechanisms.cardano.chain.BlockfrostChainBackend;
 import org.x402.mechanisms.cardano.exact.client.ClientCardanoSigner;
 import org.x402.mechanisms.cardano.signer.ClientCardanoSignerConfig;

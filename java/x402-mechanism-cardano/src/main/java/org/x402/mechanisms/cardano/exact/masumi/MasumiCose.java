@@ -8,8 +8,8 @@ import java.util.Arrays;
 import java.util.HexFormat;
 import java.util.List;
 import java.util.Map;
-import org.x402.mechanisms.cardano.CardanoAddresses;
-import org.x402.mechanisms.cardano.Cbor;
+import org.x402.mechanisms.cardano.utils.CardanoAddresses;
+import org.x402.mechanisms.cardano.utils.Cbor;
 
 /**
  * The seller's CIP-8 authorization over {@code termsDigest}. Verification re-encodes the decoded

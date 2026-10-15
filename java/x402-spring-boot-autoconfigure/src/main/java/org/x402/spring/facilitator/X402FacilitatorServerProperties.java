@@ -4,7 +4,6 @@ import java.time.Duration;
 import java.util.List;
 import org.springframework.boot.context.properties.ConfigurationProperties;
 import org.springframework.boot.context.properties.bind.DefaultValue;
-import org.x402.mechanisms.cardano.exact.facilitator.ScriptDatumPolicy;
 import org.x402.spring.cardano.X402CardanoProperties;
 
 /**
@@ -45,7 +44,7 @@ public record X402FacilitatorServerProperties(
       @DefaultValue("5m") Duration maxTipAge,
       @DefaultValue("10s") Duration lookupTimeout,
       @DefaultValue("64") int maxInputLookups,
-      @DefaultValue("reference") ScriptDatumPolicy scriptDatumPolicy,
+      @DefaultValue("reference") String scriptDatumPolicy,
       @DefaultValue("65536") int maxTxBytes,
       List<Network> networks) {
 

@@ -9,12 +9,13 @@ import java.util.Locale;
 import java.util.Map;
 import java.util.Set;
 import org.springframework.beans.factory.ObjectProvider;
-import org.x402.mechanisms.cardano.CardanoNetworks;
+import org.x402.mechanisms.cardano.utils.CardanoNetworks;
 import org.x402.mechanisms.cardano.chain.BlockfrostChainBackend;
 import org.x402.mechanisms.cardano.chain.CardanoChainBackend;
 import org.x402.mechanisms.cardano.exact.facilitator.CardanoFacilitatorSigner;
 import org.x402.mechanisms.cardano.exact.facilitator.ExactCardanoFacilitatorOptions;
 import org.x402.mechanisms.cardano.exact.facilitator.ExactCardanoFacilitatorScheme;
+import org.x402.mechanisms.cardano.exact.facilitator.ScriptDatumPolicy;
 import org.x402.mechanisms.cardano.exact.facilitator.SettlementClaimStore;
 import org.x402.mechanisms.cardano.exact.masumi.MasumiDeploymentValidator;
 import org.x402.mechanisms.cardano.exact.masumi.MasumiRegistryValidator;
@@ -95,12 +96,26 @@ public final class CardanoFacilitatorSchemes {
           .registryValidator(registry).deploymentValidator(deployment).clock(clock)
           .slotConfig(slots).lookupTimeout(cardano.lookupTimeout())
           .maxInputLookups(cardano.maxInputLookups())
-          .scriptDatumPolicy(cardano.scriptDatumPolicy())
+          .scriptDatumPolicy(scriptDatumPolicy(cardano.scriptDatumPolicy()))
           .maxTransactionBytes(cardano.maxTxBytes())
           .masumiAllowedScriptHashes(scriptHashes(where, entry.masumiAllowedScriptHashes())).build();
       backends.put(network, backend);
       options.put(network, opts);
       schemes.put(network, new ExactCardanoFacilitatorScheme(backend, signer, opts));
+    }
+  }
+
+  /**
+   * The datum policy from its property value. The properties keep it as text, so binding them
+   * never loads a Cardano class: a facilitator without the mechanism must still start.
+   */
+  private static ScriptDatumPolicy scriptDatumPolicy(String value) {
+    String name = value == null ? "" : value.strip().toUpperCase(Locale.ROOT).replace('-', '_');
+    try {
+      return ScriptDatumPolicy.valueOf(name);
+    } catch (IllegalArgumentException e) {
+      throw new X402ConfigurationException("x402.facilitator-server.cardano.script-datum-policy: "
+          + value + " is not one of reference, strict, v3-optional");
     }
   }
 

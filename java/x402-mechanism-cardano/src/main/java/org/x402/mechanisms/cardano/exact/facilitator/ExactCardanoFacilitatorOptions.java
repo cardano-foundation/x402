@@ -4,8 +4,8 @@ import com.bloxbean.cardano.client.common.model.SlotConfig;
 import java.time.Clock;
 import java.time.Duration;
 import java.util.Set;
-import org.x402.mechanisms.cardano.CardanoConstants;
-import org.x402.mechanisms.cardano.CardanoNetworks;
+import org.x402.mechanisms.cardano.utils.CardanoConstants;
+import org.x402.mechanisms.cardano.utils.CardanoNetworks;
 import org.x402.mechanisms.cardano.exact.masumi.MasumiDeploymentValidator;
 import org.x402.mechanisms.cardano.exact.masumi.MasumiRegistryValidator;
 

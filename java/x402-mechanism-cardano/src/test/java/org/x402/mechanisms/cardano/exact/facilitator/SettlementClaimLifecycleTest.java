@@ -24,8 +24,8 @@ import org.x402.core.types.PaymentRequirements;
 import org.x402.core.types.ResourceInfo;
 import org.x402.core.types.SettleResponse;
 import org.x402.core.types.VerifyResponse;
-import org.x402.mechanisms.cardano.CardanoErrors;
-import org.x402.mechanisms.cardano.CardanoTransactionDecoder;
+import org.x402.mechanisms.cardano.utils.CardanoErrors;
+import org.x402.mechanisms.cardano.utils.CardanoTransactionDecoder;
 import org.x402.mechanisms.cardano.chain.CardanoChainBackend;
 import org.x402.mechanisms.cardano.chain.SettlementEvidence;
 import org.x402.mechanisms.cardano.chain.SubmissionResult;
@@ -33,6 +33,7 @@ import org.x402.mechanisms.cardano.chain.UtxoSnapshot;
 import org.x402.mechanisms.cardano.testing.FakeChain;
 import org.x402.mechanisms.cardano.testing.FakeChain.SubmitMode;
 import org.x402.mechanisms.cardano.testing.Vectors;
+import org.x402.mechanisms.cardano.utils.CardanoAddresses;
 
 /**
  * The settlement claim lifecycle through the scheme: replay only on freshly read evidence (D1),
@@ -647,7 +648,7 @@ class SettlementClaimLifecycleTest {
     store.markSubmitted(hash, "earlier");
     chain.chain.include(tx, 1);
     // The fixture transaction carries key witnesses only.
-    chain.nonceOwner = org.x402.mechanisms.cardano.CardanoAddresses.enterpriseScriptAddress("cardano:preprod",
+    chain.nonceOwner = CardanoAddresses.enterpriseScriptAddress("cardano:preprod",
         "ab".repeat(28));
 
     assertThat(settle(scheme(chain, store)).errorReason()).isEqualTo(CardanoErrors.TRANSACTION_PHASE1_INVALID);

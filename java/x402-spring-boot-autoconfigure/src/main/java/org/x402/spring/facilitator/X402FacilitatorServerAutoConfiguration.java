@@ -24,7 +24,7 @@ import org.x402.core.types.SupportedKind;
 import org.x402.core.utils.Networks;
 import org.x402.http.facilitator.FacilitatorHttpHandler;
 import org.x402.http.facilitator.LocalFacilitatorClient;
-import org.x402.mechanisms.cardano.CardanoNetworks;
+import org.x402.mechanisms.cardano.utils.CardanoNetworks;
 import org.x402.mechanisms.cardano.chain.CardanoChainBackend;
 import org.x402.mechanisms.cardano.exact.facilitator.ExactCardanoFacilitatorScheme;
 import org.x402.mechanisms.cardano.exact.facilitator.InMemorySettlementClaimStore;

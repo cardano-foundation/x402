@@ -5,7 +5,7 @@ import java.util.Set;
 import java.util.function.Function;
 import org.x402.core.types.PaymentRequirements;
 import org.x402.core.types.SupportedKind;
-import org.x402.mechanisms.cardano.CardanoConstants;
+import org.x402.mechanisms.cardano.utils.CardanoConstants;
 import org.x402.mechanisms.cardano.exact.server.ExactCardanoServerConfig;
 import org.x402.mechanisms.cardano.exact.server.ExactCardanoServerScheme;
 

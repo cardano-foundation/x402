@@ -18,10 +18,9 @@ import java.util.HexFormat;
 import java.util.List;
 import java.util.Map;
 import java.util.regex.Pattern;
-import org.x402.mechanisms.cardano.CardanoAddresses;
-import org.x402.mechanisms.cardano.CardanoConstants;
-import org.x402.mechanisms.cardano.Cbor;
-import org.x402.mechanisms.cardano.PlutusEncoding;
+import org.x402.mechanisms.cardano.utils.CardanoAddresses;
+import org.x402.mechanisms.cardano.utils.CardanoConstants;
+import org.x402.mechanisms.cardano.utils.PlutusEncoding;
 
 /**
  * Reconstructs the script credential a {@code script} extra declares and checks it against

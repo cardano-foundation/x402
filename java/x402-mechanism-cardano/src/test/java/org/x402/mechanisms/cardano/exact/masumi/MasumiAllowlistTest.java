@@ -7,8 +7,8 @@ import java.util.List;
 import java.util.Set;
 import org.junit.jupiter.api.Test;
 import org.x402.core.types.PaymentRequirements;
-import org.x402.mechanisms.cardano.CardanoAddresses;
-import org.x402.mechanisms.cardano.CardanoErrors;
+import org.x402.mechanisms.cardano.utils.CardanoAddresses;
+import org.x402.mechanisms.cardano.utils.CardanoErrors;
 import org.x402.mechanisms.cardano.testing.MasumiFixtures;
 import org.x402.mechanisms.cardano.testing.TxBuilder;
 

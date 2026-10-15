@@ -12,7 +12,7 @@ import org.x402.core.json.X402Json;
 import org.x402.core.types.PaymentPayload;
 import org.x402.core.types.PaymentRequirements;
 import org.x402.core.types.ResourceInfo;
-import org.x402.mechanisms.cardano.CardanoConstants;
+import org.x402.mechanisms.cardano.utils.CardanoConstants;
 import org.x402.mechanisms.cardano.exact.masumi.MasumiBlueprint;
 import org.x402.mechanisms.cardano.exact.masumi.MasumiCommitmentInput;
 import org.x402.mechanisms.cardano.exact.masumi.MasumiConstants;

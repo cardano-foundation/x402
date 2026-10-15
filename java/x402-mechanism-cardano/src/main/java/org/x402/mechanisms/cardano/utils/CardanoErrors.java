@@ -1,4 +1,4 @@
-package org.x402.mechanisms.cardano;
+package org.x402.mechanisms.cardano.utils;
 
 /** Error codes produced by the Cardano mechanism. */
 public final class CardanoErrors {

@@ -27,9 +27,9 @@ import java.util.Map;
 import java.util.Objects;
 import java.util.Optional;
 import org.x402.core.json.X402Json;
-import org.x402.mechanisms.cardano.CardanoAddresses;
-import org.x402.mechanisms.cardano.CardanoNetworks;
-import org.x402.mechanisms.cardano.CardanoUtils;
+import org.x402.mechanisms.cardano.utils.CardanoAddresses;
+import org.x402.mechanisms.cardano.utils.CardanoNetworks;
+import org.x402.mechanisms.cardano.utils.CardanoUtils;
 
 /**
  * {@link CardanoChainBackend} over the Blockfrost REST API, including

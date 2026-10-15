@@ -11,7 +11,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.regex.Pattern;
 import org.x402.core.types.PaymentRequirements;
-import org.x402.mechanisms.cardano.Jcs;
+import org.x402.mechanisms.cardano.utils.Jcs;
 
 /**
  * The two Masumi digests: {@code inputHash} over the

@@ -4,8 +4,8 @@ import com.bloxbean.cardano.client.plutus.spec.PlutusData;
 import java.io.ByteArrayOutputStream;
 import java.util.ArrayList;
 import java.util.List;
-import org.x402.mechanisms.cardano.Cbor;
-import org.x402.mechanisms.cardano.PlutusEncoding;
+import org.x402.mechanisms.cardano.utils.Cbor;
+import org.x402.mechanisms.cardano.utils.PlutusEncoding;
 
 /**
  * Plutus parameter application performed directly on the flat bit stream. Every term is copied bit

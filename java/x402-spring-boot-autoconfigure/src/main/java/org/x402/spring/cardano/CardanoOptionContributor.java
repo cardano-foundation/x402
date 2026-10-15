@@ -1,8 +1,8 @@
 package org.x402.spring.cardano;
 
 import java.util.Map;
-import org.x402.mechanisms.cardano.CardanoConstants;
-import org.x402.mechanisms.cardano.CardanoNetworks;
+import org.x402.mechanisms.cardano.utils.CardanoConstants;
+import org.x402.mechanisms.cardano.utils.CardanoNetworks;
 import org.x402.mechanisms.cardano.exact.masumi.MasumiBlueprint;
 import org.x402.mechanisms.cardano.exact.masumi.MasumiDeployment;
 import org.x402.core.server.ResourceConfig;

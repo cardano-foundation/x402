@@ -16,6 +16,7 @@ import org.x402.core.types.VerifyResponse;
 import org.x402.mechanisms.cardano.chain.SubmissionResult;
 import org.x402.mechanisms.cardano.testing.StubBackend;
 import org.x402.mechanisms.cardano.testing.TxBuilder;
+import org.x402.mechanisms.cardano.utils.CardanoErrors;
 
 /** A throwing override or backend capability never escapes the public verify and settle. */
 class ExtensionPointFailureTest {
@@ -143,7 +144,7 @@ class ExtensionPointFailureTest {
     VerifyResponse verdict = scheme.verify(new PaymentPayload(2, null, REQ, p, null), REQ,
         FacilitatorContext.EMPTY);
 
-    assertThat(verdict.invalidReason()).isEqualTo(org.x402.mechanisms.cardano.CardanoErrors.CHAIN_LOOKUP_FAILED);
+    assertThat(verdict.invalidReason()).isEqualTo(CardanoErrors.CHAIN_LOOKUP_FAILED);
   }
 
   @Test
@@ -174,7 +175,7 @@ class ExtensionPointFailureTest {
     VerifyResponse verdict = scheme.verify(new PaymentPayload(2, null, REQ, p, null), REQ,
         FacilitatorContext.EMPTY);
 
-    assertThat(verdict.invalidReason()).isEqualTo(org.x402.mechanisms.cardano.CardanoErrors.CHAIN_LOOKUP_FAILED);
+    assertThat(verdict.invalidReason()).isEqualTo(CardanoErrors.CHAIN_LOOKUP_FAILED);
     assertThat(lookups.get()).isZero();
   }
 }

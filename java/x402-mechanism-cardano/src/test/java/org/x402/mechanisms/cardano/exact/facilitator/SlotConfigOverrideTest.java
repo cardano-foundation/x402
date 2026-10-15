@@ -12,8 +12,8 @@ import org.junit.jupiter.api.Test;
 import org.x402.core.FacilitatorContext;
 import org.x402.core.types.PaymentPayload;
 import org.x402.core.types.PaymentRequirements;
-import org.x402.mechanisms.cardano.CardanoErrors;
-import org.x402.mechanisms.cardano.CardanoNetworks;
+import org.x402.mechanisms.cardano.utils.CardanoErrors;
+import org.x402.mechanisms.cardano.utils.CardanoNetworks;
 import org.x402.mechanisms.cardano.testing.StubBackend;
 import org.x402.mechanisms.cardano.testing.TxBuilder;
 

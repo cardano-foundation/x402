@@ -19,14 +19,14 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.RegisterExtension;
 import org.x402.core.SchemeNetworkClient;
 import org.x402.core.types.PaymentRequirements;
-import org.x402.mechanisms.cardano.CardanoTransactionDecoder;
-import org.x402.mechanisms.cardano.DecodedCardanoTransaction;
+import org.x402.mechanisms.cardano.utils.CardanoTransactionDecoder;
+import org.x402.mechanisms.cardano.utils.DecodedCardanoTransaction;
 import org.x402.mechanisms.cardano.chain.BlockfrostChainBackend;
 import org.x402.mechanisms.cardano.signer.ClientCardanoSignerConfig;
 import org.x402.mechanisms.cardano.signer.MnemonicClientCardanoSigner;
 import org.x402.mechanisms.cardano.testing.StubWallet;
 import org.x402.mechanisms.cardano.testing.Ccl;
-import org.x402.mechanisms.cardano.CardanoUtils;
+import org.x402.mechanisms.cardano.utils.CardanoUtils;
 import org.x402.mechanisms.cardano.testing.TxBuilder;
 
 /**
