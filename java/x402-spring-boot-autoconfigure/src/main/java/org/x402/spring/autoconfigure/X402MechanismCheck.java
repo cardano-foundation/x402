@@ -104,13 +104,13 @@ public final class X402MechanismCheck {
     return new ArrayList<>(uses);
   }
 
-  /** {@code x402.accounts.<name>.network}. */
+  /** {@code x402.accounts.NAME.network}. */
   private static boolean isAccountNetwork(ConfigurationPropertyName name) {
     return ACCOUNTS.isAncestorOf(name) && name.getNumberOfElements() == 4
         && "network".equals(name.getElement(3, Form.UNIFORM));
   }
 
-  /** {@code x402.routes.<name>.accepts[<i>].network}. */
+  /** {@code x402.routes.NAME.accepts[N].network}. */
   private static boolean isOptionNetwork(ConfigurationPropertyName name) {
     return ROUTES.isAncestorOf(name) && name.getNumberOfElements() == 6
         && "accepts".equals(name.getElement(3, Form.UNIFORM)) && name.isNumericIndex(4)

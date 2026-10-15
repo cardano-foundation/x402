@@ -86,7 +86,7 @@ x402:
 Unpaid requests get `402` with a `PAYMENT-REQUIRED` header. A request carrying a valid `PAYMENT-SIGNATURE` is verified by the facilitator, runs your handler, is settled, and gets your response plus a `PAYMENT-RESPONSE` header.
 
 What the starter checks at startup:
-- Every network in the configuration (accounts, options, `x402.client.*`, the facilitator server) has its mechanism on the classpath.
+- Every network that would be wired (accounts and options when `x402.enabled`, `x402.client.cardano.networks` when `x402.client.enabled`, `x402.facilitator-server.cardano.networks` when the facilitator server is enabled) has its mechanism on the classpath. Spellings are matched the way Spring binds them (dashes, camelCase, environment variables).
 - `@X402Payment("x")` without `x402.routes.x` fails, listing the known offers.
 - On a class, `@X402Payment` covers every handler method; a method-level annotation overrides it.
 - The offer is taken from the handler Spring actually dispatches to, so a more specific free handler (`/items/free` next to a paid `/items/{id}`) stays free. CORS pre-flight is never charged; `HEAD` on a paid `GET` handler is charged, because Spring runs the handler.

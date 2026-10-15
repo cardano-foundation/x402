@@ -1,5 +1,7 @@
 package org.x402.mechanisms.cardano.exact.client;
 
+import com.bloxbean.cardano.client.api.helper.FeeCalculationService;
+import com.bloxbean.cardano.client.api.helper.impl.FeeCalculationServiceImpl;
 import com.bloxbean.cardano.client.api.model.ProtocolParams;
 import com.bloxbean.cardano.client.api.model.Utxo;
 import com.bloxbean.cardano.client.crypto.Blake2bUtil;
@@ -7,12 +9,16 @@ import java.math.BigInteger;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Comparator;
+import java.util.HashSet;
 import java.util.HexFormat;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
+import java.util.Set;
 import java.util.TreeMap;
 import org.x402.mechanisms.cardano.utils.CardanoAddresses;
+import org.x402.mechanisms.cardano.utils.CardanoConstants;
 import org.x402.mechanisms.cardano.utils.CardanoUtils;
 import org.x402.mechanisms.cardano.utils.Cbor;
 
@@ -33,6 +39,8 @@ public final class PaymentTransactionBuilder {
   private static final int MIN_UTXO_RAISE_ROUNDS = 4;
   private static final int FEE_ROUNDS = 8;
   private static final HexFormat HEX = HexFormat.of();
+  /** cardano-client-lib's fee rule, minFeeA · size + minFeeB, applied to our own bytes. */
+  private static final FeeCalculationService FEES = new FeeCalculationServiceImpl(null, null);
 
   private PaymentTransactionBuilder() {}
 
@@ -125,6 +133,22 @@ public final class PaymentTransactionBuilder {
       coin = coin.add(c);
       a.forEach((unit, qty) -> assets.merge(unit, qty, BigInteger::add));
     }
+
+    /** Subtracts, never going below zero per unit. */
+    void subtract(BigInteger c, Map<String, BigInteger> a) {
+      coin = coin.subtract(c).max(BigInteger.ZERO);
+      a.forEach((unit, qty) -> assets.computeIfPresent(unit, (k, have) -> {
+        BigInteger left = have.subtract(qty);
+        return left.signum() > 0 ? left : null;
+      }));
+    }
+
+    /** Lovelace under {@code "lovelace"}, tokens under {@code policy.name}. */
+    Map<String, BigInteger> units() {
+      Map<String, BigInteger> units = new TreeMap<>(assets);
+      units.put(CardanoConstants.LOVELACE, coin);
+      return units;
+    }
   }
 
   /**
@@ -153,42 +177,61 @@ public final class PaymentTransactionBuilder {
       payment = new Output(payment.address(), minimum, payment.assets(), payment.datum());
     }
 
-    List<Utxo> selected = new ArrayList<>(List.of(spec.utxos().get(0)));
+    // The nonce is always spent; cardano-client-lib's largest-first strategy picks the rest from
+    // the UTxOs already fetched, reference-script UTxOs excluded.
+    Utxo nonce = spec.utxos().get(0);
     List<Utxo> candidates = new ArrayList<>(spec.utxos().subList(1, spec.utxos().size()));
     candidates.removeIf(u -> u.getReferenceScriptHash() != null);
-    candidates.sort(
-        Comparator.comparing((Utxo u) -> !CardanoUtils.assets(u).isEmpty()).thenComparing(CardanoUtils::lovelace, Comparator.reverseOrder()));
-    while (true) {
-      Attempt attempt = balance(spec, payment, selected, signer, false);
+    // A reference listed twice (or the nonce again) must never become a second input.
+    Set<String> seen = new HashSet<>(Set.of(CardanoUtils.ref(nonce)));
+    candidates.removeIf(u -> !seen.add(CardanoUtils.ref(u)));
+    InputSelection selection = new InputSelection(spec.changeAddress(), candidates);
+
+    Value target = new Value();
+    target.add(payment.coin(), payment.assets());
+    target.subtract(CardanoUtils.lovelace(nonce), CardanoUtils.assets(nonce));
+    // Each round asks for what the previous selection held plus what it fell short by, so the
+    // request strictly grows; past this many rounds every candidate is used.
+    for (int round = 0; round <= candidates.size(); round++) {
+      Optional<List<Utxo>> picked = selection.select(target.units());
+      if (picked.isEmpty()) {
+        break;
+      }
+      List<Utxo> inputs = new ArrayList<>(List.of(nonce));
+      inputs.addAll(picked.get());
+      Attempt attempt = balance(spec, payment, inputs, signer, false);
       if (attempt.built != null) {
         return attempt.built;
       }
-      Value shortfall = attempt.shortfall;
-      int next = -1;
-      for (int i = 0; i < candidates.size(); i++) {
-        Map<String, BigInteger> offered = CardanoUtils.assets(candidates.get(i));
-        if (shortfall.assets.isEmpty() || shortfall.assets.keySet().stream().anyMatch(offered::containsKey)) {
-          next = i;
-          break;
-        }
+      target = new Value();
+      for (Utxo u : picked.get()) {
+        target.add(CardanoUtils.lovelace(u), CardanoUtils.assets(u));
       }
-      if (next < 0 && shortfall.assets.isEmpty()) {
-        Attempt folded = balance(spec, payment, selected, signer, true);
-        if (folded.built != null) {
-          return folded.built;
-        }
-      }
-      if (next < 0) {
-        StringBuilder detail = new StringBuilder("insufficient funds: short " + shortfall.coin + " lovelace");
-        if (!shortfall.assets.isEmpty()) {
-          List<String> parts = new ArrayList<>();
-          shortfall.assets.forEach((unit, qty) -> parts.add(qty + " " + unit));
-          detail.append(" and ").append(String.join(", ", parts));
-        }
-        throw new IllegalStateException(detail.toString());
-      }
-      selected.add(candidates.remove(next));
+      target.add(attempt.shortfall.coin, attempt.shortfall.assets);
     }
+
+    // The candidates cannot cover a growing request: try every spendable UTxO, then fold a
+    // too-small change into the fee, then report what is missing.
+    List<Utxo> all = new ArrayList<>(List.of(nonce));
+    all.addAll(candidates);
+    Attempt attempt = balance(spec, payment, all, signer, false);
+    if (attempt.built != null) {
+      return attempt.built;
+    }
+    Value shortfall = attempt.shortfall;
+    if (shortfall.assets.isEmpty()) {
+      Attempt folded = balance(spec, payment, all, signer, true);
+      if (folded.built != null) {
+        return folded.built;
+      }
+    }
+    StringBuilder detail = new StringBuilder("insufficient funds: short " + shortfall.coin + " lovelace");
+    if (!shortfall.assets.isEmpty()) {
+      List<String> parts = new ArrayList<>();
+      shortfall.assets.forEach((unit, qty) -> parts.add(qty + " " + unit));
+      detail.append(" and ").append(String.join(", ", parts));
+    }
+    throw new IllegalStateException(detail.toString());
   }
 
   private record Attempt(Built built, Value shortfall) {}
@@ -220,15 +263,16 @@ public final class PaymentTransactionBuilder {
             changeAssets.put(unit, rest);
           }
         });
-    BigInteger minFeeA = CardanoUtils.minFeeA(spec.parameters());
-    BigInteger minFeeB = CardanoUtils.minFeeB(spec.parameters());
+    // Refuses parameters without a fee schedule before the fee is computed from them.
+    CardanoUtils.minFeeA(spec.parameters());
+    CardanoUtils.minFeeB(spec.parameters());
     if (noChange) {
       if (!changeAssets.isEmpty()) {
         return new Attempt(null, new Value());
       }
       BigInteger fee = in.coin.subtract(payment.coin());
       byte[][] assembled = assemble(spec, payment, inputs, null, fee, signer);
-      BigInteger needed = minFeeA.multiply(BigInteger.valueOf(assembled[0].length)).add(minFeeB);
+      BigInteger needed = fee(assembled[0], spec.parameters());
       if (needed.compareTo(fee) > 0) {
         Value s = new Value();
         s.coin = needed.subtract(fee);
@@ -252,13 +296,27 @@ public final class PaymentTransactionBuilder {
         return new Attempt(null, s);
       }
       byte[][] assembled = assemble(spec, payment, inputs, change, fee, signer);
-      BigInteger needed = minFeeA.multiply(BigInteger.valueOf(assembled[0].length)).add(minFeeB);
+      BigInteger needed = fee(assembled[0], spec.parameters());
       if (needed.compareTo(fee) <= 0) {
         return new Attempt(finish(spec, inputs, assembled, fee), null);
       }
       fee = needed;
     }
     throw new IllegalStateException("transaction fee did not converge");
+  }
+
+  /**
+   * The fee for these bytes, by cardano-client-lib's rule. That rule computes in 32-bit integers,
+   * so it is checked against the exact value: absurd parameters must fail, not wrap around.
+   */
+  private static BigInteger fee(byte[] transaction, ProtocolParams parameters) {
+    BigInteger exact = CardanoUtils.minFeeA(parameters).multiply(BigInteger.valueOf(transaction.length))
+        .add(CardanoUtils.minFeeB(parameters));
+    BigInteger fee = FEES.calculateFee(transaction, parameters);
+    if (!fee.equals(exact)) {
+      throw new IllegalArgumentException("protocol parameters give a fee out of range: " + exact);
+    }
+    return fee;
   }
 
   private static Built finish(Spec spec, List<Utxo> inputs, byte[][] assembled, BigInteger fee) {
