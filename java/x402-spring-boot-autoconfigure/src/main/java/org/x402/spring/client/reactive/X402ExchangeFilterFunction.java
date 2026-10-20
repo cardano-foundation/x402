@@ -10,10 +10,12 @@ import org.apache.commons.logging.LogFactory;
 import org.reactivestreams.Publisher;
 import org.springframework.core.io.buffer.DataBuffer;
 import org.springframework.http.HttpHeaders;
+import org.springframework.http.HttpMethod;
 import org.springframework.http.client.reactive.ClientHttpRequest;
 import org.springframework.http.client.reactive.ClientHttpRequestDecorator;
 import org.springframework.util.ClassUtils;
 import org.springframework.web.reactive.function.BodyInserter;
+import org.springframework.web.reactive.function.BodyInserters;
 import org.springframework.web.reactive.function.client.ClientRequest;
 import org.springframework.web.reactive.function.client.ClientResponse;
 import org.springframework.web.reactive.function.client.ExchangeFilterFunction;
@@ -39,7 +41,10 @@ import reactor.core.scheduler.Schedulers;
  * (request URI and {@code PAYMENT-REQUIRED.resource.url}). Signing runs on {@code
  * boundedElastic}; the first response is released before the retry. The paid request is marked in
  * the Reactor context so {@link X402ClientHttpConnector} sends it without following redirects, and
- * it is refused when a Reactor Netty connector would follow a redirect.
+ * it is refused when a Reactor Netty connector would follow a redirect. The one exception is an
+ * http to https redirect on the same host (allowed by the policy): it is re-sent once with the
+ * payment. A second redirect of the paid leg is an {@link X402ClientException}; any other
+ * redirect is returned as is.
  */
 public final class X402ExchangeFilterFunction implements ExchangeFilterFunction {
 
@@ -100,9 +105,9 @@ public final class X402ExchangeFilterFunction implements ExchangeFilterFunction 
     }
     Recorder recorder = new Recorder(maxReplayBody);
     Probe probe = new Probe();
-    Consumer<ClientHttpRequest> existing = request.httpRequest();
+    // from(request) already carries the caller's consumer; httpRequest(..) appends the probe.
     ClientRequest first = ClientRequest.from(request).body(recording(request.body(), recorder))
-        .httpRequest(existing == null ? probe : existing.andThen(probe))
+        .httpRequest(probe)
         .build();
     return next.exchange(first).flatMap(response -> response.statusCode().value() == 402
         ? paymentRequired(request, recorder, probe, response, next) : Mono.just(response));
@@ -197,18 +202,51 @@ public final class X402ExchangeFilterFunction implements ExchangeFilterFunction 
 
   private Mono<ClientResponse> sendPaid(ClientRequest request, Recorder recorder,
       PaymentPayload payload, ExchangeFunction next) {
-    Consumer<ClientHttpRequest> existing = request.httpRequest();
+    return exchangePaid(request, request.url(), request.method(), false, recorder, payload, next)
+        .flatMap(response -> {
+          // The paid request never follows redirects. One http to https redirect on the host the
+          // caller chose is re-sent once with the payment, which is how an http URL that
+          // redirects to https can be bought. Any other redirect is returned as is.
+          URI target = TransportRedirects.paidRedirectTarget(request.url(),
+              response.statusCode().value(), response.headers().asHttpHeaders(), hostPolicy);
+          if (target == null) {
+            return Mono.just(response);
+          }
+          boolean toGet = TransportRedirects.toGet(response.statusCode().value(),
+              request.method());
+          return response.releaseBody()
+              .then(exchangePaid(request, target, toGet ? HttpMethod.GET : request.method(),
+                  toGet, recorder, payload, next))
+              .flatMap(second -> {
+                if (!TransportRedirects.isRedirect(second.statusCode().value())) {
+                  return Mono.just(second);
+                }
+                String location = second.headers().asHttpHeaders().getFirst(HttpHeaders.LOCATION);
+                return second.releaseBody().then(Mono.error(
+                    TransportRedirects.redirectedAgain(target, location)));
+              });
+        });
+  }
+
+  private Mono<ClientResponse> exchangePaid(ClientRequest request, URI url, HttpMethod method,
+      boolean toGet, Recorder recorder, PaymentPayload payload, ExchangeFunction next) {
     Consumer<ClientHttpRequest> guard = X402ExchangeFilterFunction::refuseRedirectingTransport;
     BodyInserter<?, ? super ClientHttpRequest> body = request.body();
-    if (recorder.hasBody()) {
+    if (toGet) {
+      body = BodyInserters.empty();
+    } else if (recorder.hasBody()) {
       body = replay(recorder.bytes(), recorder.headers());
     }
-    ClientRequest paid = ClientRequest.from(request)
+    ClientRequest.Builder builder = ClientRequest.from(request).url(url).method(method)
         .header(X402Headers.PAYMENT_SIGNATURE, HeaderCodec.encodePaymentSignature(payload))
         .body(body)
-        .httpRequest(existing == null ? guard : existing.andThen(guard))
-        .build();
-    return next.exchange(paid).contextWrite(ctx -> ctx.put(PAID_REQUEST, Boolean.TRUE));
+        // from(request) already carries the caller's consumer; httpRequest(..) appends to it.
+        .httpRequest(guard);
+    if (toGet) {
+      builder.headers(h -> TransportRedirects.BODY_HEADERS.forEach(h::remove));
+    }
+    return next.exchange(builder.build())
+        .contextWrite(ctx -> ctx.put(PAID_REQUEST, Boolean.TRUE));
   }
 
   private Mono<Boolean> recovered(PaymentPayload payload, ClientResponse response) {

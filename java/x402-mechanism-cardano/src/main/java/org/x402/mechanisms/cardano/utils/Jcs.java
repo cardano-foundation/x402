@@ -235,10 +235,28 @@ public final class Jcs {
     }
     BigDecimal exact = new BigDecimal(d);
     BigDecimal shortest = exact;
+    // ECMAScript Number::toString: the fewest digits that read back as d; of the candidates with
+    // that many digits, the one closest to d, and on an exact tie the one with an even last digit.
+    // Rounding down and up both matter: at a power of two the interval below d is half as wide,
+    // so the nearest k-digit value may miss while the neighbour on the other side hits.
     for (int precision = 1; precision <= 17; precision++) {
-      BigDecimal candidate = exact.round(new MathContext(precision, RoundingMode.HALF_EVEN));
-      if (Double.parseDouble(candidate.toString()) == d) {
-        shortest = candidate;
+      BigDecimal best = null;
+      for (RoundingMode mode : new RoundingMode[] {RoundingMode.DOWN, RoundingMode.UP}) {
+        BigDecimal candidate = exact.round(new MathContext(precision, mode));
+        if (Double.parseDouble(candidate.toString()) != d) {
+          continue;
+        }
+        if (best == null) {
+          best = candidate;
+          continue;
+        }
+        int closer = candidate.subtract(exact).abs().compareTo(best.subtract(exact).abs());
+        if (closer < 0 || (closer == 0 && best.unscaledValue().testBit(0))) {
+          best = candidate;
+        }
+      }
+      if (best != null) {
+        shortest = best;
         break;
       }
     }

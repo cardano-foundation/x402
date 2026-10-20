@@ -4,6 +4,7 @@ import com.bloxbean.cardano.client.api.model.ProtocolParams;
 import com.bloxbean.cardano.client.common.model.SlotConfig;
 import java.math.BigInteger;
 import java.security.SecureRandom;
+import java.time.Duration;
 import java.util.ArrayList;
 import java.util.HashSet;
 import java.util.HexFormat;
@@ -28,6 +29,7 @@ import org.x402.mechanisms.cardano.utils.CardanoPolicies;
 import org.x402.mechanisms.cardano.utils.CardanoTransactionDecoder;
 import org.x402.mechanisms.cardano.utils.CardanoUtils;
 import org.x402.mechanisms.cardano.utils.DecodedCardanoTransaction;
+import org.x402.mechanisms.cardano.chain.BlockfrostChainBackend;
 import org.x402.mechanisms.cardano.chain.CardanoChainBackend;
 import org.x402.mechanisms.cardano.chain.SettlementEvidence;
 import org.x402.mechanisms.cardano.chain.SubmissionResult;
@@ -58,6 +60,7 @@ import org.x402.mechanisms.cardano.exact.script.ScriptAddresses;
  */
 public class ExactCardanoFacilitatorScheme implements SchemeNetworkFacilitator {
 
+  private static final System.Logger LOG = System.getLogger(ExactCardanoFacilitatorScheme.class.getName());
   private static final long VALIDITY_CLOSE_GRACE_MS = 120_000L;
   private static final SecureRandom RANDOM = new SecureRandom();
   private static final String STORE_UNAVAILABLE = "settlement store unavailable";
@@ -92,6 +95,36 @@ public class ExactCardanoFacilitatorScheme implements SchemeNetworkFacilitator {
     this.backend = Objects.requireNonNull(backend, "backend");
     this.signer = signer;
     this.options = options == null ? ExactCardanoFacilitatorOptions.defaults() : options;
+    for (String warning : configurationWarnings(this.backend, this.options)) {
+      LOG.log(System.Logger.Level.WARNING, "[x402] " + warning);
+    }
+  }
+
+  /**
+   * Settings that do not do what they suggest: a configured confirmation wait longer than the
+   * settle's budget for chain calls ({@code settleTimeout - chainCallReserve}), which always ends
+   * the wait first, and a Blockfrost backend that waits for inclusion inside {@code
+   * submitTransaction}, outside the settle timeout. The default confirmation timeout is not
+   * reported: it stands for "as long as the settle allows" (the budget decides with the defaults).
+   */
+  static List<String> configurationWarnings(CardanoChainBackend backend, ExactCardanoFacilitatorOptions options) {
+    List<String> warnings = new ArrayList<>();
+    Duration budget = options.settleTimeout().minus(options.chainCallReserve());
+    if (!options.confirmationTimeout().equals(ExactCardanoFacilitatorOptions.DEFAULT_CONFIRMATION_TIMEOUT)
+        && options.confirmationTimeout().compareTo(budget) > 0) {
+      warnings.add("Cardano confirmationTimeout (" + options.confirmationTimeout().toMillis()
+          + " ms) exceeds what a settle leaves for it: settleTimeout (" + options.settleTimeout().toMillis()
+          + " ms) less chainCallReserve (" + options.chainCallReserve().toMillis() + " ms) = "
+          + budget.toMillis() + " ms, less the time verification and the broadcast took; the wait ends there,"
+          + " so the longer value has no effect");
+    }
+    if (backend instanceof BlockfrostChainBackend blockfrost && blockfrost.config().awaitConfirmation()) {
+      warnings.add("BlockfrostChainBackend is built with awaitConfirmation(true): submitTransaction then waits"
+          + " up to requestTimeout (" + blockfrost.config().requestTimeout().toMillis() + " ms) for inclusion,"
+          + " outside the settle timeout; build it with awaitConfirmation(false) for a facilitator, which"
+          + " reads the evidence itself");
+    }
+    return warnings;
   }
 
   @Override
@@ -205,7 +238,23 @@ public class ExactCardanoFacilitatorScheme implements SchemeNetworkFacilitator {
       if (evidence.status() == SettlementEvidence.Status.UNKNOWN) {
         return invalid(CardanoErrors.SETTLEMENT_PENDING, unproven, "");
       }
-      return verifyBroadcast(payload, requirements, claim.payer());
+      VerifyResponse recheck = verifyBroadcast(payload, requirements, claim.payer());
+      if (recheck.isValid() || resumeTerminal(recheck)) {
+        return recheck;
+      }
+      // As settle's resume: a re-check that failed for the moment is no verdict on a broadcast
+      // payment. Bound to these exact requirements (the binding matched above), which the
+      // pre-broadcast verification passed, and shown by the ledger or a mempool, the payment goes on
+      // to settle, whose resume lets the chain decide (success, pending or expired) and never
+      // broadcasts again: a refusal here would keep a landed payment from ever being served.
+      String payer = resumedPayer(recheck, claim);
+      if (claim.bindingDigest() != null && !payer.isEmpty() && resumeMomentary(recheck)) {
+        return VerifyResponse.valid(payer);
+      }
+      // Without a binding the re-check is the only content check, and a reason not known to
+      // depend on the moment may be about the content: pending, never valid.
+      return invalid(CardanoErrors.SETTLEMENT_PENDING, "re-verifying the broadcast transaction failed ("
+          + recheck.invalidReason() + "); retry later", payer);
     }
     return invalid(CardanoErrors.DUPLICATE_SETTLEMENT, null, "");
   }
@@ -438,56 +487,58 @@ public class ExactCardanoFacilitatorScheme implements SchemeNetworkFacilitator {
             "the payer " + payer + " is not a witness of the transaction", payer);
       }
     } else {
-      // Rule 5 (on chain): resolve every input.
+      // Rule 5 (on chain): resolve every input. The nonce first: a payment whose nonce is spent,
+      // or whose nonce owner did not sign, is refused before the other inputs cost a lookup each.
+      // Every input that does not exist is refused as it is resolved.
+      UtxoSnapshot nonceSnapshot;
+      String unanswered = null;
       try {
         if (decoded.inputs().size() > options.maxInputLookups()) {
           return invalid(CardanoErrors.CHAIN_LOOKUP_FAILED, "transaction has " + decoded.inputs().size()
               + " inputs; one verification resolves at most " + options.maxInputLookups(), "");
         }
         long deadline = System.nanoTime() + options.lookupTimeout().toNanos();
-        // The nonce first: a payment whose nonce owner did not sign is refused before the other
-        // inputs cost a lookup each.
-        UtxoSnapshot nonceFirst = backend.getUtxo(nonceRef, requirements.network());
-        if (!acceptedByLedger) {
-          String unsigned = unsignedNonceOwner(nonceFirst, decoded);
-          if (unsigned != null) {
-            String owner = nonceFirst.address() == null ? "" : nonceFirst.address();
-            return invalid(CardanoErrors.TRANSACTION_PHASE1_INVALID, "the nonce UTXO is owned by key hash " + unsigned
-                + " but the transaction carries no witness for it", owner);
-          }
+        nonceSnapshot = backend.getUtxo(nonceRef, requirements.network());
+        if (nonceSnapshot == null || !nonceSnapshot.exists()) {
+          return invalid(CardanoErrors.NONCE_NOT_ON_CHAIN, null,
+              nonceSnapshot == null || nonceSnapshot.address() == null ? "" : nonceSnapshot.address());
+        }
+        String owner = nonceSnapshot.address() == null ? "" : nonceSnapshot.address();
+        String unsigned = unsignedNonceOwner(nonceSnapshot, decoded);
+        if (unsigned != null) {
+          return invalid(CardanoErrors.TRANSACTION_PHASE1_INVALID, "the nonce UTXO is owned by key hash " + unsigned
+              + " but the transaction carries no witness for it", owner);
         }
         for (String ref : decoded.inputs()) {
           if (ref.toLowerCase(Locale.ROOT).equals(nonceRef)) {
-            inputSnapshots.add(nonceFirst);
+            inputSnapshots.add(nonceSnapshot);
             continue;
           }
           if (System.nanoTime() - deadline > 0) {
             return invalid(CardanoErrors.CHAIN_LOOKUP_FAILED,
                 "chain lookups exceeded the verification budget", "");
           }
-          inputSnapshots.add(backend.getUtxo(ref, requirements.network()));
+          UtxoSnapshot snapshot = backend.getUtxo(ref, requirements.network());
+          if (snapshot == null) {
+            // Noted, not refused yet: a later spent input, failed lookup or spent budget keeps
+            // its own reason.
+            unanswered = unanswered == null ? ref : unanswered;
+            continue;
+          }
+          if (!snapshot.exists()) {
+            return invalid(CardanoErrors.INPUT_NOT_AVAILABLE, null, owner);
+          }
+          inputSnapshots.add(snapshot);
         }
       } catch (RuntimeException e) {
         return invalid(CardanoErrors.CHAIN_LOOKUP_FAILED, message(e), "");
       }
-      UtxoSnapshot nonceSnapshot = null;
-      for (int i = 0; i < decoded.inputs().size(); i++) {
-        if (decoded.inputs().get(i).toLowerCase(Locale.ROOT).equals(nonceRef)) {
-          nonceSnapshot = inputSnapshots.get(i);
-          break;
-        }
+      if (unanswered != null) {
+        // A backend that answers no snapshot breaks its contract: no verdict on the payment.
+        return invalid(CardanoErrors.INVALID_PAYLOAD + "_verification_error",
+            "the chain backend answered no snapshot for input " + unanswered, "");
       }
-      payer = nonceSnapshot == null || nonceSnapshot.address() == null ? "" : nonceSnapshot.address();
-      if (!acceptedByLedger) {
-        if (nonceSnapshot == null || !nonceSnapshot.exists()) {
-          return invalid(CardanoErrors.NONCE_NOT_ON_CHAIN, null, payer);
-        }
-        for (UtxoSnapshot snapshot : inputSnapshots) {
-          if (!snapshot.exists()) {
-            return invalid(CardanoErrors.INPUT_NOT_AVAILABLE, null, payer);
-          }
-        }
-      }
+      payer = nonceSnapshot.address() == null ? "" : nonceSnapshot.address();
       if (payer.isEmpty()) {
         return invalid(CardanoErrors.NONCE_NOT_ON_CHAIN, "could not resolve the owner of the nonce UTXO", "");
       }
@@ -831,6 +882,7 @@ public class ExactCardanoFacilitatorScheme implements SchemeNetworkFacilitator {
           requirements == null ? null : requirements.network());
     }
     String network = payload.accepted() == null ? requirements.network() : payload.accepted().network();
+    long deadline = deadline();
 
     Resolved resolved;
     CardanoUtils.ExactCardanoPayload cardanoPayload;
@@ -901,14 +953,14 @@ public class ExactCardanoFacilitatorScheme implements SchemeNetworkFacilitator {
           quietly(() -> store.releaseClaim(txHash, ownerToken));
           return fail(CardanoErrors.TTL_TOO_FAR, txHash, NO_USABLE_TTL, network);
         }
-        return settledOnce(settleFresh(payload, requirements, resolved, ownerToken, network),
+        return settledOnce(settleFresh(payload, requirements, resolved, ownerToken, network, deadline),
             txHash, ownerToken, network, binding);
       case IN_FLIGHT:
         return pendingResponse(txHash, network, "", new LinkedHashMap<>(),
             "another settlement of this transaction is in progress; retry to resume");
       case SUBMITTING:
       case SUBMITTED:
-        return settledOnce(resume(payload, requirements, resolved, network, binding),
+        return settledOnce(resume(payload, requirements, resolved, network, binding, deadline),
             txHash, ownerToken, network, binding);
       case SETTLED:
         // A same-binding retry of a settled payment answers success again only on freshly read
@@ -916,7 +968,7 @@ public class ExactCardanoFacilitatorScheme implements SchemeNetworkFacilitator {
         if (!attested(quietDetails(txHash), binding)) {
           return fail(CardanoErrors.DUPLICATE_SETTLEMENT, txHash, "this transaction was already settled", network);
         }
-        return resume(payload, requirements, resolved, network, binding);
+        return resume(payload, requirements, resolved, network, binding, deadline);
       case REJECTED:
         return fail(
             CardanoErrors.SETTLEMENT_DEFINITIVELY_REJECTED,
@@ -1019,7 +1071,7 @@ public class ExactCardanoFacilitatorScheme implements SchemeNetworkFacilitator {
 
   /** The pending-settlement retry: this facilitator already broadcast this exact transaction. */
   private SettleResponse resume(PaymentPayload payload, PaymentRequirements requirements, Resolved resolved,
-      String network, SettlementBinding binding) {
+      String network, SettlementBinding binding, long deadline) {
     String txHash = resolved.decoded().txHash();
     SettlementClaimDetails claim;
     try {
@@ -1033,34 +1085,160 @@ public class ExactCardanoFacilitatorScheme implements SchemeNetworkFacilitator {
       return fail(CardanoErrors.DUPLICATE_SETTLEMENT, txHash, BOUND_ELSEWHERE, network);
     }
     VerifyResponse recheck = verifyBroadcast(payload, requirements, claim == null ? null : claim.payer());
-    String payer = recheck.payer() == null ? "" : recheck.payer();
+    String payer = resumedPayer(recheck, claim);
+    String recheckFailure = null;
+    boolean providerFailing = false;
     if (!recheck.isValid()) {
-      // A provider outage while re-reading a broadcast transaction is not a verdict on it.
-      if (CardanoErrors.CHAIN_LOOKUP_FAILED.equals(recheck.invalidReason())
-          || CardanoErrors.NONCE_NOT_ON_CHAIN.equals(recheck.invalidReason())) {
-        String detail = recheck.invalidMessage() == null || recheck.invalidMessage().isEmpty()
-            ? "" : ": " + recheck.invalidMessage();
-        return pendingResponse(
-            txHash, network, payer, new LinkedHashMap<>(),
-            "the chain lookup failed while resuming a broadcast transaction" + detail);
+      if (resumeTerminal(recheck)) {
+        // The retry is not the request that was broadcast, or the transaction never met it.
+        return fail(recheck.invalidReason(), txHash, recheck.invalidMessage(), network);
       }
-      return fail(
-          recheck.invalidReason() == null ? "verification_failed" : recheck.invalidReason(),
-          txHash,
-          recheck.invalidMessage(),
-          network);
+      // Anything else is no verdict on a payment that may have landed: never a failure.
+      recheckFailure = recheckFailure(recheck);
+      if (claim == null || claim.bindingDigest() == null || !resumeMomentary(recheck)) {
+        // Without a binding the failed re-check is the only content check, and a reason not known
+        // to depend on the moment (a custom method check's, an unexpected error) may be about the
+        // content: never a success either, so pending, with the reason in the message.
+        return pendingResponse(txHash, network, payer, new LinkedHashMap<>(), recheckFailure);
+      }
+      // Bound to these exact requirements, which the broadcast verification passed: the chain decides.
+      providerFailing = chainLookupFailure(recheck);
     }
-    EvidenceRead waited = awaitEvidence(txHash, requirements.network(), resolved.required());
+    // A provider that just failed the re-check gets one evidence read, not a whole wait: the
+    // answer is pending unless that read already shows the payment.
+    EvidenceRead waited = providerFailing
+        ? readEvidenceOnce(txHash, requirements.network(), deadline)
+        : awaitEvidence(txHash, requirements.network(), resolved.required(), deadline);
     SettlementEvidence evidence = waited.evidence();
     if (evidence.status() != SettlementEvidence.Status.UNKNOWN) {
       // The ledger shows it now: keep the record like any submitted one.
       quietly(() -> options.settlementStore().markSubmissionObserved(txHash));
     }
-    return evidenceResponse(evidence, network, resolved, payer, true, waited.read());
+    SettleResponse response = evidenceResponse(evidence, network, resolved, payer, true, waited.read(), deadline);
+    if (recheckFailure != null && response.isPending()) {
+      Map<String, Object> extra = response.extra() == null ? new LinkedHashMap<>() : new LinkedHashMap<>(response.extra());
+      return pendingResponse(txHash, network, payer, extra, recheckFailure);
+    }
+    if (response.success() && payer.isEmpty()) {
+      return pendingResponse(txHash, network, payer, new LinkedHashMap<>(),
+          "the payer of the broadcast transaction could not be resolved; retry to resume");
+    }
+    return response;
   }
 
-  private SettleResponse settleFresh(
-      PaymentPayload payload, PaymentRequirements requirements, Resolved resolved, String ownerToken, String network) {
+  /**
+   * Re-check verdicts that end a resume: the retry differs from the request that was broadcast
+   * (version, scheme, network, nonce, payer), or the transaction bytes never met the requirements.
+   * The verdicts that depend on the moment are {@link #RESUME_MOMENTARY}; any other is unknown.
+   */
+  private static final Set<String> RESUME_TERMINAL = Set.of(
+      CardanoErrors.INVALID_PAYLOAD + "_unsupported_version",
+      CardanoErrors.UNSUPPORTED_SCHEME,
+      CardanoErrors.NETWORK_MISMATCH,
+      CardanoErrors.NONCE_INVALID,
+      CardanoErrors.NONCE_NOT_IN_INPUTS,
+      CardanoErrors.TRANSACTION_PHASE1_INVALID,
+      CardanoErrors.REQUIREMENTS_INVALID,
+      CardanoErrors.POLICY_INVALID,
+      CardanoErrors.INVALID_PAYLOAD,
+      CardanoErrors.TRANSACTION_DECODE_FAILED,
+      CardanoErrors.NETWORK_ID_MISMATCH,
+      CardanoErrors.TRANSACTION_UNSIGNED,
+      CardanoErrors.INVALID_SIGNATURE,
+      CardanoErrors.TRANSACTION_PHASE2_INVALID,
+      CardanoErrors.RECIPIENT_MISMATCH,
+      CardanoErrors.ASSET_MISMATCH,
+      CardanoErrors.AMOUNT_INSUFFICIENT,
+      CardanoErrors.SCRIPT_ADDRESS_MISMATCH,
+      CardanoErrors.MASUMI_SCHEMA,
+      CardanoErrors.MASUMI_COMMITMENT,
+      CardanoErrors.MASUMI_SELLER_SIGNATURE,
+      CardanoErrors.MASUMI_IDENTIFIER,
+      CardanoErrors.MASUMI_ESCROW_OUTPUT_COUNT,
+      CardanoErrors.MASUMI_DATUM_MISSING,
+      CardanoErrors.MASUMI_DATUM_MISMATCH,
+      CardanoErrors.MASUMI_DATUM_INVALID,
+      CardanoErrors.MASUMI_REFERENCE_SCRIPT,
+      CardanoErrors.MASUMI_COLLATERAL,
+      CardanoErrors.MASUMI_ASSET);
+
+  /**
+   * Re-check verdicts known to depend on the moment, not on the transaction: the provider (a
+   * failed lookup, an unresolved nonce owner), the clock or slot configuration (TTL window,
+   * validity start, Masumi deadline horizon), live protocol parameters (min-UTxO), and
+   * facilitator configuration or validators (evidence capability, script datum policy, Masumi
+   * deployment approval, registry, allowlist). The transaction bytes and the bound requirements
+   * are those the pre-broadcast verification passed, so only these can change its verdict. For a
+   * bound claim they let the ledger decide.
+   *
+   * <p>A reason in neither set (a custom {@link #runMethodSpecificChecks} reason, an unexpected
+   * error, a future code) is no verdict either way: a payment that may have landed is never
+   * failed on it, and never reported settled, so it answers pending.
+   */
+  private static final Set<String> RESUME_MOMENTARY = Set.of(
+      CardanoErrors.CHAIN_LOOKUP_FAILED,
+      CardanoErrors.NONCE_NOT_ON_CHAIN,
+      CardanoErrors.TTL_TOO_FAR,
+      CardanoErrors.VALIDITY_NOT_YET_VALID,
+      CardanoErrors.MIN_UTXO_INSUFFICIENT,
+      CardanoErrors.EVIDENCE_UNAVAILABLE,
+      CardanoErrors.SCRIPT_DATUM_MISSING,
+      CardanoErrors.MASUMI_DEADLINE,
+      CardanoErrors.MASUMI_MIN_UTXO,
+      CardanoErrors.MASUMI_DEPLOYMENT,
+      CardanoErrors.MASUMI_AGENT_IDENTIFIER,
+      CardanoErrors.MASUMI_CONTRACT_MISMATCH);
+
+  /** Whether a failed re-check is one {@link #RESUME_MOMENTARY} names. */
+  private static boolean resumeMomentary(VerifyResponse recheck) {
+    return recheck.invalidReason() != null && RESUME_MOMENTARY.contains(recheck.invalidReason());
+  }
+
+  /** A re-check that failed because the provider could not answer a lookup. */
+  private static boolean chainLookupFailure(VerifyResponse recheck) {
+    return CardanoErrors.CHAIN_LOOKUP_FAILED.equals(recheck.invalidReason())
+        || CardanoErrors.NONCE_NOT_ON_CHAIN.equals(recheck.invalidReason());
+  }
+
+  private static String recheckFailure(VerifyResponse recheck) {
+    String detail = recheck.invalidMessage() == null || recheck.invalidMessage().isEmpty()
+        ? "" : ": " + recheck.invalidMessage();
+    if (chainLookupFailure(recheck)) {
+      return "the chain lookup failed while resuming a broadcast transaction" + detail;
+    }
+    return "re-verifying the broadcast transaction failed ("
+        + (recheck.invalidReason() == null ? "no reason" : recheck.invalidReason()) + detail
+        + "); retry to resume";
+  }
+
+  private static boolean resumeTerminal(VerifyResponse recheck) {
+    return recheck.invalidReason() != null && RESUME_TERMINAL.contains(recheck.invalidReason());
+  }
+
+  /** The re-check's payer, else the one recorded at the broadcast fence, else empty. */
+  private static String resumedPayer(VerifyResponse recheck, SettlementClaimDetails claim) {
+    if (recheck.payer() != null && !recheck.payer().isBlank()) {
+      return recheck.payer();
+    }
+    return claim != null && claim.payer() != null && !claim.payer().isBlank() ? claim.payer() : "";
+  }
+
+  /**
+   * The last moment this settle may start a chain call (the broadcast, an evidence read): now plus
+   * the settle timeout, less the chain-call reserve, so a call still in flight then has the
+   * reserve to end before the settle must answer.
+   */
+  private long deadline() {
+    long now = options.clock().millis();
+    try {
+      return Math.addExact(now, options.settleTimeout().toMillis() - options.chainCallReserve().toMillis());
+    } catch (ArithmeticException e) {
+      return Long.MAX_VALUE;
+    }
+  }
+
+  private SettleResponse settleFresh(PaymentPayload payload, PaymentRequirements requirements, Resolved resolved,
+      String ownerToken, String network, long deadline) {
     String txHash = resolved.decoded().txHash();
     SettlementClaimStore store = options.settlementStore();
     // Dispatched through `this` so a subclass that tightens verify() also governs settlement.
@@ -1082,6 +1260,13 @@ public class ExactCardanoFacilitatorScheme implements SchemeNetworkFacilitator {
           network);
     }
     String payer = verifyResult.payer() == null ? "" : verifyResult.payer();
+    if (options.clock().millis() >= deadline) {
+      // Too late for a submission to end within the settle timeout: broadcast nothing, so the
+      // retry starts afresh.
+      quietly(() -> store.releaseClaim(txHash, ownerToken));
+      return pendingResponse(txHash, network, payer, new LinkedHashMap<>(),
+          "the settlement ran out of time before broadcast; retry to settle");
+    }
 
     // The broadcast fence: from here the transaction may be on the wire, so the claim is never
     // reclaimed. A store write that fails here sent nothing, so the claim is released.
@@ -1111,14 +1296,15 @@ public class ExactCardanoFacilitatorScheme implements SchemeNetworkFacilitator {
       String returned = submission == null ? null : submission.txHash();
       return submissionFailed(new IllegalStateException(
           "submitter returned transaction " + returned + ", expected " + txHash),
-          false, resolved, payer, ownerToken, requirements, network);
+          false, resolved, payer, ownerToken, requirements, network, deadline);
     }
     if (submitError != null) {
-      return submissionFailed(submitError, true, resolved, payer, ownerToken, requirements, network);
+      return submissionFailed(submitError, true, resolved, payer, ownerToken, requirements, network, deadline);
     }
 
     boolean marked = quietly(() -> store.markSubmitted(txHash, ownerToken));
-    SettleResponse response = broadcastResponse(submission.status(), resolved, payer, requirements, network);
+    SettleResponse response =
+        broadcastResponse(submission.status(), resolved, payer, requirements, network, deadline);
     if (!marked && !response.success()) {
       // Try once more so a retry resumes instead of finding the claim still in flight.
       quietly(() -> store.markSubmitted(txHash, ownerToken));
@@ -1134,7 +1320,7 @@ public class ExactCardanoFacilitatorScheme implements SchemeNetworkFacilitator {
    * the answer.
    */
   private SettleResponse submissionFailed(RuntimeException cause, boolean classify, Resolved resolved, String payer,
-      String ownerToken, PaymentRequirements requirements, String network) {
+      String ownerToken, PaymentRequirements requirements, String network, long deadline) {
     String txHash = resolved.decoded().txHash();
     SettlementClaimStore store = options.settlementStore();
     boolean neverSent = classify && classified(() -> backend.isSubmissionNeverSent(cause));
@@ -1146,17 +1332,25 @@ public class ExactCardanoFacilitatorScheme implements SchemeNetworkFacilitator {
     }
     SettlementEvidence.Status seen = SettlementEvidence.Status.UNKNOWN;
     boolean lookupFailed = false;
+    boolean readSkipped = false;
     if (canAuthenticateEvidence()) {
-      try {
-        seen = readEvidence(txHash, requirements.network()).status();
-      } catch (RuntimeException e) {
-        lookupFailed = true;
+      if (options.clock().millis() >= deadline) {
+        // No time left for a read. A skipped read is not a failed one: nothing suggests the
+        // provider garbled the submission's answer, so its classification stands below.
+        readSkipped = true;
+      } else {
+        try {
+          seen = readEvidence(txHash, requirements.network()).status();
+        } catch (RuntimeException e) {
+          lookupFailed = true;
+        }
       }
     }
     if (seen != SettlementEvidence.Status.UNKNOWN) {
       quietly(() -> store.markSubmitted(txHash, ownerToken));
-      SettlementEvidence evidence = awaitEvidence(txHash, requirements.network(), resolved.required()).evidence();
-      return evidenceResponse(evidence, network, resolved, payer, false, false);
+      SettlementEvidence evidence =
+          awaitEvidence(txHash, requirements.network(), resolved.required(), deadline).evidence();
+      return evidenceResponse(evidence, network, resolved, payer, false, false, deadline);
     }
     String chain = describeErrorChain(cause);
     if (neverSent) {
@@ -1165,14 +1359,30 @@ public class ExactCardanoFacilitatorScheme implements SchemeNetworkFacilitator {
       return pendingResponse(txHash, network, payer, new LinkedHashMap<>(),
           "the transaction was not sent; retry to broadcast it: " + chain);
     }
+    // A definitive rejection is recorded without the ledger read when the deadline left no time
+    // for it, as when the backend cannot read evidence at all: the classification must rest on the
+    // transaction's own content (Blockfrost: content-decided ledger rules only, never
+    // BadInputsUTxO), which an earlier copy of the same bytes would have failed too. A read that
+    // failed is different: the provider is in trouble, so its answer stays pending.
+    if (definitive && readSkipped) {
+      quietly(() -> store.markRejected(txHash, ownerToken));
+      return fail(CardanoErrors.SETTLEMENT_DEFINITIVELY_REJECTED, txHash, chain, network);
+    }
+    if (readSkipped) {
+      quietly(() -> store.markSubmissionUnconfirmed(txHash, ownerToken));
+      return pendingResponse(txHash, network, payer, new LinkedHashMap<>(),
+          "the submission outcome is unknown and the settlement ran out of time to read the ledger;"
+              + " retry to resume: " + chain);
+    }
     if (lookupFailed) {
       quietly(() -> store.markSubmissionUnconfirmed(txHash, ownerToken));
-      SettlementEvidence evidence = awaitEvidence(txHash, requirements.network(), resolved.required()).evidence();
+      SettlementEvidence evidence =
+          awaitEvidence(txHash, requirements.network(), resolved.required(), deadline).evidence();
       if (evidence.status() != SettlementEvidence.Status.UNKNOWN) {
         // The ledger shows it after all: keep the record like any submitted one.
         quietly(() -> store.markSubmissionObserved(txHash));
       }
-      return evidenceResponse(evidence, network, resolved, payer, false, false);
+      return evidenceResponse(evidence, network, resolved, payer, false, false, deadline);
     }
     if (definitive) {
       quietly(() -> store.markRejected(txHash, ownerToken));
@@ -1196,7 +1406,7 @@ public class ExactCardanoFacilitatorScheme implements SchemeNetworkFacilitator {
 
   /** The outcome of an accepted submission, from the policy's evidence. */
   private SettleResponse broadcastResponse(SettlementEvidence.Status submissionStatus, Resolved resolved,
-      String payer, PaymentRequirements requirements, String network) {
+      String payer, PaymentRequirements requirements, String network, long deadline) {
     String txHash = resolved.decoded().txHash();
     int required = resolved.required();
     SettlementEvidence evidence;
@@ -1204,14 +1414,14 @@ public class ExactCardanoFacilitatorScheme implements SchemeNetworkFacilitator {
       // The node's acceptance is exactly the evidence a -1 policy describes.
       evidence = submitterEvidence(submissionStatus);
     } else if (canAuthenticateEvidence()) {
-      evidence = awaitEvidence(txHash, requirements.network(), required).evidence();
+      evidence = awaitEvidence(txHash, requirements.network(), required, deadline).evidence();
       if (evidence.status() == SettlementEvidence.Status.UNKNOWN) {
         evidence = new SettlementEvidence(SettlementEvidence.Status.MEMPOOL, CardanoConstants.MIN_L1_CONFIRMATIONS);
       }
     } else {
       evidence = submitterEvidence(submissionStatus);
     }
-    return evidenceResponse(evidence, network, resolved, payer, false, false);
+    return evidenceResponse(evidence, network, resolved, payer, false, false, deadline);
   }
 
   private static SettlementEvidence submitterEvidence(SettlementEvidence.Status status) {
@@ -1232,13 +1442,13 @@ public class ExactCardanoFacilitatorScheme implements SchemeNetworkFacilitator {
 
   private SettleResponse evidenceResponse(
       SettlementEvidence evidence, String network, Resolved resolved, String payer, boolean resumed,
-      boolean absenceRead) {
+      boolean absenceRead, long deadline) {
     String txHash = resolved.decoded().txHash();
     int required = resolved.required();
     if (evidence.status() == SettlementEvidence.Status.UNKNOWN) {
       // Expired only when a successful read shows it absent and the provider has indexed past the
       // window; a failed read or a lagging indexer keeps a payment that may still land pending.
-      if (resumed && absenceRead && validityWindowClosed(resolved.decoded(), network)) {
+      if (resumed && absenceRead && validityWindowClosed(resolved.decoded(), network, deadline)) {
         Map<String, Object> extra = new LinkedHashMap<>();
         extra.put("status", "expired");
         return new SettleResponse(
@@ -1294,8 +1504,12 @@ public class ExactCardanoFacilitatorScheme implements SchemeNetworkFacilitator {
         pendingExtra);
   }
 
-  private boolean validityWindowClosed(DecodedCardanoTransaction decoded, String network) {
-    if (decoded.ttlSlot() == null) {
+  /**
+   * Whether the provider has indexed past the validity window. Reading its tip is a chain call:
+   * none starts past the settle's call deadline, and then the window counts as open (pending).
+   */
+  private boolean validityWindowClosed(DecodedCardanoTransaction decoded, String network, long deadline) {
+    if (decoded.ttlSlot() == null || options.clock().millis() >= deadline) {
       return false;
     }
     try {
@@ -1315,19 +1529,37 @@ public class ExactCardanoFacilitatorScheme implements SchemeNetworkFacilitator {
    */
   private record EvidenceRead(SettlementEvidence evidence, boolean read) {}
 
+  /** One evidence read, unless the settle's call deadline has passed; a failed read reads nothing. */
+  private EvidenceRead readEvidenceOnce(String txHash, String network, long deadline) {
+    SettlementEvidence unknown =
+        new SettlementEvidence(SettlementEvidence.Status.UNKNOWN, CardanoConstants.MIN_L1_CONFIRMATIONS - 1);
+    if (!canAuthenticateEvidence() || options.clock().millis() >= deadline) {
+      return new EvidenceRead(unknown, false);
+    }
+    try {
+      return new EvidenceRead(readEvidence(txHash, network), true);
+    } catch (RuntimeException e) {
+      return new EvidenceRead(unknown, false);
+    }
+  }
+
   /**
-   * Polls evidence until the threshold is met or the confirmation timeout elapses. Elapsed time
-   * is the larger of the clock's progress and the time slept, so a fixed test clock cannot make
-   * the loop spin.
+   * Polls evidence until the threshold is met, the confirmation timeout elapses or the settle's
+   * call deadline (the settle timeout less the chain-call reserve) is reached; no read starts past
+   * it. Elapsed time is the larger of the clock's progress and the time slept, so a fixed test
+   * clock cannot make the loop spin.
    */
-  private EvidenceRead awaitEvidence(String txHash, String network, int required) {
+  private EvidenceRead awaitEvidence(String txHash, String network, int required, long deadline) {
     SettlementEvidence latest = new SettlementEvidence(SettlementEvidence.Status.UNKNOWN, CardanoConstants.MIN_L1_CONFIRMATIONS - 1);
     boolean read = false;
     if (!canAuthenticateEvidence()) {
       return new EvidenceRead(latest, false);
     }
     long start = options.clock().millis();
-    long timeout = options.confirmationTimeout().toMillis();
+    if (deadline - start <= 0) {
+      return new EvidenceRead(latest, false);
+    }
+    long timeout = Math.min(options.confirmationTimeout().toMillis(), deadline - start);
     long poll = Math.max(1, options.confirmationPoll().toMillis());
     long slept = 0;
     while (true) {

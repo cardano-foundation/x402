@@ -98,6 +98,11 @@ public final class HeaderCodec {
     } catch (IllegalArgumentException e) {
       throw new IllegalArgumentException(error, e);
     }
-    return X402Json.read(new String(bytes, StandardCharsets.UTF_8), type);
+    T value = X402Json.read(new String(bytes, StandardCharsets.UTF_8), type);
+    if (value == null) {
+      // JSON null (base64 "bnVsbA==") decodes to null; a header must carry an object.
+      throw new IllegalArgumentException(error);
+    }
+    return value;
   }
 }

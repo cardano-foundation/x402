@@ -17,8 +17,12 @@ import org.x402.mechanisms.cardano.exact.masumi.MasumiRegistryValidator;
  * @param acceptMempool settle on authenticated mempool evidence when the policy allows {@code
  *     -1} (default {@code false})
  * @param confirmationTimeout how long one settle waits for the policy's evidence before
- *     answering {@code settlement_pending} (default 75 s; keep it below the resource servers'
- *     facilitator timeout of 90 s)
+ *     answering {@code settlement_pending} (default 75 s). The wait also ends when the settle's
+ *     budget for chain calls does ({@code settleTimeout - chainCallReserve} after the settle
+ *     started, 60 s with the defaults), so with the default settle timeout the budget decides. A
+ *     configured value above {@code settleTimeout - chainCallReserve} has no effect; the scheme
+ *     logs a warning for it (not for the default, which stands for "as long as the settle
+ *     allows")
  * @param confirmationPoll interval between evidence polls (default 5 s)
  * @param registryValidator validates Masumi registry claims; without one a non-empty {@code
  *     agentIdentifier} is rejected
@@ -37,6 +41,20 @@ import org.x402.mechanisms.cardano.exact.masumi.MasumiRegistryValidator;
  *     ScriptDatumPolicy#REFERENCE})
  * @param maxTransactionBytes the largest transaction verify accepts (default and upper bound 64 KiB;
  *     0 means the default); the protocol's {@code maxTxSize} lowers it further
+ * @param settleTimeout how long one settle may take in total, verification and broadcast
+ *     included (default 75 s, below the resource servers' facilitator timeout of 90 s). Settle
+ *     starts neither the broadcast nor an evidence read in its last {@code chainCallReserve}; past
+ *     that point the answer is {@code settlement_pending}. The settle therefore answers within this
+ *     timeout as long as the chain call in flight ends within the reserve. Verification's own
+ *     lookups are bounded by {@code lookupTimeout} and the backend, not by this timeout
+ * @param chainCallReserve the end part of {@code settleTimeout} kept for the chain call in
+ *     flight (the submission, one evidence read, or the tip read that decides expiry): no such
+ *     call starts in it (default 15 s, at most half the settle timeout; must be shorter than the
+ *     settle timeout). One call is one backend method, which may make several provider requests:
+ *     a {@link org.x402.mechanisms.cardano.chain.BlockfrostChainBackend} evidence read is up to
+ *     four (the provider check's genesis and tip reads, the transaction, then the mempool or the
+ *     tip), each bounded by its request timeout, so a hard bound with Blockfrost's 10 s request
+ *     timeout needs 40 s. A larger reserve leaves less of the settle for the confirmation wait
  */
 public record ExactCardanoFacilitatorOptions(
     SettlementClaimStore settlementStore,
@@ -51,7 +69,9 @@ public record ExactCardanoFacilitatorOptions(
     int maxInputLookups,
     Set<String> masumiAllowedScriptHashes,
     ScriptDatumPolicy scriptDatumPolicy,
-    int maxTransactionBytes) {
+    int maxTransactionBytes,
+    Duration settleTimeout,
+    Duration chainCallReserve) {
 
   /** Default confirmation wait. */
   public static final Duration DEFAULT_CONFIRMATION_TIMEOUT = Duration.ofSeconds(75);
@@ -61,6 +81,14 @@ public record ExactCardanoFacilitatorOptions(
   public static final int DEFAULT_MAX_INPUT_LOOKUPS = 64;
   /** Default poll interval. */
   public static final Duration DEFAULT_CONFIRMATION_POLL = Duration.ofSeconds(5);
+  /** Default bound on one whole settle. */
+  public static final Duration DEFAULT_SETTLE_TIMEOUT = Duration.ofSeconds(75);
+  /**
+   * Default reserve for the chain call in flight when a settle's budget runs out: with the
+   * default settle timeout, a call that starts at the last moment may take 15 s and still answer
+   * by 75 s, or 30 s and still answer before the resource servers' 90 s timeout.
+   */
+  public static final Duration DEFAULT_CHAIN_CALL_RESERVE = Duration.ofSeconds(15);
 
   /** Fills defaults for {@code null} members. */
   public ExactCardanoFacilitatorOptions {
@@ -72,6 +100,19 @@ public record ExactCardanoFacilitatorOptions(
     confirmationTimeout = confirmationTimeout == null ? DEFAULT_CONFIRMATION_TIMEOUT : confirmationTimeout;
     confirmationPoll = confirmationPoll == null ? DEFAULT_CONFIRMATION_POLL : confirmationPoll;
     lookupTimeout = lookupTimeout == null ? DEFAULT_LOOKUP_TIMEOUT : lookupTimeout;
+    settleTimeout = settleTimeout == null ? DEFAULT_SETTLE_TIMEOUT : settleTimeout;
+    if (settleTimeout.isNegative() || settleTimeout.isZero()) {
+      throw new IllegalArgumentException("settle timeout must be positive");
+    }
+    if (chainCallReserve == null) {
+      // A short settle timeout keeps half of itself for verification and the broadcast.
+      Duration half = settleTimeout.dividedBy(2);
+      chainCallReserve = DEFAULT_CHAIN_CALL_RESERVE.compareTo(half) <= 0 ? DEFAULT_CHAIN_CALL_RESERVE : half;
+    }
+    if (chainCallReserve.isNegative() || chainCallReserve.compareTo(settleTimeout) >= 0) {
+      // A reserve as long as the settle timeout would never let a settle broadcast.
+      throw new IllegalArgumentException("chain call reserve must be from 0 to less than the settle timeout");
+    }
     maxInputLookups = maxInputLookups == 0 ? DEFAULT_MAX_INPUT_LOOKUPS : maxInputLookups;
     scriptDatumPolicy = scriptDatumPolicy == null ? ScriptDatumPolicy.REFERENCE : scriptDatumPolicy;
     maxTransactionBytes = maxTransactionBytes == 0 ? CardanoConstants.MAX_TRANSACTION_BYTES : maxTransactionBytes;
@@ -98,9 +139,39 @@ public record ExactCardanoFacilitatorOptions(
       confirmationTimeout.toMillis();
       confirmationPoll.toMillis();
       lookupTimeout.toNanos();
+      settleTimeout.toMillis();
+      chainCallReserve.toMillis();
     } catch (ArithmeticException e) {
       throw new IllegalArgumentException("confirmation timeout and poll must fit in milliseconds", e);
     }
+  }
+
+  /**
+   * The options with the default settle timeout and chain-call reserve.
+   *
+   * @param settlementStore the claim store, or {@code null} for the in-memory default
+   * @param acceptMempool whether mempool evidence may settle a {@code -1} policy
+   * @param confirmationTimeout how long one settle waits, or {@code null} for the default
+   * @param confirmationPoll the evidence poll interval, or {@code null} for the default
+   * @param registryValidator the Masumi registry validator, or {@code null}
+   * @param deploymentValidator the Masumi deployment validator, or {@code null}
+   * @param clock the clock, or {@code null} for the system clock
+   * @param slotConfig the slot configuration override, or {@code null}
+   * @param lookupTimeout the input lookup budget, or {@code null} for the default
+   * @param maxInputLookups the input lookup bound, 0 for the default
+   * @param masumiAllowedScriptHashes the Masumi escrow allowlist, or {@code null}
+   * @param scriptDatumPolicy the script datum policy, or {@code null} for the default
+   * @param maxTransactionBytes the transaction size bound, 0 for the default
+   */
+  public ExactCardanoFacilitatorOptions(SettlementClaimStore settlementStore, boolean acceptMempool,
+      Duration confirmationTimeout, Duration confirmationPoll,
+      MasumiRegistryValidator registryValidator, MasumiDeploymentValidator deploymentValidator,
+      Clock clock, SlotConfig slotConfig, Duration lookupTimeout, int maxInputLookups,
+      Set<String> masumiAllowedScriptHashes, ScriptDatumPolicy scriptDatumPolicy,
+      int maxTransactionBytes) {
+    this(settlementStore, acceptMempool, confirmationTimeout, confirmationPoll, registryValidator,
+        deploymentValidator, clock, slotConfig, lookupTimeout, maxInputLookups,
+        masumiAllowedScriptHashes, scriptDatumPolicy, maxTransactionBytes, null, null);
   }
 
   /**
@@ -166,6 +237,8 @@ public record ExactCardanoFacilitatorOptions(
     private int maxTransactionBytes;
     private Duration lookupTimeout;
     private int maxInputLookups;
+    private Duration settleTimeout;
+    private Duration chainCallReserve;
 
     private Builder() {}
 
@@ -314,6 +387,29 @@ public record ExactCardanoFacilitatorOptions(
     }
 
     /**
+     * Sets how long one settle may take in total (default 75 s).
+     *
+     * @param v the bound, or {@code null} for the default
+     * @return this builder
+     */
+    public Builder settleTimeout(Duration v) {
+      settleTimeout = v;
+      return this;
+    }
+
+    /**
+     * Sets the end part of the settle timeout in which no broadcast or evidence read starts
+     * (default 15 s, at most half the settle timeout).
+     *
+     * @param v the reserve, or {@code null} for the default
+     * @return this builder
+     */
+    public Builder chainCallReserve(Duration v) {
+      chainCallReserve = v;
+      return this;
+    }
+
+    /**
      * Builds the options.
      *
      * @return the options
@@ -322,7 +418,7 @@ public record ExactCardanoFacilitatorOptions(
       return new ExactCardanoFacilitatorOptions(
           settlementStore, acceptMempool, confirmationTimeout, confirmationPoll, registryValidator,
           deploymentValidator, clock, slotConfig, lookupTimeout, maxInputLookups, masumiAllowedScriptHashes,
-          scriptDatumPolicy, maxTransactionBytes);
+          scriptDatumPolicy, maxTransactionBytes, settleTimeout, chainCallReserve);
     }
   }
 }

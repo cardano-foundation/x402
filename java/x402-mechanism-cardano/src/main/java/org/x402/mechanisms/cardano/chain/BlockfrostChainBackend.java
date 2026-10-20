@@ -26,6 +26,10 @@ import java.util.Locale;
 import java.util.Map;
 import java.util.Objects;
 import java.util.Optional;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.ExecutionException;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.TimeoutException;
 import org.x402.core.json.X402Json;
 import org.x402.mechanisms.cardano.utils.CardanoAddresses;
 import org.x402.mechanisms.cardano.utils.CardanoNetworks;
@@ -54,6 +58,11 @@ public final class BlockfrostChainBackend
   private final Object providerLock = new Object();
   private long identityCheckedAt = Long.MIN_VALUE;
   private long tipCheckedAt = Long.MIN_VALUE;
+  /** The provider check in flight, which concurrent callers wait on instead of repeating it. */
+  private CompletableFuture<Void> trustCheck;
+  /** The last failed provider check, answered again for a short while. */
+  private ChainLookupException trustFailure;
+  private long trustFailedAtNanos;
   private long cachedAt;
 
   /**
@@ -64,7 +73,9 @@ public final class BlockfrostChainBackend
    * @param projectId Blockfrost project id, or {@code null} for a self-hosted instance
    * @param requestTimeout deadline per request (1 ms – 120 s, default 10 s)
    * @param awaitConfirmation whether {@code submitTransaction} waits (up to the request timeout)
-   *     for inclusion before answering (default {@code true})
+   *     for inclusion before answering (default {@code true}). Turn it off for a facilitator: the
+   *     Cardano facilitator scheme reads the evidence itself within its settle timeout, and this
+   *     wait would run outside it (the scheme logs a warning)
    * @param confirmationPoll poll interval of that wait (default 5 s)
    * @param clock the clock for the current slot and the parameter cache
    * @param slotConfig the network's slot configuration, or {@code null} for the built-in one
@@ -216,7 +227,8 @@ public final class BlockfrostChainBackend
       }
 
       /**
-       * Sets whether submit waits for inclusion.
+       * Sets whether submit waits for inclusion (default {@code true}); pass {@code false} for a
+       * facilitator, whose scheme reads the evidence itself within its settle timeout.
        *
        * @param awaitConfirmation the flag
        * @return this builder
@@ -417,11 +429,31 @@ public final class BlockfrostChainBackend
   @Override
   public void checkHealth(String network) {
     assertNetwork(network);
-    synchronized (providerLock) {
-      identityCheckedAt = Long.MIN_VALUE;
-      tipCheckedAt = Long.MIN_VALUE;
+    // The probe makes its own reads instead of joining a check in flight, which may cover less,
+    // and leaves the failure cache other callers rely on alone unless it passes.
+    long identityAt;
+    long tipAt;
+    try {
+      identityAt = config.networkMagic() != null ? checkIdentity() : Long.MIN_VALUE;
+      tipAt = config.maxTipAge() != null ? checkTip() : Long.MIN_VALUE;
+    } catch (RuntimeException e) {
+      // A failed probe withdraws the cached passing checks: the next read or submission
+      // re-checks the provider instead of trusting it until the window lapses.
+      synchronized (providerLock) {
+        identityCheckedAt = Long.MIN_VALUE;
+        tipCheckedAt = Long.MIN_VALUE;
+      }
+      throw e;
     }
-    requireTrustedProvider();
+    synchronized (providerLock) {
+      if (identityAt != Long.MIN_VALUE) {
+        identityCheckedAt = identityAt;
+      }
+      if (tipAt != Long.MIN_VALUE) {
+        tipCheckedAt = tipAt;
+      }
+      trustFailure = null;
+    }
     if (config.maxTipAge() == null) {
       JsonNode tip = get("/blocks/latest");
       if (tip == null) {
@@ -430,40 +462,138 @@ public final class BlockfrostChainBackend
     }
   }
 
+  /** How long a failed provider check is answered again before it is retried. */
+  private static final long TRUST_FAILURE_CACHE_NANOS = TimeUnit.SECONDS.toNanos(2);
+
   /**
    * Fails unless the provider serves the configured network with a fresh tip. Each check is
-   * skipped when not configured, and a passing check is reused for a short while.
+   * skipped when not configured, and a passing check is reused for a short while. A due check
+   * runs once, outside the lock: concurrent callers wait for its answer, and a failure is
+   * answered again for two seconds, so a hanging provider costs one request, not one per caller.
    */
   private void requireTrustedProvider() {
-    synchronized (providerLock) {
-      long now = config.clock().millis();
-      if (config.networkMagic() != null
-          && (identityCheckedAt == Long.MIN_VALUE || now - identityCheckedAt > IDENTITY_RECHECK_MS)) {
-        JsonNode genesis = get("/genesis");
-        JsonNode magic = genesis == null ? null : genesis.get("network_magic");
-        if (magic == null || !magic.isIntegralNumber() || !magic.canConvertToLong()
-            || magic.asLong() != config.networkMagic()) {
-          throw new ChainLookupException("Blockfrost provider does not serve the configured network");
+    // A check in flight may cover less than this caller needs (only the tip, say): after waiting
+    // for it, re-evaluate, and run or join the next check until nothing is due.
+    while (true) {
+      CompletableFuture<Void> mine = null;
+      CompletableFuture<Void> running;
+      boolean identityDue;
+      boolean tipDue;
+      synchronized (providerLock) {
+        long now = config.clock().millis();
+        identityDue = config.networkMagic() != null
+            && (identityCheckedAt == Long.MIN_VALUE || now - identityCheckedAt > IDENTITY_RECHECK_MS);
+        tipDue = config.maxTipAge() != null
+            && (tipCheckedAt == Long.MIN_VALUE || now - tipCheckedAt > TIP_RECHECK_MS);
+        if (!identityDue && !tipDue) {
+          return;
         }
-        identityCheckedAt = now;
+        if (trustFailure != null && System.nanoTime() - trustFailedAtNanos < TRUST_FAILURE_CACHE_NANOS) {
+          throw new ChainLookupException(trustFailure.getMessage(), trustFailure);
+        }
+        if (trustCheck == null) {
+          trustCheck = new CompletableFuture<>();
+          mine = trustCheck;
+        }
+        running = trustCheck;
       }
-      if (config.maxTipAge() != null
-          && (tipCheckedAt == Long.MIN_VALUE || now - tipCheckedAt > TIP_RECHECK_MS)) {
-        JsonNode tip = get("/blocks/latest");
-        JsonNode slot = tip == null ? null : tip.get("slot");
-        if (!isHeight(slot)) {
-          throw new ChainLookupException("Blockfrost returned no readable chain tip");
-        }
-        SlotConfig slots = config.slotConfig() != null ? config.slotConfig()
-            : CardanoNetworks.slotConfig(config.network());
-        long tipMs = CardanoNetworks.slotToPosixMs(slots, slot.bigIntegerValue())
-            .min(BigInteger.valueOf(Long.MAX_VALUE)).longValue();
-        if (now - tipMs > config.maxTipAge().toMillis() || tipMs - now > TIP_AHEAD_TOLERANCE_MS) {
-          throw new ChainLookupException("Blockfrost tip is stale or ahead of the wall clock");
-        }
-        tipCheckedAt = now;
+      if (mine != null) {
+        runTrustCheck(mine, identityDue, tipDue);
+        return;
       }
+      awaitTrustCheck(running);
     }
+  }
+
+  private void runTrustCheck(CompletableFuture<Void> mine, boolean identityDue, boolean tipDue) {
+    try {
+      if (identityDue) {
+        long identityAt = checkIdentity();
+        synchronized (providerLock) {
+          identityCheckedAt = identityAt;
+        }
+      }
+      long tipAt = tipDue ? checkTip() : Long.MIN_VALUE;
+      synchronized (providerLock) {
+        if (tipDue) {
+          tipCheckedAt = tipAt;
+        }
+        trustFailure = null;
+        trustCheck = null;
+      }
+      mine.complete(null);
+    } catch (RuntimeException e) {
+      ChainLookupException failure = e instanceof ChainLookupException c ? c
+          : new ChainLookupException(e.getMessage() == null ? e.toString() : e.getMessage(), e);
+      if (Thread.currentThread().isInterrupted()) {
+        // This caller was interrupted; the provider is not at fault. Nothing is cached, and
+        // waiters wake to re-check (nothing was marked checked, so one of them runs it again).
+        synchronized (providerLock) {
+          trustCheck = null;
+        }
+        mine.complete(null);
+        throw failure;
+      }
+      synchronized (providerLock) {
+        trustFailure = failure;
+        trustFailedAtNanos = System.nanoTime();
+        trustCheck = null;
+      }
+      mine.completeExceptionally(failure);
+      throw failure;
+    } catch (Error e) {
+      // Never leave waiters, or every later caller, behind a check that will not complete.
+      synchronized (providerLock) {
+        trustCheck = null;
+      }
+      mine.completeExceptionally(e);
+      throw e;
+    }
+  }
+
+  private void awaitTrustCheck(CompletableFuture<Void> running) {
+    // Up to two provider requests, plus slack for scheduling.
+    long budget = 2 * config.requestTimeout().toMillis() + 1_000L;
+    try {
+      running.get(budget, TimeUnit.MILLISECONDS);
+    } catch (ExecutionException e) {
+      Throwable cause = e.getCause();
+      throw new ChainLookupException(cause == null ? "Blockfrost provider check failed" : cause.getMessage(), cause);
+    } catch (TimeoutException e) {
+      throw new ChainLookupException("Blockfrost provider check did not finish in time");
+    } catch (InterruptedException e) {
+      Thread.currentThread().interrupt();
+      throw new ChainLookupException("interrupted while waiting for the Blockfrost provider check");
+    }
+  }
+
+  /** Reads the provider's network magic; returns the time it passed. */
+  private long checkIdentity() {
+    JsonNode genesis = get("/genesis");
+    JsonNode magic = genesis == null ? null : genesis.get("network_magic");
+    if (magic == null || !magic.isIntegralNumber() || !magic.canConvertToLong()
+        || magic.asLong() != config.networkMagic()) {
+      throw new ChainLookupException("Blockfrost provider does not serve the configured network");
+    }
+    return config.clock().millis();
+  }
+
+  /** Reads the provider's latest block; returns the time it passed. */
+  private long checkTip() {
+    JsonNode tip = get("/blocks/latest");
+    JsonNode slot = tip == null ? null : tip.get("slot");
+    if (!isHeight(slot)) {
+      throw new ChainLookupException("Blockfrost returned no readable chain tip");
+    }
+    SlotConfig slots = config.slotConfig() != null ? config.slotConfig()
+        : CardanoNetworks.slotConfig(config.network());
+    long tipMs = CardanoNetworks.slotToPosixMs(slots, slot.bigIntegerValue())
+        .min(BigInteger.valueOf(Long.MAX_VALUE)).longValue();
+    long now = config.clock().millis();
+    if (now - tipMs > config.maxTipAge().toMillis() || tipMs - now > TIP_AHEAD_TOLERANCE_MS) {
+      throw new ChainLookupException("Blockfrost tip is stale or ahead of the wall clock");
+    }
+    return now;
   }
 
   @Override

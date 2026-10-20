@@ -17,7 +17,8 @@ import org.x402.core.utils.Networks;
  * published snapshot never changes, so a request that captured one routes consistently.
  *
  * <p>Answers are applied in declaration order and the first facilitator listing a kind
- * owns it. Lookups: an exact network key wins over a wildcard key, and an exact key without
+ * owns it; a failed facilitator's kept answer is applied after every live one, so it only owns
+ * kinds that no live facilitator lists. Lookups: an exact network key wins over a wildcard key, and an exact key without
  * the scheme does not fall back to the pattern.
  */
 public final class RoutingSnapshot {
@@ -47,6 +48,7 @@ public final class RoutingSnapshot {
    * @param generation a monotonically increasing number
    * @param clients identifier → client, in declaration order
    * @param answers identifier → {@code /supported} answer, for the facilitators that answered
+   *     (or a failing facilitator's last good answer)
    * @param failures identifier → error, for the facilitators that failed
    * @return the snapshot
    */
@@ -59,15 +61,23 @@ public final class RoutingSnapshot {
     Map<Integer, Map<String, Map<String, String>>> owners = new LinkedHashMap<>();
     for (String id : clients.keySet()) {
       SupportedResponse answer = answers.get(id);
-      if (answer == null) {
-        continue;
+      if (answer != null) {
+        ordered.put(id, answer);
       }
-      ordered.put(id, answer);
-      for (SupportedKind kind : answer.kinds()) {
-        owners.computeIfAbsent(kind.x402Version(), v -> new LinkedHashMap<>())
-            .computeIfAbsent(kind.network(), n -> new LinkedHashMap<>())
-            .putIfAbsent(kind.scheme(), id);
-      }
+    }
+    // Facilitators that answered now claim kinds first; a failed one's kept answer only fills
+    // the kinds no live facilitator lists, so a dead facilitator never holds a kind another serves.
+    for (boolean live : new boolean[] {true, false}) {
+      ordered.forEach((id, answer) -> {
+        if (failures.containsKey(id) == live) {
+          return;
+        }
+        for (SupportedKind kind : answer.kinds()) {
+          owners.computeIfAbsent(kind.x402Version(), v -> new LinkedHashMap<>())
+              .computeIfAbsent(kind.network(), n -> new LinkedHashMap<>())
+              .putIfAbsent(kind.scheme(), id);
+        }
+      });
     }
     Map<Integer, Map<String, Map<String, String>>> frozen = new LinkedHashMap<>();
     owners.forEach((version, byNetwork) -> {
@@ -103,10 +113,11 @@ public final class RoutingSnapshot {
   }
 
   /**
-   * A facilitator's {@code /supported} answer.
+   * A facilitator's {@code /supported} answer; for a facilitator that failed this sync, its last
+   * good answer when it had one.
    *
    * @param identifier the identifier
-   * @return the answer, or {@code null} when it failed or is unknown
+   * @return the answer, or {@code null} when it never answered or is unknown
    */
   public SupportedResponse supported(String identifier) {
     return supported.get(identifier);

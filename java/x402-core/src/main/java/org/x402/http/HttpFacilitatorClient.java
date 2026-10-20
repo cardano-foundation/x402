@@ -398,7 +398,11 @@ public final class HttpFacilitatorClient implements FacilitatorClient {
     if (retryAfter != null) {
       String trimmed = retryAfter.strip();
       if (trimmed.matches("\\d+")) {
-        delay = Long.parseLong(trimmed) * 1000;
+        try {
+          delay = Math.multiplyExact(Long.parseLong(trimmed), 1000L);
+        } catch (NumberFormatException | ArithmeticException e) {
+          delay = MAX_RETRY_MILLIS; // too large for millis: the longest wait, so the cap
+        }
       } else {
         try {
           ZonedDateTime date = ZonedDateTime.parse(retryAfter.strip(),

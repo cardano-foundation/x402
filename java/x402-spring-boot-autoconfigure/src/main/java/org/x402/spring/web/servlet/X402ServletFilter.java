@@ -196,7 +196,7 @@ public final class X402ServletFilter extends OncePerRequestFilter {
     int status = wrapper.getStatus();
     if (status >= 400) {
       Map<String, String> headers = PaidResponses.cancel(http, paid.verified,
-          CancellationReason.HANDLER_FAILED, null, status, wrapper.getHeader("Cache-Control"));
+          CancellationReason.HANDLER_FAILED, null, status, cacheControl(wrapper));
       if (headers != null) {
         headers.forEach(wrapper::setHeader);
       }
@@ -217,8 +217,17 @@ public final class X402ServletFilter extends OncePerRequestFilter {
     }
     result.headers().forEach(wrapper::setHeader);
     wrapper.setHeader("Cache-Control",
-        X402HttpResourceServer.withPrivateCacheControl(wrapper.getHeader("Cache-Control")));
+        X402HttpResourceServer.withPrivateCacheControl(cacheControl(wrapper)));
     wrapper.release();
+  }
+
+  /**
+   * Every Cache-Control directive the client would get, the outer ones and the handler's, as one
+   * value: rewriting only the first value would drop the handler's own (a no-store, say).
+   */
+  static String cacheControl(BufferingResponse wrapper) {
+    java.util.Collection<String> values = wrapper.getHeaders("Cache-Control");
+    return values.isEmpty() ? null : String.join(", ", values);
   }
 
   static void write(HttpServletResponse response, HttpResponseInstructions instructions)

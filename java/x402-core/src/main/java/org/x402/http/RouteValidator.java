@@ -114,6 +114,13 @@ final class RouteValidator {
             Reason.UNSUPPORTED_PAYMENT_FLOW, "Route \"" + key + "\": " + e.getMessage(), i, null,
             false));
       }
+      Map<String, Object> extra = staticExtra(scheme, option);
+      String invalid = extra == null ? null : scheme.validateOption(option.network(), extra);
+      if (invalid != null) {
+        errors.add(new RouteValidationError(key, option.scheme(), option.network(),
+            Reason.INVALID_OPTION, "Route \"" + key + "\" option " + i + ": " + scheme.scheme()
+                + " on " + option.network() + ": " + invalid, i, null, false));
+      }
       if (snapshot == null || (option.facilitator() != null
           && server.facilitator(option.facilitator()) == null)) {
         continue;
@@ -170,7 +177,8 @@ final class RouteValidator {
         continue;
       }
       List<String> extensions = snapshot.extensions(build);
-      String problem = scheme.validateFacilitatorSupport(option.network(), kind, extensions);
+      String problem = scheme.validateFacilitatorSupport(option.network(), kind, extensions,
+          staticExtra(scheme, option));
       if (problem != null) {
         String line = scheme.scheme() + " on " + option.network() + ": " + problem;
         errors.add(new RouteValidationError(key, option.scheme(), option.network(),
@@ -178,6 +186,23 @@ final class RouteValidator {
                 + " (facilitator \"" + build + "\")", i, build,
             mayHeal(snapshot, option, pin(option))));
       }
+    }
+  }
+
+  /**
+   * The {@code extra} a request would build for an option with a static price: the price's
+   * {@code extra} below the option's. {@code null} for a dynamic or unparsable price, whose
+   * {@code extra} is only known per request.
+   */
+  private static Map<String, Object> staticExtra(SchemeNetworkServer scheme, PaymentOption option) {
+    if (option.price() == null || option.priceResolver() != null) {
+      return null;
+    }
+    try {
+      AssetAmount price = scheme.parsePrice(option.price(), option.network());
+      return PaymentFlows.mergeExtra(price.extra(), option.extra());
+    } catch (RuntimeException e) {
+      return null;
     }
   }
 

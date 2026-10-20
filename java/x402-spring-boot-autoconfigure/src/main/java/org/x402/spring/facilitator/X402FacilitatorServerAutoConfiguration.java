@@ -49,8 +49,8 @@ public class X402FacilitatorServerAutoConfiguration {
 
   private static final Log LOG = LogFactory.getLog(X402FacilitatorServerAutoConfiguration.class);
 
-  /** The resource servers' default facilitator timeout minus a margin. */
-  static final Duration CONFIRMATION_WARNING = Duration.ofSeconds(85);
+  /** Above it settle-timeout is logged: the resource servers' default facilitator timeout less a margin. */
+  static final Duration SETTLE_WARNING = Duration.ofSeconds(85);
 
   @Bean
   @ConditionalOnMissingBean
@@ -103,11 +103,23 @@ public class X402FacilitatorServerAutoConfiguration {
         ObjectProvider<X402CardanoNetworkBeans> networkBeans,
         ObjectProvider<CardanoChainBackend> backend) {
       X402FacilitatorServerProperties.Cardano cardano = properties.cardano();
-      if (cardano.confirmationTimeout().compareTo(CONFIRMATION_WARNING) > 0) {
-        LOG.warn("x402.facilitator-server.cardano.confirmation-timeout is "
-            + cardano.confirmationTimeout().toSeconds() + " s, above 85 s: resource servers "
-            + "time out facilitator calls after 90 s by default, so a slow confirmation would "
-            + "look like a failed settle to them");
+      // settle-timeout bounds the whole settle, the confirmation wait included, so it alone is
+      // compared with the resource servers' 90 s and warned about. A confirmation-timeout above
+      // 85 s is no risk of its own: it is either cut short by the settle budget (settle-timeout
+      // less chain-call-reserve), which each scheme warns about as it is built, or allowed by a
+      // settle-timeout above 85 s, warned about here. It only gets a note pointing at the bound.
+      if (cardano.settleTimeout().compareTo(SETTLE_WARNING) > 0) {
+        LOG.warn("x402.facilitator-server.cardano.settle-timeout is "
+            + cardano.settleTimeout().toSeconds() + " s, above 85 s: resource servers "
+            + "time out facilitator calls after 90 s by default, so a slow settle would "
+            + "look like a failed one to them");
+      }
+      if (cardano.confirmationTimeout().compareTo(SETTLE_WARNING) > 0) {
+        LOG.info("x402.facilitator-server.cardano.confirmation-timeout is "
+            + cardano.confirmationTimeout().toSeconds() + " s, above 85 s: the wait never outlasts "
+            + "the settle, which settle-timeout (" + cardano.settleTimeout().toSeconds()
+            + " s) bounds; settle-timeout, not confirmation-timeout, is what to keep below the "
+            + "resource servers' 90 s facilitator timeout");
       }
       return new CardanoFacilitatorSchemes(cardano, store, registry.getIfAvailable(),
           deployment.getIfAvailable(), clock.getIfAvailable(Clock::systemUTC), networkBeans,

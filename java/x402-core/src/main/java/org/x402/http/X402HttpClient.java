@@ -22,6 +22,7 @@ import java.net.http.HttpResponse.ResponseInfo;
 import java.net.http.WebSocket;
 import java.nio.ByteBuffer;
 import java.time.Duration;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Locale;
 import java.util.Objects;
@@ -29,11 +30,13 @@ import java.util.Optional;
 import java.util.Set;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionException;
+import java.util.concurrent.CompletionStage;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.Executor;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.Flow;
+import java.util.function.Predicate;
 import javax.net.ssl.SSLContext;
 import javax.net.ssl.SSLParameters;
 import javax.net.ssl.SSLSession;
@@ -87,6 +90,12 @@ public final class X402HttpClient extends HttpClient implements AutoCloseable {
   public static final long DEFAULT_MAX_REPLAY_BODY = 1L << 20;
 
   private static final int MAX_REDIRECTS = 5;
+
+  /**
+   * The most of an unpaid 402 body the wrapper holds while it decides whether to pay:
+   * 64 KB. Any other response, a paid one included, streams into the caller's own handler.
+   */
+  static final int BODY_BUFFER_CAP = 64 * 1024;
   private static final System.Logger LOG = System.getLogger(X402HttpClient.class.getName());
 
   private final HttpClient delegate;
@@ -403,7 +412,7 @@ public final class X402HttpClient extends HttpClient implements AutoCloseable {
     HttpRequest recording = first.bodyPublisher()
         .map(p -> copy(first, first.uri(), first.method(), new RecordingPublisher(p, recorder)))
         .orElse(first);
-    Exchange<T> exchange = exchange(recording, handler, recorder, false, null);
+    Exchange<T> exchange = exchange(recording, handler, recorder, false, null, null);
     if (exchange.raw().statusCode() != 402) {
       return exchange.toResponse(handler);
     }
@@ -436,7 +445,18 @@ public final class X402HttpClient extends HttpClient implements AutoCloseable {
           + " is missing or not in the host policy; returned unpaid");
       return unpaid.toResponse(handler);
     }
-    if (first.bodyPublisher().isPresent() && !replayable(first, recorder)) {
+    // With a HostPolicy the paid retry goes to the policy-checked URI that answered 402 (the last
+    // request of the redirect chain), never back to an unchecked first host.
+    // Without one, the paid retry still targets the URI that answered 402 (after the delegate's
+    // own redirects), with the method and body of the request that was answered: a 303 POST-to-GET
+    // is not re-sent as a POST, and the caller's headers are not carried across origins.
+    HttpRequest answered = raw.request();
+    HttpRequest base = hostPolicy != null ? unpaid.last() : answeredBase(first, raw);
+    boolean withBody = hostPolicy != null ? unpaid.lastHasBody()
+        : answered == null ? first.bodyPublisher().isPresent()
+            : answered.bodyPublisher().isPresent();
+    // Only a retry that re-sends the body needs it recorded: after a 303 the paid GET has none.
+    if (withBody && !replayable(first, recorder)) {
       LOG.log(System.Logger.Level.WARNING, "[x402] " + first.method() + " " + first.uri()
           + ": the request body exceeds max-replay-body (" + maxReplayBody
           + " bytes) or could not be recorded; returning the 402 unpaid");
@@ -446,26 +466,48 @@ public final class X402HttpClient extends HttpClient implements AutoCloseable {
         || first.headers().firstValue(X402Headers.X_PAYMENT).isPresent()) {
       throw new X402ClientException("Payment already attempted");
     }
-    // With a HostPolicy the paid retry goes to the policy-checked URI that answered 402 (the last
-    // request of the redirect chain), never back to an unchecked first host.
-    // Without one, the original request is retried.
-    HttpRequest base = hostPolicy != null ? unpaid.last() : first;
-    boolean withBody = hostPolicy != null ? unpaid.lastHasBody()
-        : first.bodyPublisher().isPresent();
     HttpResponse<T> prior = hostPolicy != null
         ? new View<>(raw, null, Optional.ofNullable(unpaid.previous())) : null;
     PaymentPayload payload = create(required);
+    // The retry decision is made from the paid response's headers, before its body is read, so
+    // a response that is retried is drained and never reaches the caller's handler.
     Exchange<T> paid = exchange(signed(base, withBody, recorder, payload), handler, recorder,
-        true, prior);
-    if (recovered(payload, paid.raw())) {
+        true, prior, info -> recovered(payload, info));
+    if (paid.retry()) {
       PaymentPayload fresh = create(required);
       Exchange<T> retry = exchange(signed(base, withBody, recorder, fresh), handler, recorder,
-          true, prior);
-      recovered(fresh, retry.raw());
+          true, prior, info -> {
+            recovered(fresh, info);
+            return false;
+          });
       return retry.toResponse(handler);
     }
     return paid.toResponse(handler);
   }
+
+  /** The caller's request retargeted at the URI and method of the response that answered. */
+  private static HttpRequest answeredBase(HttpRequest first, HttpResponse<?> raw) {
+    HttpRequest answered = raw.request();
+    if (answered == null) {
+      return first;
+    }
+    URI target = raw.uri() != null ? raw.uri() : first.uri();
+    boolean withBody = answered.bodyPublisher().isPresent();
+    BodyPublisher body = withBody && first.bodyPublisher().isPresent()
+        ? first.bodyPublisher().get() : BodyPublishers.noBody();
+    boolean dropBodyHeaders = !withBody && first.bodyPublisher().isPresent();
+    // The JDK forwards the caller's headers on a same-host http-to-https upgrade, so the unpaid
+    // leg already carried them there; the paid retry keeps them too.
+    boolean crossOrigin = !sameOrigin(first.uri(), target) && !secureUpgrade(first.uri(), target);
+    return HttpRequest.newBuilder(first, (name, value) -> {
+      String lower = name.toLowerCase(Locale.ROOT);
+      return !(crossOrigin && CROSS_ORIGIN_STRIPPED.contains(lower))
+          && !(dropBodyHeaders && BODY_HEADERS.contains(lower));
+    }).uri(target).method(answered.method(), body).build();
+  }
+
+  private static final Set<String> BODY_HEADERS = Set.of("content-type", "content-encoding",
+      "content-language");
 
   private PaymentPayload create(PaymentRequired required) {
     try {
@@ -487,12 +529,12 @@ public final class X402HttpClient extends HttpClient implements AutoCloseable {
         .build();
   }
 
-  private boolean recovered(PaymentPayload payload, HttpResponse<Object> raw) {
-    SettleResponse settle = decodeSettle(raw.headers()).orElse(null);
+  private boolean recovered(PaymentPayload payload, ResponseInfo info) {
+    SettleResponse settle = decodeSettle(info.headers()).orElse(null);
     PaymentRequired again = null;
-    if (settle == null && raw.statusCode() == 402) {
+    if (settle == null && info.statusCode() == 402) {
       try {
-        again = raw.headers().firstValue(X402Headers.PAYMENT_REQUIRED)
+        again = info.headers().firstValue(X402Headers.PAYMENT_REQUIRED)
             .map(HeaderCodec::decodePaymentRequired).orElse(null);
       } catch (IllegalArgumentException e) {
         again = null;
@@ -514,8 +556,6 @@ public final class X402HttpClient extends HttpClient implements AutoCloseable {
 
   // ---------------------------------------------------------------- exchanges & redirects
 
-  private record Buffered(byte[] bytes) {}
-
   /**
    * One request with the redirects this client followed for it.
    *
@@ -523,44 +563,178 @@ public final class X402HttpClient extends HttpClient implements AutoCloseable {
    * @param previous the chain of earlier responses, or {@code null}
    * @param last the request that produced {@code raw}
    * @param lastHasBody whether {@code last} carries the original request body
+   * @param retry whether the paid response asked for a fresh payment (its body was drained)
    */
   private record Exchange<T>(HttpResponse<Object> raw, HttpResponse<T> previous,
-      HttpRequest last, boolean lastHasBody) {
+      HttpRequest last, boolean lastHasBody, boolean retry) {
 
     @SuppressWarnings("unchecked")
     HttpResponse<T> toResponse(BodyHandler<T> handler) throws IOException, InterruptedException {
-      T body = raw.body() instanceof Buffered b ? replay(handler, info(raw), b.bytes())
-          : (T) raw.body();
+      if (raw.body() instanceof X402HttpClientBoundedBody.Result b && b.overflow()) {
+        throw new IOException("x402: the " + raw.statusCode() + " response from " + raw.uri()
+            + " has a body over the " + BODY_BUFFER_CAP + "-byte buffer cap and is not returned "
+            + "unpaid; it is only buffered while the client decides whether to pay");
+      }
+      T body = raw.body() instanceof X402HttpClientBoundedBody.Result b
+          ? replay(handler, info(raw), b.bytes()) : (T) raw.body();
       Optional<HttpResponse<T>> prev = previous != null ? Optional.of(previous)
           : raw.previousResponse().map(p -> (HttpResponse<T>) (HttpResponse<?>) p);
       return new View<>(raw, body, prev);
     }
   }
 
+  /**
+   * Sends one request and, under a HostPolicy, the redirects this client follows for it.
+   *
+   * @param retryIf on a paid request, decides from the final response's headers whether to pay
+   *     again; it runs on the calling thread (the payment hooks it calls may block or rely on the
+   *     caller's context), while the response body waits unrequested
+   */
   private <T> Exchange<T> exchange(HttpRequest request, BodyHandler<T> handler,
-      Recorder recorder, boolean signed, HttpResponse<T> prior)
+      Recorder recorder, boolean signed, HttpResponse<T> prior, Predicate<ResponseInfo> retryIf)
       throws IOException, InterruptedException {
-    BodyHandler<Object> wrapping = info -> buffer(info.statusCode())
-        ? BodySubscribers.mapping(BodySubscribers.ofByteArray(), bytes -> (Object) new Buffered(bytes))
-        : BodySubscribers.mapping(handler.apply(info), body -> (Object) body);
-    HttpResponse<Object> raw = delegate.send(request, wrapping);
-    boolean hasBody = request.bodyPublisher().isPresent();
-    if (hostPolicy == null) {
-      return new Exchange<>(raw, prior, request, hasBody);
-    }
     HttpRequest current = request;
     HttpResponse<T> previous = prior;
-    for (int hops = 0; hops < MAX_REDIRECTS && isRedirect(raw.statusCode()); hops++) {
-      HttpRequest next = redirect(current, raw, recorder, signed);
+    boolean hasBody = carriesBody(request);
+    for (int hops = 0; ; hops++) {
+      Hop<T> hop = new Hop<>(current, handler, recorder, signed,
+          hostPolicy != null && hops < MAX_REDIRECTS, retryIf != null);
+      HttpResponse<Object> raw = delegate.send(current, hop);
+      if (hop.gateUsed) {
+        raw = openGate(raw, hop, retryIf);
+      }
+      HttpRequest next = hop.next;
       if (next == null) {
-        break;
+        return new Exchange<>(raw, previous, current, hasBody, hop.retry);
       }
       hasBody = hasBody && raw.statusCode() != 303 && next.method().equals(current.method());
       previous = new View<>(raw, null, Optional.ofNullable(previous));
       current = next;
-      raw = delegate.send(current, wrapping);
     }
-    return new Exchange<>(raw, previous, current, hasBody);
+  }
+
+  /**
+   * Decides on the calling thread, from the final paid response's headers, where its body goes:
+   * the payment hooks run here, never on the delegate's response thread. Until then the body is
+   * not requested. A retried response, a failing hook or handler, and an interrupt cancel the
+   * body instead of reading it.
+   */
+  private <T> HttpResponse<Object> openGate(HttpResponse<Object> raw, Hop<T> hop,
+      Predicate<ResponseInfo> retryIf) throws IOException, InterruptedException {
+    Gate gate = hop.gate;
+    ResponseInfo info = info(raw);
+    BodySubscriber<Object> target;
+    try {
+      hop.retry = retryIf.test(info);
+      if (hop.retry) {
+        gate.cancel(); // never read and never returned: the request is paid again
+        return raw;
+      }
+      target = BodySubscribers.mapping(hop.handler.apply(info), body -> (Object) body);
+    } catch (RuntimeException | Error e) {
+      gate.cancel();
+      throw e;
+    }
+    gate.open(target);
+    Object body;
+    try {
+      body = target.getBody().toCompletableFuture().get();
+    } catch (InterruptedException e) {
+      gate.cancel();
+      throw e;
+    } catch (ExecutionException e) {
+      Throwable cause = e.getCause();
+      if (cause instanceof IOException io) {
+        throw io;
+      }
+      throw new IOException(cause);
+    }
+    return new View<>(raw, body, raw.previousResponse());
+  }
+
+  /**
+   * A body subscriber whose target is chosen later: it holds the subscription (requesting
+   * nothing) and any signal that arrives early, and hands them over when opened. Its own body is
+   * ready at once, as {@code BodyHandlers.ofInputStream()}'s is, so {@code send} returns with the
+   * headers while the body waits.
+   */
+  private static final class Gate implements BodySubscriber<Object> {
+    private final List<List<ByteBuffer>> early = new ArrayList<>();
+    private BodySubscriber<Object> target;
+    private Flow.Subscription subscription;
+    private Throwable error;
+    private boolean completed;
+    private boolean cancelled;
+
+    @Override
+    public CompletionStage<Object> getBody() {
+      return CompletableFuture.completedFuture(this);
+    }
+
+    @Override
+    public synchronized void onSubscribe(Flow.Subscription s) {
+      subscription = s;
+      if (cancelled) {
+        s.cancel();
+      } else if (target != null) {
+        target.onSubscribe(s);
+      }
+    }
+
+    /** Stops the body: nothing more is read, and the connection is not kept for it. */
+    synchronized void cancel() {
+      cancelled = true;
+      early.clear();
+      if (subscription != null) {
+        subscription.cancel();
+      }
+    }
+
+    @Override
+    public synchronized void onNext(List<ByteBuffer> items) {
+      if (target != null) {
+        target.onNext(items);
+      } else {
+        early.add(items); // only from a publisher that ignores demand
+      }
+    }
+
+    @Override
+    public synchronized void onError(Throwable t) {
+      if (target != null) {
+        target.onError(t);
+      } else {
+        error = t;
+      }
+    }
+
+    @Override
+    public synchronized void onComplete() {
+      if (target != null) {
+        target.onComplete();
+      } else {
+        completed = true;
+      }
+    }
+
+    synchronized void open(BodySubscriber<Object> chosen) {
+      target = chosen;
+      if (subscription != null) {
+        chosen.onSubscribe(subscription);
+      }
+      early.forEach(chosen::onNext);
+      early.clear();
+      if (error != null) {
+        chosen.onError(error);
+      } else if (completed) {
+        chosen.onComplete();
+      }
+    }
+  }
+
+  /** Whether a request has a body to send: a publisher that is not known to be empty. */
+  private static boolean carriesBody(HttpRequest request) {
+    return request.bodyPublisher().map(p -> p.contentLength() != 0).orElse(false);
   }
 
   /** Whether a request's recorded body can be sent again; an empty body always can. */
@@ -569,17 +743,75 @@ public final class X402HttpClient extends HttpClient implements AutoCloseable {
         || request.bodyPublisher().map(p -> p.contentLength() == 0).orElse(false);
   }
 
-  private boolean buffer(int status) {
-    return status == 402 || (hostPolicy != null && isRedirect(status));
+  /**
+   * Decides what happens to one response's body from its status and headers, before any of it
+   * is read:
+   *
+   * <ul>
+   *   <li>a redirect this client will follow is drained (only its headers matter);
+   *   <li>an unpaid 402 that can be paid (PAYMENT-REQUIRED, host on the policy) is held in memory
+   *       up to the cap, because it is returned if the client then declines to pay;
+   *   <li>the final paid response waits behind a {@link Gate} until the calling thread has run
+   *       the payment hooks: drained when they ask for a fresh payment, else the caller's handler;
+   *   <li>everything else streams into the caller's handler.
+   * </ul>
+   *
+   * <p>The fields are written on the delegate's response thread and read after {@code send}
+   * returns.
+   */
+  private final class Hop<T> implements BodyHandler<Object> {
+    private final HttpRequest request;
+    private final BodyHandler<T> handler;
+    private final Recorder recorder;
+    private final boolean signed;
+    private final boolean mayRedirect;
+    private final boolean gated;
+    final Gate gate = new Gate();
+    /** Whether the final response went behind {@link #gate}. */
+    volatile boolean gateUsed;
+    volatile HttpRequest next;
+    volatile boolean retry;
+
+    Hop(HttpRequest request, BodyHandler<T> handler, Recorder recorder, boolean signed,
+        boolean mayRedirect, boolean gated) {
+      this.request = request;
+      this.handler = handler;
+      this.recorder = recorder;
+      this.signed = signed;
+      this.mayRedirect = mayRedirect;
+      this.gated = gated;
+    }
+
+    @Override
+    public BodySubscriber<Object> apply(ResponseInfo info) {
+      int status = info.statusCode();
+      if (mayRedirect && isRedirect(status)) {
+        next = redirect(request, status, info.headers(), recorder, signed);
+        if (next != null) {
+          return BodySubscribers.replacing(null);
+        }
+      }
+      if (!signed && status == 402
+          && info.headers().firstValue(X402Headers.PAYMENT_REQUIRED).isPresent()
+          && (hostPolicy == null || hostPolicy.allows(request.uri()))) {
+        return BodySubscribers.mapping(new X402HttpClientBoundedBody(BODY_BUFFER_CAP),
+            result -> (Object) result);
+      }
+      if (gated) {
+        gateUsed = true;
+        return gate;
+      }
+      return BodySubscribers.mapping(handler.apply(info), body -> (Object) body);
+    }
   }
 
   private static boolean isRedirect(int status) {
     return status == 301 || status == 302 || status == 303 || status == 307 || status == 308;
   }
 
-  private HttpRequest redirect(HttpRequest current, HttpResponse<Object> response,
+  private HttpRequest redirect(HttpRequest current, int status, HttpHeaders headers,
       Recorder recorder, boolean signed) {
-    Optional<String> location = response.headers().firstValue("Location");
+    Optional<String> location = headers.firstValue("Location");
     if (location.isEmpty()) {
       return null;
     }
@@ -595,26 +827,28 @@ public final class X402HttpClient extends HttpClient implements AutoCloseable {
           + "to " + target.getHost() + ": not in the host policy");
       return null;
     }
-    int status = response.statusCode();
     String method = current.method();
     BodyPublisher body;
-    if (status == 303 || ((status == 301 || status == 302) && "POST".equals(method))) {
+    boolean toGet = status == 303 || ((status == 301 || status == 302) && "POST".equals(method));
+    if (toGet) {
       method = "GET";
       body = BodyPublishers.noBody();
-    } else if (current.bodyPublisher().isEmpty()) {
+    } else if (!carriesBody(current)) {
+      // Also a GET this client already made from a POST: its bytes never come back.
       body = BodyPublishers.noBody();
-    } else if (replayable(current, recorder)) {
+    } else if (recorder.replayable()) {
       body = BodyPublishers.ofByteArray(recorder.bytes());
     } else {
       return null;
     }
-    if (!sameOrigin(current.uri(), target)) {
-      // Never carry credentials (or a payment) to another origin, as browsers' fetch does.
-      return HttpRequest.newBuilder(current,
-              (name, value) -> !CROSS_ORIGIN_STRIPPED.contains(name.toLowerCase(Locale.ROOT)))
-          .uri(target).method(method, body).build();
-    }
-    return copy(current, target, method, body);
+    boolean crossOrigin = !sameOrigin(current.uri(), target);
+    // Never carry credentials (or a payment) to another origin, as browsers' fetch does; a body
+    // dropped on the way to a GET takes its body headers with it, as in answeredBase().
+    return HttpRequest.newBuilder(current, (name, value) -> {
+      String lower = name.toLowerCase(Locale.ROOT);
+      return !(crossOrigin && CROSS_ORIGIN_STRIPPED.contains(lower))
+          && !(toGet && BODY_HEADERS.contains(lower));
+    }).uri(target).method(method, body).build();
   }
 
   /** Headers dropped when a redirect leaves the origin (scheme, host, port). */
@@ -625,6 +859,13 @@ public final class X402HttpClient extends HttpClient implements AutoCloseable {
     return a.getScheme() != null && a.getScheme().equalsIgnoreCase(b.getScheme())
         && a.getHost() != null && a.getHost().equalsIgnoreCase(b.getHost())
         && effectivePort(a) == effectivePort(b);
+  }
+
+  /** A same-host upgrade from http on its default port to https on its default port. */
+  private static boolean secureUpgrade(URI from, URI to) {
+    return "http".equalsIgnoreCase(from.getScheme()) && "https".equalsIgnoreCase(to.getScheme())
+        && from.getHost() != null && from.getHost().equalsIgnoreCase(to.getHost())
+        && effectivePort(from) == 80 && effectivePort(to) == 443;
   }
 
   private static int effectivePort(URI uri) {
@@ -670,21 +911,31 @@ public final class X402HttpClient extends HttpClient implements AutoCloseable {
   private static <T> T replay(BodyHandler<T> handler, ResponseInfo info, byte[] bytes)
       throws IOException, InterruptedException {
     BodySubscriber<T> subscriber = handler.apply(info);
+    // The body is one item: it goes out on the first request, as the subscriber's demand allows.
     subscriber.onSubscribe(new Flow.Subscription() {
+      private boolean done;
+
       @Override
-      public void request(long n) {
-        // the whole body is pushed below
+      public synchronized void request(long n) {
+        if (done) {
+          return;
+        }
+        done = true;
+        if (n <= 0) {
+          subscriber.onError(new IllegalArgumentException("non-positive request: " + n));
+          return;
+        }
+        if (bytes.length > 0) {
+          subscriber.onNext(List.of(ByteBuffer.wrap(bytes)));
+        }
+        subscriber.onComplete();
       }
 
       @Override
-      public void cancel() {
-        // nothing to release
+      public synchronized void cancel() {
+        done = true;
       }
     });
-    if (bytes.length > 0) {
-      subscriber.onNext(List.of(ByteBuffer.wrap(bytes)));
-    }
-    subscriber.onComplete();
     try {
       return subscriber.getBody().toCompletableFuture().get();
     } catch (ExecutionException e) {

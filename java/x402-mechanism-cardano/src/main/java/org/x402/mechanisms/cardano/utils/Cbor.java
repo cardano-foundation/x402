@@ -496,7 +496,12 @@ public final class Cbor {
       if (info < 24) {
         b.integer = BigInteger.valueOf(info);
       } else if (info == 24) {
-        b.integer = BigInteger.valueOf(next());
+        int value = next();
+        if (value < 32) {
+          // RFC 8949 section 3.3: a two-byte simple value below 32 is not well-formed.
+          throw new CborException("two-byte simple value below 32");
+        }
+        b.integer = BigInteger.valueOf(value);
       } else if (info >= 25 && info <= 27) {
         argument(info);
       } else {

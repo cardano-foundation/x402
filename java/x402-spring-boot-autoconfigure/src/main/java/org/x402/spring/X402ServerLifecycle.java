@@ -160,6 +160,20 @@ public final class X402ServerLifecycle implements SmartLifecycle {
     invalidLogged = false;
     if (afterResync) {
       LOG.info("x402 re-sync: every route is available");
+      HttpServerState state = http.state();
+      if (state != null) {
+        var snapshot = http.server().snapshot();
+        for (String failed : state.failedFacilitators()) {
+          // Only a facilitator that answered once has an answer to keep.
+          if (snapshot != null && snapshot.supported(failed) != null) {
+            LOG.warn("x402 re-sync: facilitator \"" + failed + "\" failed, so its last "
+                + "/supported answer is kept until restart");
+          } else {
+            LOG.warn("x402 re-sync: facilitator \"" + failed + "\" has never answered; no "
+                + "route needs it, and it is not retried until restart");
+          }
+        }
+      }
       ScheduledExecutorService s = scheduler;
       if (s != null) {
         s.shutdown();

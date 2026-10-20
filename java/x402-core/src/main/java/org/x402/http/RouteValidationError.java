@@ -38,6 +38,8 @@ public record RouteValidationError(
     UNKNOWN_FACILITATOR,
     /** The facilitator's kind cannot serve the option (checked per option). */
     FACILITATOR_CAPABILITY,
+    /** The option's own configuration is invalid, whatever the facilitator (never retryable). */
+    INVALID_OPTION,
     /** Two options with different routing policies can match one payment. */
     AMBIGUOUS_OPTIONS;
   }

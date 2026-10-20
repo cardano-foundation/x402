@@ -3,6 +3,7 @@ package org.x402.core;
 import java.util.Map;
 import org.x402.core.client.ClientHooks.SchemeClientHooks;
 import org.x402.core.types.PaymentRequirements;
+import org.x402.core.types.ResourceInfo;
 
 /** The client side of one payment scheme. */
 public interface SchemeNetworkClient {
@@ -59,11 +60,23 @@ public interface SchemeNetworkClient {
    *
    * @param extensions client extension data
    * @param maxAmountPerPayment the spend cap in atomic units, if any
+   * @param resource the resource the 402 describes, if any (a Masumi quote binds to it)
    */
-  record PaymentPayloadContext(Map<String, Object> extensions, String maxAmountPerPayment) {
+  record PaymentPayloadContext(
+      Map<String, Object> extensions, String maxAmountPerPayment, ResourceInfo resource) {
 
     /** An empty context. */
-    public static final PaymentPayloadContext EMPTY = new PaymentPayloadContext(null, null);
+    public static final PaymentPayloadContext EMPTY = new PaymentPayloadContext(null, null, null);
+
+    /**
+     * A context without the resource.
+     *
+     * @param extensions client extension data
+     * @param maxAmountPerPayment the spend cap in atomic units, if any
+     */
+    public PaymentPayloadContext(Map<String, Object> extensions, String maxAmountPerPayment) {
+      this(extensions, maxAmountPerPayment, null);
+    }
   }
 
   /**

@@ -31,7 +31,10 @@ import org.x402.spring.client.TransportRedirects;
  * {@code PAYMENT-SIGNATURE}; interceptors do not run again (a step that signs all headers cannot
  * cover {@code PAYMENT-SIGNATURE}). Only hosts allowed by the {@link HostPolicy} can trigger a
  * payment, checked on the request URI and on {@code PAYMENT-REQUIRED.resource.url}; anything else
- * returns the 402 unchanged, with nothing signed. The first 402 is closed before the retry.
+ * returns the 402 unchanged, with nothing signed. The first 402 is closed before the retry. The
+ * paid request does not follow redirects; the one exception is an http to https redirect on the
+ * same host (allowed by the policy), which is re-sent once with the payment. A second redirect
+ * of the paid leg throws {@link X402ClientException}; any other redirect is returned as is.
  */
 public final class X402ClientHttpRequestFactory implements ClientHttpRequestFactory {
 
@@ -312,8 +315,40 @@ public final class X402ClientHttpRequestFactory implements ClientHttpRequestFact
 
     private ClientHttpResponse send(HttpHeaders headers, byte[] bytes, PaymentPayload payload)
         throws IOException {
+      ClientHttpResponse response = sendTo(uri, method, headers, bytes, payload);
+      if (payload == null) {
+        return response;
+      }
+      // The paid request never follows redirects. One http to https redirect on the host the
+      // caller chose is re-sent once with the payment: that is how an http URL that redirects to
+      // https can be bought. Any other redirect is returned as is.
+      URI target = TransportRedirects.paidRedirectTarget(uri, response.getStatusCode().value(),
+          response.getHeaders(), hostPolicy);
+      if (target == null) {
+        return response;
+      }
+      int status = response.getStatusCode().value();
+      response.close();
+      boolean toGet = TransportRedirects.toGet(status, method);
+      HttpHeaders next = new HttpHeaders();
+      next.putAll(headers);
+      if (toGet) {
+        TransportRedirects.BODY_HEADERS.forEach(next::remove);
+      }
+      ClientHttpResponse second = sendTo(target, toGet ? HttpMethod.GET : method, next,
+          toGet ? new byte[0] : bytes, payload);
+      if (TransportRedirects.isRedirect(second.getStatusCode().value())) {
+        String location = second.getHeaders().getFirst(HttpHeaders.LOCATION);
+        second.close();
+        throw TransportRedirects.redirectedAgain(target, location);
+      }
+      return second;
+    }
+
+    private ClientHttpResponse sendTo(URI to, HttpMethod verb, HttpHeaders headers, byte[] bytes,
+        PaymentPayload payload) throws IOException {
       ClientHttpRequest request = (payload == null ? delegate : paidDelegate)
-          .createRequest(uri, method);
+          .createRequest(to, verb);
       request.getHeaders().putAll(headers);
       request.getAttributes().putAll(getAttributes());
       if (payload != null) {

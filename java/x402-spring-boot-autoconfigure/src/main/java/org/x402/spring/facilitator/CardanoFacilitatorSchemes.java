@@ -85,6 +85,9 @@ public final class CardanoFacilitatorSchemes {
             .network(network).projectId(projectId).baseUrl(baseUrl).clock(clock)
             .slotConfig(slots).networkMagic(networkMagic(network, entry.networkMagic()))
             .maxTipAge(cardano.maxTipAge())
+            // The scheme reads the ledger's evidence itself, within its settle deadline; a
+            // submit that also waited for inclusion would spend that budget twice.
+            .awaitConfirmation(false)
             .evaluation(entry.evaluation() == null || entry.evaluation()).build());
       }
       CardanoFacilitatorSigner signer = entry.mnemonic() == null || entry.mnemonic().isBlank()
@@ -93,6 +96,8 @@ public final class CardanoFacilitatorSchemes {
           .settlementStore(store).acceptMempool(cardano.acceptMempool())
           .confirmationTimeout(cardano.confirmationTimeout())
           .confirmationPoll(cardano.confirmationPoll())
+          .settleTimeout(cardano.settleTimeout())
+          .chainCallReserve(cardano.chainCallReserve())
           .registryValidator(registry).deploymentValidator(deployment).clock(clock)
           .slotConfig(slots).lookupTimeout(cardano.lookupTimeout())
           .maxInputLookups(cardano.maxInputLookups())

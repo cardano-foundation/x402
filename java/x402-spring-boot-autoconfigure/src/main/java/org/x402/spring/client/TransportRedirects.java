@@ -2,11 +2,20 @@ package org.x402.spring.client;
 
 import java.lang.reflect.Field;
 import java.net.HttpURLConnection;
+import java.net.URI;
 import java.net.http.HttpClient;
+import java.util.List;
+import org.apache.commons.logging.Log;
+import org.apache.commons.logging.LogFactory;
+import org.springframework.http.HttpHeaders;
+import org.springframework.http.HttpMethod;
 import org.springframework.http.client.ClientHttpRequest;
 import org.springframework.http.client.SimpleClientHttpRequestFactory;
 import org.springframework.util.ClassUtils;
 import org.springframework.util.ReflectionUtils;
+import org.x402.core.client.X402ClientException;
+import org.x402.http.HostPolicy;
+import org.x402.http.X402Headers;
 
 /**
  * Whether a transport can follow a redirect with a paid request, so a payment is never signed
@@ -30,7 +39,99 @@ public final class TransportRedirects {
       "reactor.netty.http.client.HttpClient", TransportRedirects.class.getClassLoader());
   private static final String SIMPLE_REQUEST = "org.springframework.http.client.SimpleClientHttpRequest";
 
+  private static final Log LOG = LogFactory.getLog(TransportRedirects.class);
+
   private TransportRedirects() {}
+
+  /** Headers dropped when a paid request is re-sent as a bodyless GET. */
+  public static final List<String> BODY_HEADERS = List.of(HttpHeaders.CONTENT_TYPE,
+      HttpHeaders.CONTENT_ENCODING, HttpHeaders.CONTENT_LANGUAGE, HttpHeaders.CONTENT_LENGTH);
+
+  /**
+   * Whether a status is a redirect the clients act on.
+   *
+   * @param status the status code
+   * @return {@code true} for 301, 302, 303, 307 and 308
+   */
+  public static boolean isRedirect(int status) {
+    return status == 301 || status == 302 || status == 303 || status == 307 || status == 308;
+  }
+
+  /**
+   * Whether a redirect turns the request into a bodyless GET: a 303, or a 301/302 of a POST.
+   *
+   * @param status the redirect status
+   * @param method the request method
+   * @return {@code true} when the next request is a GET without a body
+   */
+  public static boolean toGet(int status, HttpMethod method) {
+    return status == 303 || ((status == 301 || status == 302) && HttpMethod.POST.equals(method));
+  }
+
+  /**
+   * Where a paid request may be re-sent after it was answered with a redirect, the one case the
+   * Spring clients allow: a same-host http-to-https upgrade on the default ports, to a host the
+   * policy allows, of a response that has not already settled the payment (no {@code
+   * PAYMENT-RESPONSE}: re-sending would pay, or be refused as a duplicate, a second time).
+   *
+   * @param from the paid request's URI
+   * @param status the response status
+   * @param headers the response headers
+   * @param hostPolicy the client's host policy
+   * @return the target, or {@code null} when the response is returned as it is
+   */
+  public static URI paidRedirectTarget(URI from, int status, HttpHeaders headers,
+      HostPolicy hostPolicy) {
+    if (!isRedirect(status) || headers.getFirst(X402Headers.PAYMENT_RESPONSE) != null) {
+      return null;
+    }
+    String location = headers.getFirst(HttpHeaders.LOCATION);
+    if (location == null || location.isBlank()) {
+      return null;
+    }
+    URI target;
+    try {
+      target = from.resolve(location);
+    } catch (IllegalArgumentException e) {
+      return null;
+    }
+    if (!secureUpgrade(from, target) || !hostPolicy.allows(target)) {
+      LOG.debug("x402: not re-sending the paid request to " + target
+          + ": it is not an http to https upgrade on the same host and default ports; the "
+          + "redirect is returned");
+      return null;
+    }
+    return target;
+  }
+
+  /**
+   * The error for a paid request redirected a second time.
+   *
+   * @param target where the paid request was re-sent
+   * @param location the second redirect's {@code Location}, may be {@code null}
+   * @return the exception to throw
+   */
+  public static X402ClientException redirectedAgain(URI target, String location) {
+    return new X402ClientException("x402: the paid request to " + target + " was redirected "
+        + "again" + (location == null ? "" : " to " + location)
+        + "; a paid request follows one redirect at most, so it was not sent on");
+  }
+
+  /**
+   * Whether a redirect is a same-host upgrade from http on its default port to https on its
+   * default port: the only redirect a paid request is re-sent over. Another port is another
+   * origin, as in the plain-Java client.
+   *
+   * @param from the request URI
+   * @param to the redirect target
+   * @return {@code true} for such an upgrade
+   */
+  public static boolean secureUpgrade(URI from, URI to) {
+    return "http".equalsIgnoreCase(from.getScheme()) && "https".equalsIgnoreCase(to.getScheme())
+        && from.getHost() != null && from.getHost().equalsIgnoreCase(to.getHost())
+        && (from.getPort() == -1 || from.getPort() == 80)
+        && (to.getPort() == -1 || to.getPort() == 443);
+  }
 
   /**
    * Inspects a blocking request factory or a reactive connector. Spring's factory wrappers are

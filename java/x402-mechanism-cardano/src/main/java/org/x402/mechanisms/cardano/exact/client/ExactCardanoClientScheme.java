@@ -78,7 +78,7 @@ public final class ExactCardanoClientScheme implements SchemeNetworkClient {
                 requirements.amount(),
                 requirements.maxTimeoutSeconds(),
                 requirements.extra(),
-                null));
+                context == null ? null : context.resource()));
     if (result == null || result.transaction() == null || result.transaction().isEmpty()) {
       throw new IllegalStateException("Cardano signer returned an empty transaction");
     }

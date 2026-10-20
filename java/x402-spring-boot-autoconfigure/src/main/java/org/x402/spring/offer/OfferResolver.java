@@ -25,6 +25,7 @@ import org.x402.spring.X402DynamicPayTo;
 import org.x402.spring.X402DynamicPrice;
 import org.x402.spring.X402RouteCustomizer;
 import org.x402.spring.properties.PriceSpec;
+import org.x402.spring.properties.RawProperties;
 import org.x402.spring.properties.X402Properties;
 import org.x402.spring.properties.X402Properties.Accept;
 import org.x402.spring.properties.X402Properties.Account;
@@ -355,7 +356,7 @@ public final class OfferResolver {
     PaymentOption.Builder option = PaymentOption.builder().scheme(scheme).network(network)
         .maxTimeoutSeconds(maxTimeout).facilitator(pin);
     Map<String, Object> wireExtra = accept.price() != null ? finalExtra : draft.optionExtra();
-    option.extra(wireExtra.isEmpty() ? null : wireExtra);
+    option.extra(wireExtra.isEmpty() ? null : restoreLists(wireExtra));
     if (draft.payTo() != null) {
       option.payTo(draft.payTo());
     } else {
@@ -441,8 +442,16 @@ public final class OfferResolver {
     return RouteConfig.builder().accepts(options).resource(offer.resource())
         .description(offer.description()).mimeType(offer.mimeType())
         .serviceName(offer.serviceName()).tags(offer.tags()).iconUrl(offer.iconUrl())
-        .customPaywallHtml(offer.customPaywallHtml()).extensions(offer.extensions())
+        .customPaywallHtml(offer.customPaywallHtml())
+        .extensions(offer.extensions() == null ? null : restoreLists(offer.extensions()))
         .failover(failover).build();
+  }
+
+  /** Restores the lists YAML binds as index-keyed maps in every value (not in the keys). */
+  private static Map<String, Object> restoreLists(Map<String, Object> values) {
+    Map<String, Object> out = new LinkedHashMap<>();
+    values.forEach((k, v) -> out.put(k, RawProperties.restoreLists(v)));
+    return out;
   }
 
   private static String first(String... values) {

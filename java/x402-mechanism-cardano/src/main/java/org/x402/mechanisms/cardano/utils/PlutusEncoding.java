@@ -7,7 +7,9 @@ import com.bloxbean.cardano.client.plutus.spec.ListPlutusData;
 import com.bloxbean.cardano.client.plutus.spec.MapPlutusData;
 import com.bloxbean.cardano.client.plutus.spec.PlutusData;
 import java.math.BigInteger;
+import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.HashMap;
 import java.util.HexFormat;
 import java.util.List;
 import java.util.Map;
@@ -115,6 +117,153 @@ public final class PlutusEncoding {
    */
   public static PlutusData decode(Cbor.Item item) {
     return fromItem(item);
+  }
+
+  /**
+   * Re-encodes Plutus data the way the TypeScript SDK (Evolution {@code Data.fromCBORHex} then
+   * {@code Data.toCBORHex}) does: byte strings over 64 bytes become indefinite strings of 64-byte
+   * chunks, non-empty lists and maps indefinite, integers in minimal form. Where that output
+   * differs from {@link #encode}'s on-chain convention it is reproduced here on purpose, because
+   * the datum's length feeds the min-UTxO check and must match the TypeScript facilitator's:
+   *
+   * <ul>
+   *   <li>a general constructor (tag 102, index 128 and up) writes its {@code [index, fields]}
+   *       pair as an indefinite array ({@code 9f .. ff}), not a definite {@code 82};
+   *   <li>an integer beyond 64 bits is one definite byte string under tag 2 or 3, however long
+   *       (never chunked);
+   *   <li>map keys that are integers merge by value, as a JavaScript {@code Map} keyed by
+   *       {@code bigint} does: the entry keeps the position of the first occurrence and takes the
+   *       value of the last. Any other key (bytes, list, map, constructor) is an object, never
+   *       equal to another, so such entries are all kept in the sender's order.
+   * </ul>
+   *
+   * <p>It works on the strict reader's item tree, not the library model, so no key is hashed and
+   * the sender's entry order is kept.
+   *
+   * @param cbor bytes that {@link #check(byte[])} accepts
+   * @return the canonical bytes
+   * @throws IllegalArgumentException when the bytes are not Plutus data
+   */
+  public static byte[] canonical(byte[] cbor) {
+    Cbor.Writer w = new Cbor.Writer();
+    canonical(Cbor.decode(cbor), w);
+    return w.toByteArray();
+  }
+
+  private static void canonical(Cbor.Item item, Cbor.Writer w) {
+    switch (item.major()) {
+      case UNSIGNED:
+      case NEGATIVE:
+        canonicalInt(item.integer(), w);
+        return;
+      case BYTES:
+        encodeBytes(item.bytes(), w);
+        return;
+      case ARRAY:
+        canonicalList(item.items(), w);
+        return;
+      case MAP:
+        List<Cbor.Item[]> entries = mergedEntries(item.entries());
+        if (entries.isEmpty()) {
+          w.raw(0xa0);
+          return;
+        }
+        w.raw(0xbf);
+        for (Cbor.Item[] e : entries) {
+          canonical(e[0], w);
+          canonical(e[1], w);
+        }
+        w.raw(0xff);
+        return;
+      case TAG:
+        Tagged t = tagged(item);
+        if (t.fields() == null) {
+          canonicalInt(t.bignum(), w);
+          return;
+        }
+        BigInteger index = t.index();
+        if (index.compareTo(BigInteger.valueOf(7)) < 0) {
+          w.header(6, 121 + index.longValue());
+          canonicalList(t.fields().items(), w);
+        } else if (index.compareTo(BigInteger.valueOf(128)) < 0) {
+          w.header(6, 1280 + index.longValue() - 7);
+          canonicalList(t.fields().items(), w);
+        } else {
+          w.header(6, 102);
+          w.raw(0x9f);
+          canonicalInt(index, w);
+          canonicalList(t.fields().items(), w);
+          w.raw(0xff);
+        }
+        return;
+      default:
+        throw new IllegalArgumentException("CBOR item is not Plutus data: " + item.major());
+    }
+  }
+
+  /**
+   * A map's entries as a JavaScript {@code Map} holds them after decoding: integer keys (plain or
+   * bignum) merged by value, first position and last value; other keys all kept.
+   */
+  private static List<Cbor.Item[]> mergedEntries(List<Map.Entry<Cbor.Item, Cbor.Item>> raw) {
+    List<Cbor.Item[]> out = new ArrayList<>(raw.size());
+    Map<BigInteger, Integer> integerKeyAt = new HashMap<>();
+    for (Map.Entry<Cbor.Item, Cbor.Item> e : raw) {
+      BigInteger key = integerKey(e.getKey());
+      Integer at = key == null ? null : integerKeyAt.get(key);
+      if (at != null) {
+        out.get(at)[1] = e.getValue();
+        continue;
+      }
+      if (key != null) {
+        integerKeyAt.put(key, out.size());
+      }
+      out.add(new Cbor.Item[] {e.getKey(), e.getValue()});
+    }
+    return out;
+  }
+
+  /** The integer value of a key, or {@code null} when the key is not an integer. */
+  private static BigInteger integerKey(Cbor.Item key) {
+    switch (key.major()) {
+      case UNSIGNED:
+      case NEGATIVE:
+        return key.integer();
+      case TAG:
+        Tagged t = tagged(key);
+        return t.fields() == null ? t.bignum() : null;
+      default:
+        return null;
+    }
+  }
+
+  /**
+   * As {@link #encodeInt}, but as TypeScript writes integers: a bignum's magnitude is one definite
+   * string, and −2^64, which fits a CBOR negative integer, is still written as a bignum (the
+   * TypeScript encoder's negative range stops at −(2^64 − 1)).
+   */
+  private static void canonicalInt(BigInteger value, Cbor.Writer w) {
+    if (value.signum() >= 0 && value.bitLength() > 64) {
+      w.header(6, 2);
+      w.bytes(magnitude(value));
+    } else if (value.signum() < 0 && value.negate().bitLength() > 64) {
+      w.header(6, 3);
+      w.bytes(magnitude(value.negate().subtract(BigInteger.ONE)));
+    } else {
+      encodeInt(value, w);
+    }
+  }
+
+  private static void canonicalList(List<Cbor.Item> items, Cbor.Writer w) {
+    if (items.isEmpty()) {
+      w.raw(0x80);
+      return;
+    }
+    w.raw(0x9f);
+    for (Cbor.Item item : items) {
+      canonical(item, w);
+    }
+    w.raw(0xff);
   }
 
   /**

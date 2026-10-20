@@ -37,8 +37,11 @@ public final class BazaarDeclarations implements X402RouteCustomizer {
     }
     Object raw = RawProperties.restoreLists(extensions.get(Bazaar.KEY));
     if (raw instanceof Map<?, ?> ready && ready.containsKey("info") && ready.containsKey("schema")) {
-      // Already a declaration (built with Bazaar.declareDiscoveryExtension, e.g. in YAML).
-      return route;
+      // Already a declaration (built with Bazaar.declareDiscoveryExtension, e.g. in YAML): keep
+      // it, with the lists YAML binds as index-keyed maps restored.
+      Map<String, Object> restored = new LinkedHashMap<>(extensions);
+      restored.put(Bazaar.KEY, raw);
+      return withExtensions(route, restored);
     }
     Map<String, Object> out = new LinkedHashMap<>(extensions);
     out.remove(Bazaar.KEY);
@@ -56,10 +59,14 @@ public final class BazaarDeclarations implements X402RouteCustomizer {
     } else if (!isFalse(raw)) {
       out.putAll(Bazaar.declareDiscoveryExtension(HttpDiscoveryConfig.create()));
     }
+    return withExtensions(route, out.isEmpty() ? null : out);
+  }
+
+  private static RouteConfig withExtensions(RouteConfig route, Map<String, Object> extensions) {
     return new RouteConfig(route.accepts(), route.resource(), route.description(),
         route.mimeType(), route.serviceName(), route.tags(), route.iconUrl(),
         route.customPaywallHtml(), route.unpaidResponseBody(),
-        route.settlementFailedResponseBody(), out.isEmpty() ? null : out, route.failover());
+        route.settlementFailedResponseBody(), extensions, route.failover());
   }
 
   private static boolean isFalse(Object value) {

@@ -39,7 +39,7 @@ public final class OfferRegistry {
   private static final Pattern CATCH_ALL = Pattern.compile("\\{\\*[^}]*}");
   private static final Pattern VARIABLE = Pattern.compile("\\{[^}]*}");
 
-  private final Map<Method, String> byMethod = new HashMap<>();
+  private final Map<HandlerKey, String> byHandler = new HashMap<>();
   private final Set<String> annotatedOffers = new LinkedHashSet<>();
   private final List<String> warnings = new ArrayList<>();
   private final boolean hasOffers;
@@ -75,7 +75,7 @@ public final class OfferRegistry {
             + "cannot be buffered until settlement. Return a non-streaming type, or use an "
             + "upfront payment flow");
       }
-      byMethod.put(handler.getMethod(), offer);
+      byHandler.put(HandlerKey.of(handler), offer);
       annotatedOffers.add(offer);
     }
     offers.offers().values().forEach(o -> checkPath(o, mappings, source, authorizationFlow));
@@ -146,7 +146,7 @@ public final class OfferRegistry {
         continue;
       }
       matched = true;
-      String annotated = byMethod.get(mapping.handlerMethod().getMethod());
+      String annotated = byHandler.get(HandlerKey.of(mapping.handlerMethod()));
       if (annotated != null) {
         overlaps.add(annotated);
       } else if (source.isStreaming(mapping.handlerMethod())
@@ -189,6 +189,16 @@ public final class OfferRegistry {
     String s = CATCH_ALL.matcher(springPattern).replaceAll("x/y");
     s = VARIABLE.matcher(s).replaceAll("x");
     return s.replace("**", "x/y").replace("*", "x").replace("?", "x");
+  }
+
+  /**
+   * A handler is its bean type and its method: an inherited method served by two controllers is
+   * two handlers.
+   */
+  private record HandlerKey(Class<?> beanType, Method method) {
+    static HandlerKey of(HandlerMethod handler) {
+      return new HandlerKey(handler.getBeanType(), handler.getMethod());
+    }
   }
 
   private static String annotatedOffer(HandlerMethod handler) {
@@ -234,7 +244,7 @@ public final class OfferRegistry {
    */
   public String offerFor(Object handler) {
     if (handler instanceof HandlerMethod method) {
-      return byMethod.get(method.getMethod());
+      return byHandler.get(HandlerKey.of(method));
     }
     return null;
   }

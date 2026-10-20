@@ -133,9 +133,10 @@ x402:
     max-replay-body: 1MB                 # default: 1MB. larger bodies → 402 returned unpaid
     spend-controls:
       enabled: true                      # default: true. false = no spend controls
-      max-amount-per-payment: "$1"       # default: "$1", USD cap for default assets (USDM)
-      allow-any-asset: false             # default: false. true pays any asset; non-default
-                                         # assets are then paid with NO cap
+      max-amount-per-payment: "$1"       # default: "$1", USD cap for default assets (USDM);
+                                         # false = no cap
+      allow-any-asset: false             # default: false. true pays any asset; an asset
+                                         # listed below keeps its cap, others have NO cap
       allowed-assets:                    # lovelace is refused unless listed here. An entry
                                          # without max-amount-per-payment is UNCAPPED; a
                                          # network pattern like cardano:* includes mainnet
@@ -161,6 +162,10 @@ x402:
       accept-mempool: false              # default: false
       confirmation-timeout: 75s          # default: 75s; keep below 85s
       confirmation-poll: 5s              # default: 5s
+      settle-timeout: 75s                # default: 75s; one whole settle, keep below 85s
+      chain-call-reserve: 15s            # default: 15s (half of settle-timeout under 30s); no
+                                         # broadcast or evidence read starts in it. 40s makes
+                                         # settle-timeout a hard bound with Blockfrost
       max-tip-age: 5m                    # default: 5m; a provider whose tip lags more is refused
       lookup-timeout: 10s                # default: 10s; chain lookups of one verification
       max-input-lookups: 64              # default: 64; inputs one verification resolves

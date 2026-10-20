@@ -131,7 +131,7 @@ public final class CardanoErrors {
       "invalid_exact_cardano_requirements_masumi_deployment";
   /** The escrow script is not on the facilitator's allowlist for the network. */
   public static final String MASUMI_CONTRACT_MISMATCH =
-      "invalid_exact_cardano_requirements_masumi_contract_mismatch";
+      "invalid_exact_cardano_payload_masumi_contract_mismatch";
   /** More or less than one escrow output. */
   public static final String MASUMI_ESCROW_OUTPUT_COUNT =
       "invalid_exact_cardano_payload_masumi_escrow_output_count";

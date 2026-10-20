@@ -88,7 +88,7 @@ Unpaid requests get `402` with a `PAYMENT-REQUIRED` header. A request carrying a
 What the starter checks at startup:
 - Every network that would be wired (accounts and options when `x402.enabled`, `x402.client.cardano.networks` when `x402.client.enabled`, `x402.facilitator-server.cardano.networks` when the facilitator server is enabled) has its mechanism on the classpath. Spellings are matched the way Spring binds them (dashes, camelCase, environment variables).
 - `@X402Payment("x")` without `x402.routes.x` fails, listing the known offers.
-- On a class, `@X402Payment` covers every handler method; a method-level annotation overrides it.
+- On a class, `@X402Payment` covers every handler method; a method-level annotation overrides it. A handler inherited from a shared base controller is priced per controller, so it is paid only where the subclass (or the base method) carries the annotation.
 - The offer is taken from the handler Spring actually dispatches to, so a more specific free handler (`/items/free` next to a paid `/items/{id}`) stays free. CORS pre-flight is never charged; `HEAD` on a paid `GET` handler is charged, because Spring runs the handler.
 - An offer used by no annotation and no `path:` logs a warning.
 
@@ -297,7 +297,7 @@ At startup the server asks every facilitator for `/supported` in parallel, withi
 |---|---|
 | Every facilitator answered and every option is served | Starts; `x402` health `UP`. |
 | Every facilitator answered and an option can't be served | Startup fails (TS parity). |
-| A facilitator failed or timed out, and only options it might serve are affected | Starts (Java refinement; TS exits). Affected routes answer `503` with `Retry-After` at once; other routes work. A single background re-sync retries with backoff (`x402.sync.initial-backoff` 1s up to `max-backoff` 60s). Health `OUT_OF_SERVICE`. |
+| A facilitator failed or timed out, and only options it might serve are affected | Starts (Java refinement; TS exits). Affected routes answer `503` with `Retry-After` at once; other routes work. A single background re-sync retries with backoff (`x402.sync.initial-backoff` 1s up to `max-backoff` 60s). Health `OUT_OF_SERVICE`. A facilitator that answered before and fails one re-sync keeps its last answer, so its routes keep working. Health shows it `DOWN`, and once every route works the re-sync stops: the kept answer stays until restart (logged). |
 | The re-sync answered but options still can't be served | Logged once; affected routes `500 {"error":"x402 route configuration"}`; health `DOWN`; re-sync continues. |
 | A facilitator no option needs is down | Not retried; shown `DOWN` in the health details only. The component stays `UP`. |
 | No offers at all (e.g. a facilitator-only app) | No sync. |
@@ -325,7 +325,7 @@ management:
 
 A paid request waits for at most two verifies (with failover) and one settle plus its pending retry: 2 × 15 s + 2 × 90 s = **210 s** with defaults. The server warns at startup when an option's worst path, computed from its own facilitators' timeouts, exceeds 240 s. `X402HttpClient` gives requests without their own timeout **240 s**. Options using the core `escrow` payment flow settle before and after the handler (4 × settle) and need longer client timeouts; none of the Cardano transfer methods use it (`default`, `masumi` and `script` are all authorization flows).
 
-Keep a facilitator's `timeout` above its confirmation wait: the Cardano facilitator waits up to 75 s for confirmations by default.
+Keep a facilitator's `timeout` above its settle bound. A Cardano facilitator answers a settle within `settle-timeout` (75 s by default), as long as the chain call in flight at its end returns within `chain-call-reserve` (15 s by default). Its confirmation wait ends with the settle's budget, `settle-timeout` less `chain-call-reserve` (60 s by default) less the time verification and the broadcast took, or earlier at `confirmation-timeout`; without the required evidence by then the answer is `settlement_pending` and the paid retry resumes observing the same transaction. The facilitator server warns at startup when `settle-timeout` exceeds 85 s.
 
 ## Customizer beans
 
@@ -376,7 +376,7 @@ x402:
 
 **Responses are buffered.** A paid handler's whole response (status, headers, cookies, body) is held until settlement succeeds. If settlement fails the client gets the `402` and none of the handler's headers, so a `Location` or token header cannot leak unpaid. A handler status ≥ 400 or an exception cancels the payment: no settle.
 
-**No streaming on paid handlers.** Handlers returning `SseEmitter`, `ResponseBodyEmitter`, `StreamingResponseBody` (also inside `ResponseEntity`), `text/event-stream`, or a streaming `Flux` fail startup when their offer settles after the handler, which is every Cardano option.
+**No streaming on paid handlers.** Handlers returning `SseEmitter`, `ResponseBodyEmitter`, `StreamingResponseBody` or `Flux<ServerSentEvent>`, or declaring a streaming `produces` (`text/event-stream`, NDJSON, `application/stream+json`), also inside `ResponseEntity`, `Mono`, `CompletionStage`, `Callable`, `DeferredResult`, `WebAsyncTask` or `ListenableFuture`, fail startup when their offer settles after the handler, which is every Cardano option. The check reads types and annotations only: a plain `Flux` that Spring decides to stream at request time (on WebMvc a `Flux<String>`, or any `Flux` requested with a streaming `Accept`) is not caught, and is held in memory until it ends. Give a paid `Flux` handler a non-streaming `produces`, such as `application/json`, so a streaming `Accept` gets 406.
 
 **Threads.** The facilitator calls are blocking. A paid request can hold a servlet thread (WebMvc) or a `boundedElastic` worker (WebFlux) for up to the [timeout budget](#timeout-budget), 210 s with defaults. Size your thread pools for it.
 
@@ -438,7 +438,7 @@ x402:
       max-amount-per-payment: "$1"            # USD cap for USDM (the default)
 ```
 
-An `allowed-assets` entry **without** `max-amount-per-payment` allows that asset with **no cap**. `allow-any-asset: true` accepts every asset, and assets other than the network's default asset are then paid **without any cap**. A `network` pattern such as `cardano:*` also matches `cardano:mainnet`. `enabled: false` turns spend controls off. An empty `max-amount-per-payment` removes the USD cap; the starter logs a warning at startup when you do that. In plain Java the same settings are `SpendControls.builder()`, `SpendControls.disabled()` and `X402Client.registerPolicy(...)`.
+An `allowed-assets` entry **without** `max-amount-per-payment` allows that asset with **no cap**. `allow-any-asset: true` accepts every asset; an asset listed in `allowed-assets` keeps that entry's cap, and every other asset that is not the network's default asset is paid **without any cap**. A `network` pattern such as `cardano:*` also matches `cardano:mainnet`. `enabled: false` turns spend controls off. An empty `max-amount-per-payment` removes the USD cap; the starter logs a warning at startup when you do that. `max-amount-per-payment: false` removes it too, without the warning. In plain Java the same settings are `SpendControls.builder()`, `SpendControls.disabled()` and `X402Client.registerPolicy(...)`.
 
 ### Spring: `RestClient`, `RestTemplate`, `WebClient`, `@HttpExchange`
 
@@ -495,7 +495,11 @@ RestClient selfBuiltRestClient(X402ClientHttpRequestFactoryDecorator x402Decorat
 
 ### Redirects: a paid request never follows one (Spring clients)
 
-With the Spring clients, the request carrying `PAYMENT-SIGNATURE` never follows a redirect; a 3xx answer to it is returned to your code. Otherwise an allowed host could redirect the payment to another origin. (Plain `X402HttpClient` with a `HostPolicy` behaves differently: it follows redirects itself, only to hosts on the list, and drops `Authorization`, `Cookie`, `Proxy-Authorization`, `X-Api-Key`, `PAYMENT-SIGNATURE` and `X-PAYMENT` when a redirect changes the origin. Without a `HostPolicy` the wrapped client's own redirect setting applies.)
+With the Spring clients, the request carrying `PAYMENT-SIGNATURE` never follows a redirect on its own; a 3xx answer to it is returned to your code. Otherwise an allowed host could redirect the payment to another origin. One exception keeps an `http://` URL that redirects to `https://` buyable: when the paid request answers with a redirect to the same host over https, and that host passes `x402.client.hosts`, it is re-sent once to the https `Location` with the payment (a 303, or a 301/302 after a POST, becomes a bodyless GET). A second redirect of the paid request then throws an `X402ClientException` naming its `Location`.
+
+Plain `X402HttpClient` pays the URI that answered the 402, with the method and body of the request that was answered (a POST the wrapped client turned into a GET on a 303 is paid as a GET). With a `HostPolicy` it follows redirects itself: the paid request only to hosts on the list, the unpaid one wherever it leads (as the wrapped client would, re-sending a 307/308 body), and it drops `Authorization`, `Cookie`, `Proxy-Authorization`, `X-Api-Key`, `PAYMENT-SIGNATURE` and `X-PAYMENT` when a redirect changes the origin. Without a `HostPolicy` the paid request uses the wrapped client's own redirect setting; build it with `Redirect.NEVER` if the payment must not follow redirects.
+
+`X402HttpClient` holds a response body in memory only while it decides whether to pay: an unpaid 402 carrying `PAYMENT-REQUIRED` from an allowed host, up to 64 KB. If such a 402 is not paid and its body was larger than 64 KB, `send` throws an `IOException` naming the cap instead of returning a cut-off body. The body of a redirect it follows, and of a paid answer your `onPaymentResponse` hook retries, is read and discarded, never held; the request timeout covers the headers only, so a host that never ends such a body holds the call. Any other response streams straight into your `BodyHandler`. The payment hooks run on the thread that called `send`, before the paid answer's body is read.
 
 - **Boot-built clients** follow redirects by default (Boot 3.5). x402 sends the paid request through a twin of the same transport with redirects off, so nothing is needed from you.
 - **Self-built blocking clients:** use `x402Decorator.decorate(factory, nonRedirectingFactory)` as above. A paid factory known to follow redirects is refused.
@@ -521,15 +525,16 @@ x402:
     base-path: /x402               # "" or "/" = root
     cardano:
       accept-mempool: false        # true also accepts l1Confirmations -1 (mempool)
-      confirmation-timeout: 75s    # keep below the resource servers' 90s facilitator timeout
+      confirmation-timeout: 75s    # also ends with the settle budget: settle-timeout less chain-call-reserve
       confirmation-poll: 5s
+      settle-timeout: 75s          # one whole settle; keep below the resource servers' 90s facilitator timeout
       networks:                    # one facilitator scheme per network
         - network: "cardano:preprod"
           blockfrost: { project-id: "${BLOCKFROST_PREPROD_PROJECT_ID}" }
           mnemonic: "${FACILITATOR_MNEMONIC:}"   # optional: only shows an address in /supported
 ```
 
-The buyer pays the transaction fee (`areFeesSponsored: false`), so the facilitator holds no funds. It advertises the transfer methods `default`, `masumi` and `script` and the confirmation depths it can check. It logs one line per verify and settle with network, `payTo` and the result. With Spring Boot Actuator, the `x402-facilitator` health component asks each network's backend for its protocol parameters and is `DOWN` when one doesn't answer (`management.health.x402-facilitator.enabled=false` turns it off). Runnable: [`examples/java/facilitator/spring-boot`](../examples/java/facilitator/spring-boot/README.md).
+The buyer pays the transaction fee (`areFeesSponsored: false`), so the facilitator holds no funds. The built-in endpoints accept request bodies up to 256 KB and answer `413` beyond, closing the connection; on WebFlux, Reactor Netty still reads and discards the rest of an oversized upload, so cap request sizes at the server or proxy too. It advertises the transfer methods `default`, `masumi` and `script` and the confirmation depths it can check. It logs one line per verify and settle with network, `payTo` and the result. With Spring Boot Actuator, the `x402-facilitator` health component asks each network's backend for its protocol parameters and is `DOWN` when one doesn't answer (`management.health.x402-facilitator.enabled=false` turns it off). Runnable: [`examples/java/facilitator/spring-boot`](../examples/java/facilitator/spring-boot/README.md).
 
 ### Protect it with Spring Security
 
@@ -563,6 +568,8 @@ Rate limiting is up to you, too.
 
 - **One transaction pays for one thing.** Settle claims each transaction before broadcasting it, bound to its requirements and resource URL (without the confirmation policy). The same transaction under other requirements or another resource gets `duplicate_settlement`. Verifying a settled transaction again gives `duplicate_settlement`; public verify never accepts a transaction just because it is on chain.
 - **A transaction is broadcast at most once.** After verification, the claim passes a broadcast fence; from then on it is never handed to another caller. A retry after `settlement_pending` (same signature, same requirements) resumes observing that transaction and never sends it again. A retry of a settled payment answers success again only after re-reading the ledger evidence at the requested depth: after a rollback it is pending.
+- **A settle answers within `settle-timeout` (75 s) as long as the chain call in flight at its end takes at most `chain-call-reserve` (15 s).** Verification, broadcast and the confirmation wait share that budget. Neither the broadcast, an evidence read nor the tip read that decides "expired" starts in the last `chain-call-reserve` (`chainCallReserve` in plain Java; half of `settle-timeout` when that is under 30 s), so the call in flight then can still finish. Past that point the answer is `settlement_pending`; a settle that had not broadcast yet sends nothing, and the retry broadcasts. One chain call can be several Blockfrost requests of up to 10 s each (the request timeout): a submission up to three (the provider check's genesis and tip reads, then the submission), an evidence read up to four (the check, the transaction, then the mempool or the tip). The default reserve covers calls whose requests answer promptly; a provider that is slow on every request can push the answer up to 25 s past `settle-timeout` (100 s with the defaults, past the resource server's 90 s: a 502 there; the retry resumes the broadcast, it never sends it twice). `chain-call-reserve: 40s` makes `settle-timeout` a hard bound, at the cost of a shorter confirmation wait (more `settlement_pending` answers on slow blocks). Verification inside the settle is limited by `lookup-timeout` and the request timeout, not by `settle-timeout`. The confirmation wait ends with the settle's budget (`settle-timeout` less `chain-call-reserve`, 60 s with the defaults, which therefore decide it); a configured `confirmation-timeout` above that budget has no effect (each network's scheme logs a warning). The Blockfrost backend the starter builds does not wait for inclusion inside `submit` (the scheme reads the evidence itself), so a `-1` settle reports `status: mempool`. A `BlockfrostChainBackend` you build yourself waits by default (`awaitConfirmation(true)`), up to its request timeout and outside this budget; build it with `awaitConfirmation(false)` for a facilitator (the scheme logs a warning otherwise).
+- **Resuming a broadcast transaction never fails it for a passing reason.** The retry is re-checked. A verdict about the transaction or the retry itself (recipient, amount, asset, signatures, structure, Masumi terms, nonce, payer, version, network) still fails it. A verdict known to depend on the moment (a provider outage, a registry, deployment-approval or allowlist verdict, a protocol-parameter change, the clock) leaves the outcome to the ledger: success once the evidence is there, otherwise pending. Any other verdict (a custom method check's reason, an exception in a validator or an override, a reason this version does not know) is no verdict either way: the resume answers pending, never success or failure, and the paid retry's verify answers `settlement_pending`. When the re-check failed because the provider could not answer, the resume reads the evidence once instead of waiting for it. Without a requirements binding in the store such a verdict stays pending. A paid retry's verify follows the same rule once the ledger or a mempool shows the transaction: with a matching binding it answers valid, so the request goes on to settle, which resumes (never broadcasts again) and lets the ledger decide; without a binding, or before the transaction is seen, it answers `settlement_pending`.
 - **An unclear outcome is pending, never failed.** A submission whose outcome is unknown, another settle of the same transaction in progress, or a store that could not record the result answer `settlement_pending`, so the client retries instead of paying again. Only when the backend proves the transaction never left the process (Blockfrost's provider check failed before the request) is the claim released, and the retry broadcasts it.
 - **The default claim store is in memory: one instance only.** It holds at most 4096 claims, and keeps broadcast and settled ones until the transaction's validity window has passed (plus 120 s). When it is full and nothing can be evicted, new settles are refused (`capacity-exceeded`, reported as a failed settle). Several facilitator instances need a **shared `SettlementClaimStore` bean** (JDBC, Redis) whose operations are atomic across instances. Implement `claimDetails` and `beginSubmission` too: without them a settled payment is never replayed, and a claim left by a crash after the broadcast stays pending. A store that reclaims stale claims must implement `beginSubmission`, and a delegating store must forward every method.
 - **A `SettlementOverrides` amount that varies per request** changes the binding, so a retry of the same payment becomes a duplicate.
@@ -605,6 +612,8 @@ A policy hook belongs on **both** `onBeforeVerify` and `onBeforeSettle`: a calle
 ## Configuration reference
 
 Every key with its default is in one file: [`application-reference.yml`](../examples/java/servers/spring-boot/src/main/resources/application-reference.yml). A test binds it through the SDK's properties classes, so it cannot drift. `*` stands for a name you choose, `[]` for a list element.
+
+Free-form values (`extra`, extensions) are bound as maps, and Spring Boot binds a YAML list as a map with keys `0`, `1`, …. The SDK turns such a map back into a list everywhere in these values, so a JSON object whose keys are exactly `0..n-1` cannot be written in YAML. Spring Boot's loader also binds an empty list `[]` as the empty string and drops an empty map `{}` before the SDK sees them, indistinguishable from `""` and from no key. Set any of these through a customizer bean.
 
 **Resource server**
 
@@ -656,8 +665,8 @@ Every key with its default is in one file: [`application-reference.yml`](../exam
 | `x402.client.instrument-beans` | `true` | Hook self-built `WebClient` beans; warn about self-built `RestClient` / `RestTemplate` beans. |
 | `x402.client.max-replay-body` | `1MB` | Largest request body that can be re-sent with payment. |
 | `x402.client.spend-controls.enabled` | `true` | |
-| `x402.client.spend-controls.max-amount-per-payment` | `"$1"` | USD cap for default assets; empty = no cap (warns). |
-| `x402.client.spend-controls.allow-any-asset` | `false` | `true` pays any asset; non-default assets then have no cap. |
+| `x402.client.spend-controls.max-amount-per-payment` | `"$1"` | USD cap for default assets; empty (warns) or `false` = no cap. |
+| `x402.client.spend-controls.allow-any-asset` | `false` | `true` pays any asset; `allowed-assets` caps still apply, other non-default assets have no cap. |
 | `x402.client.spend-controls.allowed-assets[].{network, asset, max-amount-per-payment}` | | Extra allowed assets; cap in atomic units. **No cap when `max-amount-per-payment` is left out.** A `network` pattern like `cardano:*` includes mainnet. |
 | `x402.client.prefer.networks` / `schemes` | | Preferred first; first entry wins. |
 | `x402.client.cardano.mnemonic` | | Buyer mnemonic for every network below. |
@@ -671,8 +680,10 @@ Every key with its default is in one file: [`application-reference.yml`](../exam
 | `x402.facilitator-server.expose-http` | `true` | `false` = in-process only. |
 | `x402.facilitator-server.base-path` | `/x402` | |
 | `x402.facilitator-server.cardano.accept-mempool` | `false` | |
-| `x402.facilitator-server.cardano.confirmation-timeout` | `75s` | Warns above 85 s. |
+| `x402.facilitator-server.cardano.confirmation-timeout` | `75s` | Also ends with the settle's budget (`settle-timeout` less `chain-call-reserve`, 60 s by default, which therefore decides with the defaults); a configured value above that budget has no effect and is logged. |
 | `x402.facilitator-server.cardano.confirmation-poll` | `5s` | |
+| `x402.facilitator-server.cardano.settle-timeout` | `75s` | Bound on one whole settle, as long as the chain call in flight at its end takes at most `chain-call-reserve`. No broadcast or evidence read starts in its last `chain-call-reserve`; past that the answer is `settlement_pending`. Warns above 85 s. |
+| `x402.facilitator-server.cardano.chain-call-reserve` | `15s` (half of `settle-timeout` under 30 s) | The end part of `settle-timeout` kept for the chain call in flight; must be shorter than `settle-timeout`. A Blockfrost evidence read is up to four requests of up to 10 s: `40s` makes `settle-timeout` a hard bound, at the cost of a shorter confirmation wait. |
 | `x402.facilitator-server.cardano.max-tip-age` | `5m` | Chain reads are refused when the provider's latest block is older (or more than 30 s ahead). |
 | `x402.facilitator-server.cardano.lookup-timeout` | `10s` | Budget for the chain lookups of one verification. |
 | `x402.facilitator-server.cardano.max-input-lookups` | `64` | A transaction with more inputs is a lookup failure before any lookup. |
@@ -692,14 +703,14 @@ The wire format (headers, JSON, status codes, route syntax) follows TS. Behaviou
 
 | Topic | TS | Java |
 |---|---|---|
-| Facilitator down at startup | the app exits | starts; only affected routes answer 503 while a background re-sync runs |
+| Facilitator down at startup | the app exits | starts; only affected routes answer 503 while a background re-sync runs; a facilitator that answered before keeps its last answer through a failed re-sync |
 | Pinning an option to a facilitator, verify failover | not available | available (server-side only, invisible on the wire) |
 | Settle after a facilitator error | may move on to the next facilitator | never; settle goes to the verifier |
 | Facilitator HTTP server | hand-written in each example | `x402.facilitator-server.*` |
 | Already-settled Cardano transaction sent again | public verify accepts it once it is on chain | verify: `duplicate_settlement`; settle with the same requirements and resource: success again after re-reading the evidence; otherwise `duplicate_settlement` |
 | Cardano submission with an unknown outcome (transport error, wrong hash echoed) | `exact_cardano_settlement_failed` | `settlement_pending`; the retry resumes and never rebroadcasts |
 | Second settle of a transaction already being settled | `duplicate_settlement` | `settlement_pending` |
-| Retry of a broadcast payment, verify | ledger evidence alone counts | needs ledger or mempool evidence, then re-checks recipient, amount, asset and the payer recorded at broadcast; the nonce owner must have signed |
+| Retry of a broadcast payment, verify | ledger evidence alone counts | needs ledger or mempool evidence, then re-checks recipient, amount, asset and the payer recorded at broadcast; the nonce owner must have signed. A re-check that fails for the moment (a provider or registry outage, a protocol-parameter change, the clock), possibly before the recipient, amount and payer checks ran, answers valid when the claim is bound to these exact requirements and resource (the pre-broadcast verification passed them) and a payer is known; settle then lets the ledger decide. Without a binding, or for any other failed re-check (a custom check's reason, an exception), it answers `settlement_pending` |
 | "Expired" answer for a pending settlement | wall clock past the TTL | only once the provider's latest block is past the TTL and a successful read shows the transaction absent |
 | Definitive Cardano rejection | provider error text | only an HTTP 400 whose every ledger rule is decided by the transaction itself; `BadInputsUTxO` never is |
 | Blockfrost provider on another network or with a stale tip | used | refused before any read or submission |
@@ -711,7 +722,15 @@ The wire format (headers, JSON, status codes, route syntax) follows TS. Behaviou
 | Cardano settlement record after broadcast | evicted once the store needs room | kept until the transaction's TTL has passed, so it cannot be settled twice from the mempool; only an unconfirmed submission (no success reported) may give way under pressure |
 | Blockfrost evidence for another transaction (hash differs or missing), without a block height, or with an unreadable chain tip | counted as included (0 confirmations) | a lookup failure: never a success, the settlement stays pending |
 | Cardano transaction with a repeated CBOR map key (including a repeated policy id or asset name, also when one copy is chunked) | the last value wins | refused (`transaction_decode_failed`) |
-| Redirect to another origin | headers are forwarded | `Authorization`, `Cookie`, `PAYMENT-SIGNATURE` and similar credentials are dropped |
+| Cardano map-form transaction output with a key other than 0–3 | accepted (e.g. 4 or 9) | refused (`transaction_decode_failed`): the ledger CDDL defines only keys 0–3 |
+| Redirect to another origin | headers are forwarded | `Authorization`, `Cookie`, `PAYMENT-SIGNATURE` and similar credentials are dropped by `X402HttpClient` with a `HostPolicy`, and between the request and the URI that answered the 402 without one (the paid request then follows the wrapped client's redirect setting); the Spring clients never follow a redirect of a paid request except one same-host http→https upgrade |
+| Facilitator client and redirects | follows them (`fetch`) | never follows them; a 3xx from the facilitator is an error |
+| Facilitator capability mismatch (transfer method, `l1Confirmations` range) or an invalid option (confirmation policy, Masumi schema) | every request to the route fails | startup: a transfer method or confirmation range the facilitator does not advertise is a `FACILITATOR_CAPABILITY` error; an invalid confirmation policy or Masumi schema is an `INVALID_OPTION` error from `SchemeNetworkServer.validateOption`, fatal and never retried (it does not depend on the facilitator). Both check the option's `extra` and a static price's `extra`; a dynamic price is still checked per request |
+| One Cardano settle | the confirmation wait alone is bounded (75 s) | the whole settle is bounded (`settle-timeout`, 75 s; no chain call starts in the last `chain-call-reserve`, 15 s), so it fits the resource server's 90 s timeout unless the chain call in flight then takes more than 30 s (a Blockfrost evidence read is up to four 10 s requests; `chain-call-reserve: 40s` makes the bound hard) |
+| Resuming a broadcast Cardano transaction whose re-check fails | only a lookup failure stays pending | any verdict known to depend on the moment (provider, registry, deployment approval, allowlist, protocol parameters, clock) leaves the outcome to the ledger; verify of the paid retry answers valid when the claim is bound to the same requirements, else `settlement_pending`. Any other failed re-check (a custom check's reason, an exception) answers `settlement_pending`, never success or failure |
+| Masumi quote with an `agentIdentifier`, paid by the SDK client | the signer gets no resource | the signer gets the 402's resource |
+| Masumi template on a route that also accepts another Cardano network | the first template is issued by whichever option runs first (can break the mutation policy) | each option issues only its own template |
+| Masumi allowlist refusal | `invalid_exact_cardano_payload_masumi_contract_mismatch` | same (Java spelled it `..._requirements_...` before) |
 | Client `resource.url` missing or off the allowlist | not checked | the 402 is returned unpaid |
 | Facilitator unreachable or timing out | 402 | 502 (no receipt) |
 | Handler headers after a failed settle | kept | dropped (the whole paid response is buffered) |

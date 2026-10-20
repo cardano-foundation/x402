@@ -100,7 +100,8 @@ public record DecodedCardanoTransaction(
    * @param address bech32 address
    * @param coin lovelace
    * @param assets native assets keyed by lowercase {@code policy.assetNameHex}
-   * @param datum lowercase CBOR hex of an inline datum (wire bytes), else {@code null}
+   * @param datum lowercase CBOR hex of an inline datum in canonical form (lists, maps and long
+   *     byte strings indefinite; map entries as sent), else {@code null}
    * @param serializedSize byte length of the output's wire encoding
    * @param hasReferenceScript whether the output carries a reference script
    * @param hasDatumHash whether the output carries a datum hash (rather than an inline datum)

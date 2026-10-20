@@ -154,7 +154,7 @@ public class ExactCardanoServerScheme implements SchemeNetworkServer {
       }
       masumiIssuer.assertTemplate(requirements);
     }
-    assertFacilitatorSupportsRequirements(requirements, supportedKind);
+    assertFacilitatorSupports(requirements.extra(), requirements.network(), supportedKind, true);
     Object areFeesSponsored = supportedKind.extra() == null ? null : supportedKind.extra().get("areFeesSponsored");
     Map<String, Object> extra = new LinkedHashMap<>(requirements.extra());
     if (areFeesSponsored instanceof Boolean sponsored) {
@@ -163,12 +163,79 @@ public class ExactCardanoServerScheme implements SchemeNetworkServer {
     return requirements.withExtra(extra);
   }
 
-  private static void assertFacilitatorSupportsRequirements(PaymentRequirements requirements, SupportedKind kind) {
+  /**
+   * The facilitator checks {@link #enhancePaymentRequirements} runs on every request, at startup:
+   * the facilitator must advertise the option's transfer method and a confirmation range that
+   * holds its policy. A {@code null} option is not checked; the option's own configuration (an
+   * invalid policy, a Masumi schema) is left to {@link #validateOption}, which is never retried.
+   */
+  @Override
+  public String validateFacilitatorSupport(String network, SupportedKind supportedKind,
+      List<String> facilitatorExtensions, Map<String, Object> optionExtra) {
+    if (optionExtra == null) {
+      return null;
+    }
+    try {
+      assertFacilitatorSupports(optionExtra, network, supportedKind, false);
+      return null;
+    } catch (IllegalArgumentException e) {
+      return e.getMessage();
+    }
+  }
+
+  /**
+   * The option's own configuration: a valid confirmation policy and, for a fixed Masumi quote, a
+   * schema-valid one. These never depend on the facilitator.
+   */
+  @Override
+  public String validateOption(String network, Map<String, Object> optionExtra) {
+    if (optionExtra == null) {
+      return null;
+    }
+    if (CardanoPolicies.l1Confirmations(optionExtra) != null
+        && MasumiQuoteIssuer.isMasumiTemplate(optionExtra) && masumiIssuer == null) {
+      // The template's own fields need the full requirements and are checked per request. An
+      // invalid policy is reported first, as below.
+      return ISSUER_REQUIRED;
+    }
+    return optionProblem(optionExtra, network);
+  }
+
+  /**
+   * The option's own configuration problem, or {@code null}: an invalid confirmation policy, or a
+   * fixed Masumi quote that violates the schema (a template is checked by its issuer).
+   */
+  private static String optionProblem(Map<String, Object> extra, String network) {
+    if (CardanoPolicies.l1Confirmations(extra) == null) {
+      return "Cardano requirements carry an invalid confirmation policy";
+    }
+    if (CardanoConstants.METHOD_MASUMI.equals(extra.get("assetTransferMethod"))
+        && !MasumiQuoteIssuer.isMasumiTemplate(extra)) {
+      MasumiSchema.Result schema = MasumiSchema.validate(extra, network);
+      if (!schema.ok()) {
+        return "Cardano Masumi requirements are invalid: " + schema.detail();
+      }
+    }
+    return null;
+  }
+
+  /**
+   * The facilitator checks; with {@code optionChecks} also the option's own configuration (per
+   * request), without it those are skipped (at startup they are {@link #validateOption}'s). The
+   * option checks run even when the facilitator's kind advertises no capabilities: a dynamic
+   * price is never seen by {@link #validateOption}.
+   */
+  private static void assertFacilitatorSupports(Map<String, Object> extra, String network, SupportedKind kind,
+      boolean optionChecks) {
     Map<String, Object> capabilities = kind.extra();
     if (capabilities == null) {
+      String problem = optionChecks ? optionProblem(extra, network) : null;
+      if (problem != null) {
+        throw new IllegalArgumentException(problem);
+      }
       return;
     }
-    Object method = requirements.extra().get("assetTransferMethod");
+    Object method = extra.get("assetTransferMethod");
     if (method == null) {
       method = CardanoConstants.METHOD_DEFAULT;
     }
@@ -178,8 +245,11 @@ public class ExactCardanoServerScheme implements SchemeNetworkServer {
     if (!methods.contains(method)) {
       throw new IllegalArgumentException("Cardano facilitator does not support assetTransferMethod " + method);
     }
-    Integer l1 = CardanoPolicies.l1Confirmations(requirements.extra());
+    Integer l1 = CardanoPolicies.l1Confirmations(extra);
     if (l1 == null) {
+      if (!optionChecks) {
+        return;
+      }
       throw new IllegalArgumentException("Cardano requirements carry an invalid confirmation policy");
     }
     if (!(capabilities.get("l1Confirmations") instanceof Map<?, ?> range)) {
@@ -190,11 +260,9 @@ public class ExactCardanoServerScheme implements SchemeNetworkServer {
     if (minimum == null || maximum == null || l1 < minimum || l1 > maximum) {
       throw new IllegalArgumentException("Cardano facilitator confirmation range does not include " + l1);
     }
-    if (CardanoConstants.METHOD_MASUMI.equals(method) && !MasumiQuoteIssuer.isMasumiTemplate(requirements.extra())) {
-      MasumiSchema.Result schema = MasumiSchema.validate(requirements.extra(), requirements.network());
-      if (!schema.ok()) {
-        throw new IllegalArgumentException("Cardano Masumi requirements are invalid: " + schema.detail());
-      }
+    String problem = optionChecks ? optionProblem(extra, network) : null;
+    if (problem != null) {
+      throw new IllegalArgumentException(problem);
     }
   }
 
@@ -215,7 +283,13 @@ public class ExactCardanoServerScheme implements SchemeNetworkServer {
     PaymentPayload paidPayload = null;
     boolean paidResolved = false;
     List<PaymentRequirements> requirements = context.requirements();
+    // Each invocation is for one option, whose network alone may gain extra fields; without
+    // the index, the first template is issued and the rest are left for later invocations.
+    int only = context.acceptIndex();
     for (int index = 0; index < requirements.size(); index++) {
+      if (only >= 0 && index != only) {
+        continue;
+      }
       PaymentRequirements requirement = requirements.get(index);
       if (!scheme().equals(requirement.scheme()) || !CardanoNetworks.isCardanoNetwork(requirement.network())) {
         continue;

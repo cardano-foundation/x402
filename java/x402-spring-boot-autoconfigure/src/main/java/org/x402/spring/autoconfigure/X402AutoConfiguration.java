@@ -275,7 +275,10 @@ public class X402AutoConfiguration {
             a.maxAmountPerPayment()));
       }
       SpendControls.Builder b = SpendControls.builder().allowedAssets(allowed);
-      if (p.maxAmountPerPayment() == null || p.maxAmountPerPayment().isBlank()) {
+      if (p.maxAmountPerPayment() != null
+          && "false".equalsIgnoreCase(p.maxAmountPerPayment().strip())) {
+        b.noUsdCap();
+      } else if (p.maxAmountPerPayment() == null || p.maxAmountPerPayment().isBlank()) {
         LOG.warn("x402.client.spend-controls.max-amount-per-payment is empty: payments in the "
             + "network's default asset have no USD cap");
         b.noUsdCap();
@@ -289,7 +292,7 @@ public class X402AutoConfiguration {
     }
 
     @Bean
-    @ConditionalOnMissingBean(name = "x402ClientHostPolicy")
+    @ConditionalOnMissingBean(HostPolicy.class)
     HostPolicy x402ClientHostPolicy(X402Properties properties) {
       List<String> hosts = properties.client().hosts();
       if (hosts.isEmpty()) {

@@ -5,8 +5,6 @@ import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Set;
 import java.util.function.Supplier;
-import org.springframework.core.ResolvableType;
-import org.springframework.http.HttpEntity;
 import org.springframework.web.method.HandlerMethod;
 import org.springframework.web.servlet.mvc.method.RequestMappingInfoHandlerMapping;
 import org.springframework.web.servlet.mvc.method.annotation.ResponseBodyEmitter;
@@ -48,23 +46,17 @@ public final class ServletHandlerMethodSource implements HandlerMethodSource {
 
   /**
    * Whether a WebMvc handler streams: {@code SseEmitter}, {@code ResponseBodyEmitter}, {@code
-   * StreamingResponseBody} (also inside {@code ResponseEntity}), or what {@link StreamingHandlers}
+   * StreamingResponseBody} (also inside {@code ResponseEntity}, {@code CompletableFuture},
+   * {@code Callable} or {@code Mono}), or what {@link StreamingHandlers}
    * recognises on both stacks.
    *
    * @param handlerMethod the handler
    * @return {@code true} for a streaming handler
    */
   public static boolean isStreamingHandler(HandlerMethod handlerMethod) {
-    Class<?> type = handlerMethod.getReturnType().getParameterType();
-    if (streamingType(type)) {
+    Class<?> type = StreamingHandlers.unwrappedReturnType(handlerMethod).resolve();
+    if (type != null && streamingType(type)) {
       return true;
-    }
-    if (HttpEntity.class.isAssignableFrom(type)) {
-      Class<?> body = ResolvableType.forMethodReturnType(handlerMethod.getMethod())
-          .as(HttpEntity.class).getGeneric(0).resolve();
-      if (body != null && streamingType(body)) {
-        return true;
-      }
     }
     return StreamingHandlers.isStreaming(handlerMethod);
   }

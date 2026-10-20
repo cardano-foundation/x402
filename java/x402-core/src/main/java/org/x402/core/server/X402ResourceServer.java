@@ -423,7 +423,8 @@ public final class X402ResourceServer {
 
   /**
    * The facilitators that may take over a verify from {@code owner} when it is unavailable: every
-   * other facilitator listing the same kind with the same {@code extra}, in declaration order.
+   * other facilitator listing the same kind with the same {@code extra}, in declaration order,
+   * those that failed the last sync (serving from a kept answer) after every live one.
    *
    * @param snap the routing snapshot
    * @param owner the facilitator that owns the kind
@@ -439,20 +440,23 @@ public final class X402ResourceServer {
     if (built == null) {
       return out;
     }
+    List<String> failed = new ArrayList<>();
     for (String id : snap.facilitatorIdentifiers()) {
       SupportedKind kind = snap.kindOf(id, version, network, scheme);
       if (!id.equals(owner) && kind != null
           && JsonValues.deepEqual(extraOf(kind), extraOf(built))) {
-        out.add(id);
+        (snap.failures().containsKey(id) ? failed : out).add(id);
       }
     }
+    out.addAll(failed);
     return out;
   }
 
   /**
    * Fetches {@code /supported} from every facilitator in declaration order and builds a new
    * snapshot without publishing it. A failing facilitator is logged and recorded in {@link
-   * RoutingSnapshot#failures()}; the others still count. Ends registration.
+   * RoutingSnapshot#failures()}; the others still count. A failing facilitator that answered in
+   * the published snapshot keeps that answer. Ends registration.
    *
    * @return the new snapshot
    */
@@ -469,6 +473,7 @@ public final class X402ResourceServer {
         recordSyncFailure(failures, id, e);
       }
     });
+    keepLastGoodAnswers(answers, failures);
     return RoutingSnapshot.build(generation, facilitators, answers, failures);
   }
 
@@ -510,7 +515,27 @@ public final class X402ResourceServer {
         recordSyncFailure(failures, id, e);
       }
     });
+    keepLastGoodAnswers(answers, failures);
     return RoutingSnapshot.build(generation, facilitators, answers, failures);
+  }
+
+  /**
+   * A facilitator that fails now but answered before keeps that answer, so one failed re-sync
+   * does not take its routes down. It stays in the failures, so health reports it; once every
+   * route is served again, no further re-sync runs and the kept answer stays until restart.
+   */
+  private void keepLastGoodAnswers(
+      Map<String, SupportedResponse> answers, Map<String, Throwable> failures) {
+    RoutingSnapshot current = snapshot.get();
+    if (current == null) {
+      return;
+    }
+    for (String id : failures.keySet()) {
+      SupportedResponse previous = current.supported(id);
+      if (previous != null) {
+        answers.putIfAbsent(id, previous);
+      }
+    }
   }
 
   private static void recordSyncFailure(Map<String, Throwable> failures, String id, Throwable e) {
@@ -704,6 +729,8 @@ public final class X402ResourceServer {
     RoutingSnapshot s = resolve(snap);
     SupportedKind kind;
     List<String> facilitatorExtensions;
+    AssetAmount price = scheme.parsePrice(config.price(), config.network());
+    Map<String, Object> extra = PaymentFlows.mergeExtra(price.extra(), config.extra());
     if (config.facilitator() != null) {
       String pin = requireKnown(config.facilitator());
       kind = s == null ? null : s.kindOf(pin, X402_VERSION, config.network(), scheme.scheme());
@@ -713,7 +740,7 @@ public final class X402ResourceServer {
       }
       facilitatorExtensions = s.extensions(pin);
       String problem = scheme.validateFacilitatorSupport(config.network(), kind,
-          facilitatorExtensions);
+          facilitatorExtensions, extra);
       if (problem != null) {
         throw new FacilitatorCapabilityError(List.of(scheme.scheme() + " on " + config.network()
             + ": " + problem + " (pinned facilitator \"" + pin + "\")"));
@@ -727,8 +754,6 @@ public final class X402ResourceServer {
       }
       facilitatorExtensions = s.ownerExtensions(X402_VERSION, config.network(), scheme.scheme());
     }
-    AssetAmount price = scheme.parsePrice(config.price(), config.network());
-    Map<String, Object> extra = PaymentFlows.mergeExtra(price.extra(), config.extra());
     PaymentRequirements base = new PaymentRequirements(scheme.scheme(), config.network(),
         price.asset(), price.amount(), config.payTo(), config.effectiveMaxTimeoutSeconds(), extra);
     PaymentRequirements enhanced =
@@ -798,7 +823,7 @@ public final class X402ResourceServer {
       }
       List<PaymentRequirements> enriched = scheme.enrichPaymentRequiredResponse(
           new PaymentRequiredContext(working, paymentPayload, resource, error, response,
-              transportContext));
+              transportContext, i));
       if (enriched != null) {
         working = List.copyOf(enriched);
         response = new PaymentRequired(X402_VERSION, error, resource, working, responseExtensions);
@@ -1237,6 +1262,9 @@ public final class X402ResourceServer {
       BeforeResult<SettleResponse> result;
       try {
         result = h.hook().apply(context);
+      } catch (SettleException e) {
+        // A deliberate refusal, as in TypeScript: it aborts the settle.
+        throw e;
       } catch (RuntimeException e) {
         warnHook("beforeSettle", h.label(), e);
         continue;

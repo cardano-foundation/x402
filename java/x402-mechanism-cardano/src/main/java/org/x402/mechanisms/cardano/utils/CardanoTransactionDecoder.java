@@ -13,8 +13,9 @@ import java.util.Map;
 
 /**
  * Decodes a base64 signed Cardano transaction. Everything
- * is read from the wire bytes: the transaction id hashes the body's exact bytes, output sizes and
- * inline datums are the bytes the ledger sees. Nothing is re-encoded.
+ * is read from the wire bytes: the transaction id hashes the body's exact bytes and output sizes
+ * are the bytes the ledger sees. Only an inline datum is reported re-encoded, in the canonical
+ * form the TypeScript decoder reports ({@link PlutusEncoding#canonical}).
  */
 public final class CardanoTransactionDecoder {
 
@@ -320,6 +321,14 @@ public final class CardanoTransactionDecoder {
       }
     } else if (output.major() == Cbor.Major.MAP) {
       output.requireUniqueKeys("transaction output");
+      for (Map.Entry<Cbor.Item, Cbor.Item> entry : output.entries()) {
+        Cbor.Item key = entry.getKey();
+        // Differs from TS (which accepts other keys, e.g. 4 or 9): the ledger CDDL allows only 0-3.
+        if (key.major() != Cbor.Major.UNSIGNED
+            || key.integer().compareTo(BigInteger.valueOf(3)) > 0) {
+          throw new IllegalArgumentException("transaction output has an unknown key");
+        }
+      }
       address = output.get(0);
       value = output.get(1);
       datumOption = output.get(2);
@@ -393,7 +402,8 @@ public final class CardanoTransactionDecoder {
         }
         byte[] datumBytes = wrapped.tagged().bytes();
         PlutusEncoding.check(datumBytes);
-        datum = HEX.formatHex(datumBytes);
+        // As the TypeScript decoder: the datum is reported in its decode-then-encode form.
+        datum = HEX.formatHex(PlutusEncoding.canonical(datumBytes));
       }
     }
     return new DecodedCardanoTransaction.Output(

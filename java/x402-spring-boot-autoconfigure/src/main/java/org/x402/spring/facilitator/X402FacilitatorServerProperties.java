@@ -3,6 +3,7 @@ package org.x402.spring.facilitator;
 import java.time.Duration;
 import java.util.List;
 import org.springframework.boot.context.properties.ConfigurationProperties;
+import org.springframework.boot.context.properties.bind.ConstructorBinding;
 import org.springframework.boot.context.properties.bind.DefaultValue;
 import org.x402.spring.cardano.X402CardanoProperties;
 
@@ -26,9 +27,19 @@ public record X402FacilitatorServerProperties(
    * The Cardano facilitator.
    *
    * @param acceptMempool accept l1Confirmations: -1 (mempool) payments
-   * @param confirmationTimeout how long settle waits for confirmations (default 75 s; keep below
-   *     85 s)
+   * @param confirmationTimeout how long settle waits for confirmations (default 75 s). The wait
+   *     also ends when the settle's budget does ({@code settleTimeout} less
+   *     {@code chainCallReserve}, 60 s by default), so with the defaults that budget decides; a
+   *     configured value above the budget has no effect (logged as a warning)
    * @param confirmationPoll interval between confirmation checks (default 5 s)
+   * @param settleTimeout how long one settle may take in total, verification and broadcast
+   *     included (default 75 s; keep below 85 s). No broadcast or evidence read starts in its last
+   *     {@code chainCallReserve}, kept for the chain call in flight; past that point the answer is
+   *     {@code settlement_pending}
+   * @param chainCallReserve the end part of {@code settleTimeout} in which no broadcast or evidence
+   *     read starts (default 15 s, half the settle timeout when that is under 30 s; must be shorter
+   *     than the settle timeout). One Blockfrost evidence read is up to four requests of up to 10 s
+   *     each: 40 s makes the settle timeout a hard bound, at the cost of a shorter confirmation wait
    * @param networks one scheme, backend and optional signer per network
    * @param maxTipAge how far a provider's tip may lag before reads are refused (default 5m)
    * @param lookupTimeout bound on the chain lookups of one verification (default 10s)
@@ -41,6 +52,8 @@ public record X402FacilitatorServerProperties(
       boolean acceptMempool,
       @DefaultValue("75s") Duration confirmationTimeout,
       @DefaultValue("5s") Duration confirmationPoll,
+      @DefaultValue("75s") Duration settleTimeout,
+      Duration chainCallReserve,
       @DefaultValue("5m") Duration maxTipAge,
       @DefaultValue("10s") Duration lookupTimeout,
       @DefaultValue("64") int maxInputLookups,
@@ -48,9 +61,32 @@ public record X402FacilitatorServerProperties(
       @DefaultValue("65536") int maxTxBytes,
       List<Network> networks) {
 
-    /** Normalizes an absent list. */
+    /** Normalizes an absent list and settle timeout. */
+    @ConstructorBinding
     public Cardano {
+      settleTimeout = settleTimeout == null ? Duration.ofSeconds(75) : settleTimeout;
       networks = networks == null ? List.of() : List.copyOf(networks);
+    }
+
+    /**
+     * The Cardano facilitator with the default settle timeout (the constructor before {@code
+     * settleTimeout} existed).
+     *
+     * @param acceptMempool accept l1Confirmations: -1 (mempool) payments
+     * @param confirmationTimeout how long settle waits for confirmations
+     * @param confirmationPoll interval between confirmation checks
+     * @param maxTipAge how far a provider's tip may lag before reads are refused
+     * @param lookupTimeout bound on the chain lookups of one verification
+     * @param maxInputLookups how many inputs one verification resolves on chain
+     * @param scriptDatumPolicy how strictly a script payment's datum is checked
+     * @param maxTxBytes the largest transaction verify accepts
+     * @param networks one scheme, backend and optional signer per network
+     */
+    public Cardano(boolean acceptMempool, Duration confirmationTimeout, Duration confirmationPoll,
+        Duration maxTipAge, Duration lookupTimeout, int maxInputLookups, String scriptDatumPolicy,
+        int maxTxBytes, List<Network> networks) {
+      this(acceptMempool, confirmationTimeout, confirmationPoll, null, null, maxTipAge, lookupTimeout,
+          maxInputLookups, scriptDatumPolicy, maxTxBytes, networks);
     }
   }
 

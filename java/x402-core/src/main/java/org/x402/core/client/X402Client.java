@@ -215,7 +215,7 @@ public final class X402Client {
       String cap = resolveAtomicCap(spendControls, selected,
           scheme.findDefaultAsset(selected.asset(), selected.network()));
       PaymentPayloadResult partial = scheme.createPaymentPayload(version, selected,
-          new PaymentPayloadContext(paymentRequired.extensions(), cap));
+          new PaymentPayloadContext(paymentRequired.extensions(), cap, paymentRequired.resource()));
       PaymentPayload payload = new PaymentPayload(partial.x402Version(),
           paymentRequired.resource(), selected, partial.payload(),
           mergeExtensions(paymentRequired.extensions(), partial.extensions()));
@@ -402,9 +402,7 @@ public final class X402Client {
 
   private static SpendControls.AllowedAsset findEntry(
       SpendControls controls, PaymentRequirements r, DefaultAsset defaultAsset) {
-    if (controls.allowAnyAsset()) {
-      return null;
-    }
+    // Searched under allowAnyAsset too: it widens which assets are allowed, never drops a cap.
     for (SpendControls.AllowedAsset entry : controls.allowedAssets()) {
       if (!Networks.matchesPattern(entry.network(), r.network())) {
         continue;

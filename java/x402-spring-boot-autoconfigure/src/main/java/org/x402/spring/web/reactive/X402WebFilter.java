@@ -5,6 +5,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicInteger;
 import java.util.function.Supplier;
 import org.apache.commons.logging.Log;
 import org.apache.commons.logging.LogFactory;
@@ -45,6 +46,9 @@ import reactor.core.publisher.Mono;
 public final class X402WebFilter implements WebFilter, Ordered {
 
   private static final Log LOG = LogFactory.getLog(X402WebFilter.class);
+  private static final int RUNNING = 0;
+  private static final int DELIVERED = 1;
+  private static final int CANCELLED = 2;
 
   private final X402HttpResourceServer server;
   private final OfferRegistry registry;
@@ -105,7 +109,19 @@ public final class X402WebFilter implements WebFilter, Ordered {
           new ReactiveRequestAdapter(request, paths[0], offer, pattern, paywall), method,
           paths[0], paths[1], null);
       String selected = offer;
-      return BlockingCalls.offload(() -> server.processHttpRequest(context, paywallConfig))
+      AtomicInteger phase = new AtomicInteger(RUNNING);
+      AtomicBoolean released = new AtomicBoolean();
+      return BlockingCalls.offload(() -> {
+        HttpProcessResult result = server.processHttpRequest(context, paywallConfig);
+        if (!phase.compareAndSet(RUNNING, DELIVERED)) {
+          // The exchange was cancelled while the call ran: nobody will see this result.
+          releaseVerified(result, released);
+        }
+        return result;
+      })
+          .doOnCancel(() -> phase.compareAndSet(RUNNING, CANCELLED))
+          .doOnDiscard(HttpProcessResult.PaymentVerified.class,
+              verified -> releaseVerified(verified, released))
           .map(Optional::of)
           .onErrorResume(FacilitatorResponseException.class, e -> writeJson(exchange.getResponse(),
               502, Map.of("error", String.valueOf(e.getMessage()))).then(Mono.empty()))
@@ -116,6 +132,20 @@ public final class X402WebFilter implements WebFilter, Ordered {
           })
           .flatMap(result -> handle(result.get(), exchange, chain, context));
     });
+  }
+
+  /**
+   * A payment verified for an exchange that no longer exists would never be settled or cancelled;
+   * run its cancel hooks (once).
+   */
+  private static void releaseVerified(HttpProcessResult result, AtomicBoolean released) {
+    if (result instanceof HttpProcessResult.PaymentVerified verified
+        && released.compareAndSet(false, true)) {
+      BlockingCalls.offload(() -> verified.cancellationDispatcher().cancel(
+          new CancelOptions(CancellationReason.HANDLER_THREW,
+              new IllegalStateException("request cancelled before completion"), null)))
+          .subscribe(r -> { }, e -> LOG.warn("x402: cancel after a dropped request failed", e));
+    }
   }
 
   /** Raw path within the application ({@code ;} parameters stripped) and its decoded form. */

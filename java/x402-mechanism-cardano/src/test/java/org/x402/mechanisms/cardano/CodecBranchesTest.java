@@ -57,12 +57,12 @@ class CodecBranchesTest {
     assertThat(cbor("a2016161026162").get("x")).isNull();
     assertThat(cbor("01").get(1)).isNull();
     assertThat(cbor("01").get("x")).isNull();
-    assertThat(cbor("f818").integer()).isEqualTo(BigInteger.valueOf(24));
+    assertThat(cbor("f820").integer()).isEqualTo(BigInteger.valueOf(32));
     assertThat(cbor("fb3ff0000000000000").integer()).isNull();
     assertThat(cbor("d9010280").untagSet().items()).isEmpty();
     assertThat(cbor("01").untagSet().major()).isEqualTo(Cbor.Major.UNSIGNED);
     assertThat(cbor("820102").raw()).containsExactly(0x82, 1, 2);
-    for (String bad : List.of("", "1c", "18", "4201", "5f01ff", "7f4100ff", "9f01", "bf01", "a1", "ff", "0101", "62c328", "5f41", "7f")) {
+    for (String bad : List.of("", "1c", "18", "4201", "5f01ff", "7f4100ff", "f818", "9f01", "bf01", "a1", "ff", "0101", "62c328", "5f41", "7f")) {
       assertThatThrownBy(() -> cbor(bad)).as(bad).isInstanceOf(IllegalArgumentException.class);
     }
     String deep = "81".repeat(300) + "01";
